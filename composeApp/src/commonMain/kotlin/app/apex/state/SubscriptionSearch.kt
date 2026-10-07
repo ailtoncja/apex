@@ -32,22 +32,18 @@ fun matchesWords(words: List<String>, vararg fields: String?): Boolean {
     return words.all { w -> normalized.any { it.contains(w) } }
 }
 
-fun List<Channel>.channelsOn(platform: Platform?): List<Channel> = if (platform == null) this else filter { it.platform == platform }
-
-fun List<Media>.mediaOn(platform: Platform?): List<Media> = if (platform == null) this else filter { it.platform == platform }
-
 /** O que a busca achou entre as inscrições da pessoa: os canais (pelo nome) e os vídeos/lives (pelo título, canal ou categoria). */
 class SubscriptionMatches(val channels: List<Channel>, val media: List<Media>) {
     val isEmpty: Boolean get() = channels.isEmpty() && media.isEmpty()
 }
 
-fun matchSubscriptions(query: String, subs: List<Channel>, items: List<Media>, platform: Platform? = null): SubscriptionMatches {
+fun matchSubscriptions(query: String, subs: List<Channel>, items: List<Media>, platforms: Set<Platform> = emptySet()): SubscriptionMatches {
     val words = searchWords(query)
     if (words.isEmpty()) return SubscriptionMatches(emptyList(), emptyList())
-    val channels = subs.channelsOn(platform).filter { matchesWords(words, it.name, it.handle, it.id) }
+    val channels = subs.channelsIn(platforms).filter { matchesWords(words, it.name, it.handle, it.id) }
     // Só vídeos de canais que a pessoa segue (o feed e as lives já vêm disso, mas o canal pode ter sido deixado de seguir depois).
     val followed = subs.map { it.key }.toSet()
-    val media = items.mediaOn(platform).filter { m ->
+    val media = items.mediaIn(platforms).filter { m ->
         (m.channel == null || m.channel.key in followed) && matchesWords(words, m.title, m.channel?.name, m.category)
     }.distinctBy { it.key }
     return SubscriptionMatches(channels, media)

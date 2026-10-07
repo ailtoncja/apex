@@ -152,9 +152,12 @@ class KickSource(private val http: HttpClient = Http.client) {
         )
         val ls = c["livestream"]
         val live = if (ls != null && ls["is_live"].bool() != false) {
+            // A resposta do canal já não traz a miniatura da live: ela vem do endereço da live do canal.
+            val thumbnail = ls["thumbnail"].str() ?: ls["thumbnail"]["src"].str()
+                ?: runCatching { json("https://kick.com/api/v2/channels/$id/livestream")["data"]["thumbnail"]["src"].str() }.getOrNull()
             Media(
                 Platform.Kick, id, ls["session_title"].str().orEmpty().ifBlank { name }, channel,
-                ls["thumbnail"].str() ?: ls["thumbnail"]["src"].str(), null,
+                thumbnail, null,
                 ls["viewer_count"].long(), null, true,
                 ls["categories"][0]["name"].str(), slugUrl(id),
             )

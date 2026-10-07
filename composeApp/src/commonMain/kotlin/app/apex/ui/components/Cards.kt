@@ -1,5 +1,6 @@
 package app.apex.ui.components
 
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -377,10 +378,18 @@ fun CategoryCard(category: LiveCategory, onClick: () -> Unit, modifier: Modifier
         modifier.clip(RoundedCornerShape(12.dp)).hoverable(source).clickable(interactionSource = source, indication = null, onClick = onClick),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        RemoteImage(
-            category.imageUrl,
-            Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(if (hovered) 6.dp else 12.dp)),
-        )
+        val cover = Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(if (hovered) 6.dp else 12.dp))
+        if (category.imageUrl != null) RemoteImage(category.imageUrl, cover)
+        else {
+            // Assuntos do YouTube não têm capa: um degradê com a cor derivada do nome e a inicial.
+            val hue = (category.name.hashCode().and(0x7fffffff) % 360).toFloat()
+            Box(
+                cover.background(Brush.linearGradient(listOf(Color.hsv(hue, 0.55f, 0.55f), Color.hsv((hue + 40f) % 360f, 0.65f, 0.28f)))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(category.name.take(1).uppercase(), style = MaterialTheme.typography.displaySmall, color = Color.White.copy(alpha = 0.9f))
+            }
+        }
         Column(Modifier.padding(horizontal = 2.dp)) {
             Text(category.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             category.viewers?.let {

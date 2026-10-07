@@ -40,6 +40,9 @@ import app.apex.model.Media
 import app.apex.model.Platform
 import app.apex.nav.LibraryTab
 import app.apex.nav.LiveFilter
+import app.apex.source.SearchFilters
+import app.apex.source.SearchType
+import app.apex.state.YOUTUBE_TOPIC_CATEGORIES
 import app.apex.nav.Route
 import app.apex.player.VlcPlayerController
 import app.apex.source.Binaries
@@ -259,11 +262,24 @@ private fun navigateFromEnv(app: AppContainer) {
     val kind = start.substringBefore(':')
     val arg = start.substringAfter(':', "")
     when (kind) {
-        "search" -> app.search(arg)
+        // `search:consulta` ou `search:consulta|twitch,kick|subs` (já com essas plataformas e "Inscrições" ligadas).
+        "search" -> {
+            val parts = arg.split('|')
+            val query = parts[0].trim()
+            val filters = SearchFilters(type = SearchType.Any)
+            val state = app.screens.search(query, filters)
+            state.platforms = parts.getOrNull(1).orEmpty().split(',').mapNotNull { n -> Platform.entries.firstOrNull { it.name.equals(n.trim(), ignoreCase = true) } }.toSet()
+            state.onlySubs = parts.getOrNull(2) == "subs"
+            app.search(query, filters)
+        }
         "watch" -> app.openMedia(Media(Platform.YouTube, arg, "Carregando…", url = "https://www.youtube.com/watch?v=$arg"))
         "twitch" -> app.openMedia(Media(Platform.Twitch, arg, arg, isLive = true, url = "https://www.twitch.tv/$arg"))
         "kick" -> app.openMedia(Media(Platform.Kick, arg, arg, isLive = true, url = "https://kick.com/$arg"))
-        "live" -> app.nav.goRoot(Route.Live(LiveFilter.All))
+        // `live` ou `live:youtube,twitch` (já com essas plataformas ligadas).
+        "live" -> {
+            app.screens.live.platforms = arg.split(',').mapNotNull { n -> Platform.entries.firstOrNull { it.name.equals(n.trim(), ignoreCase = true) } }.toSet()
+            app.nav.goRoot(Route.Live(LiveFilter.All))
+        }
         // `channel:UC…` abre o canal do YouTube; `channel:UC…:2` já na aba 2 (Playlists).
         "channel" -> app.nav.push(Route.ChannelPage(Channel(Platform.YouTube, arg.substringBefore(':'), arg.substringBefore(':')), arg.substringAfter(':', "0").toIntOrNull() ?: 0))
         "library" -> app.nav.goRoot(Route.Library(LibraryTab.History))
@@ -271,9 +287,12 @@ private fun navigateFromEnv(app: AppContainer) {
         "playlist" -> app.nav.push(Route.RemotePlaylist(arg, "Playlist"))
         // `category:twitch:Just Chatting` ou `category:kick:just-chatting` abre a categoria.
         "category" -> {
-            val platform = if (arg.substringBefore(':') == "kick") Platform.Kick else Platform.Twitch
+            val platform = when (arg.substringBefore(':')) { "kick" -> Platform.Kick; "youtube" -> Platform.YouTube; else -> Platform.Twitch }
             val name = arg.substringAfter(':')
-            app.nav.push(Route.Category(platform, LiveCategory(name, name, null, null)))
+            // No YouTube: `category:youtube:musica` (assunto) ou `category:youtube:game:Minecraft` (jogo).
+            val category = if (platform != Platform.YouTube) LiveCategory(name, name, null, null)
+            else YOUTUBE_TOPIC_CATEGORIES.firstOrNull { it.id == "yt:$name" } ?: LiveCategory("yt:" + name, name.substringAfter(':'), null, null)
+            app.nav.push(Route.Category(platform, category))
         }
         // `tchannel:gaules:2` abre o canal da Twitch na aba 2 (Clipes); `kchannel:` é o da Kick.
         "tchannel", "kchannel" -> {

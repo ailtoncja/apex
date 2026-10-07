@@ -75,7 +75,7 @@ class BrowseTest {
         val porPalavra = matchSubscriptions("valorant", subs, items)
         assertEquals(listOf("filiperaaamos"), porPalavra.media.map { it.id }, "o vídeo do canal que a pessoa não segue não entra")
 
-        assertEquals(listOf("Gaules"), matchSubscriptions("gaules", subs, items, Platform.Twitch).channels.map { it.name })
+        assertEquals(listOf("Gaules"), matchSubscriptions("gaules", subs, items, setOf(Platform.Twitch)).channels.map { it.name })
         assertTrue(matchSubscriptions("   ", subs, items).isEmpty)
         assertTrue(matchSubscriptions("xyzinexistente", subs, items).isEmpty)
     }

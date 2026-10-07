@@ -32,7 +32,8 @@ import kotlinx.serialization.encodeToString
 
 class CloudException(val code: String, message: String, val status: Int = 0) : Exception(message)
 
-const val DEFAULT_SERVER_URL = "http://localhost:8080"
+/** Servidor público do Apex. Para testar com o servidor do seu PC, mude em Ajustes › Conta do Apex › Servidor. */
+const val DEFAULT_SERVER_URL = "https://apex-server-mg5l.onrender.com"
 
 /** Fala com o servidor de contas do Apex e cuida de renovar a sessão sozinho. */
 class CloudClient(

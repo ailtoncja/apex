@@ -4,6 +4,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
@@ -24,6 +26,7 @@ import app.apex.source.AppJson
 import app.apex.source.YouTubeSource
 import app.apex.source.parseJson
 import app.apex.ui.components.ContextMenuHost
+import app.apex.ui.components.videoItems
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -193,6 +196,26 @@ class ContextMenuCardsTest {
         }
         onNodeWithText("Copiar link").performClick()
         assertEquals(media.url, system.copied)
+    }
+
+    /** O mesmo vídeo em duas seções da mesma grade (feed das inscrições e recomendados) derrubava o app: "Key was already used". */
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun mesmo_video_em_duas_secoes_da_grade_nao_derruba_o_app() = runComposeUiTest {
+        val (container, _) = newApp()
+        val repetido = Media(Platform.YouTube, "OcSR10zUZFQ", "Vídeo repetido", channel = Channel(Platform.YouTube, "UCx", "Canal"), url = "https://www.youtube.com/watch?v=OcSR10zUZFQ")
+        val outro = Media(Platform.YouTube, "outroVideo1", "Outro vídeo", url = "https://www.youtube.com/watch?v=outroVideo1")
+        setContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalApp provides container) {
+                app.apex.ui.components.ApexGrid(androidx.compose.foundation.lazy.grid.rememberLazyGridState()) {
+                    // Duplicado dentro da própria lista e também na outra seção.
+                    videoItems(listOf(repetido, outro, repetido), section = "feed:")
+                    videoItems(listOf(outro, repetido))
+                }
+            }
+        }
+        onAllNodesWithText("Vídeo repetido").assertCountEquals(2)
+        onAllNodesWithText("Outro vídeo").assertCountEquals(2)
     }
 
     @OptIn(ExperimentalTestApi::class)

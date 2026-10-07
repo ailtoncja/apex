@@ -164,7 +164,7 @@ fun SearchScreen(route: Route.Search) {
                 val shown = ytVideos.withoutBlocked(blocked)
                 if (shown.isNotEmpty()) {
                     if (showTw || showKick) item("videos-title") { SectionTitle("Vídeos") }
-                    items(shown, key = { "v-" + it.key }) { VideoRow(it, upNext = shown.filter { m -> m.key != it.key }) }
+                    items(shown.distinctBy { it.key }, key = { "v-" + it.key }) { VideoRow(it, upNext = shown.filter { m -> m.key != it.key }) }
                 } else if (!ytLoaded || ytLoading) {
                     items(5, key = { "sk$it" }) { SkeletonRow() }
                 } else if (ytError != null) {

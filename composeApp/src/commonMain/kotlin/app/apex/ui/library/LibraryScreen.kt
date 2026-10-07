@@ -148,7 +148,7 @@ fun LibraryScreen(tab: LibraryTab) {
                     if (remoteError != null) ErrorBox(remoteError.orEmpty(), { remoteList.refresh() })
                     else EmptyState(Icons.Rounded.History, "Nada por aqui", "Esta lista da sua conta está vazia.")
                 }
-                items(remoteItems, key = { "r-" + it.key }) { VideoRow(it, upNext = remoteItems.filter { m -> m.key != it.key }) }
+                items(remoteItems.distinctBy { it.key }, key = { "r-" + it.key }) { VideoRow(it, upNext = remoteItems.filter { m -> m.key != it.key }) }
                 if (remoteLoading) item("r-loading") { Text("Carregando…", color = ApexColors.Muted) }
             } else when (tab) {
                 LibraryTab.History -> {
@@ -163,7 +163,7 @@ fun LibraryScreen(tab: LibraryTab) {
                     if (history.isEmpty()) item("h-empty") {
                         EmptyState(Icons.Rounded.History, "Nada por aqui", "Os vídeos e lives que você assistir aparecem neste histórico.")
                     }
-                    items(history, key = { it.media.key }) { e ->
+                    items(history.distinctBy { it.media.key }, key = { it.media.key }) { e ->
                         VideoRow(
                             e.media, upNext = history.map { it.media }.filter { it.key != e.media.key },
                             trailing = { IconBtn(Icons.Rounded.Close, "Remover", { app.data.removeHistory(e.media.key) }, size = 32.dp, iconSize = 18.dp) },
@@ -182,7 +182,7 @@ fun LibraryScreen(tab: LibraryTab) {
                     if (later.isEmpty()) item("w-empty") {
                         EmptyState(Icons.Rounded.WatchLater, "Lista vazia", "Salve vídeos com o botão do relógio e eles ficam aqui.")
                     }
-                    items(later, key = { it.key }) { m ->
+                    items(later.distinctBy { it.key }, key = { it.key }) { m ->
                         VideoRow(
                             m, upNext = later.filter { it.key != m.key },
                             trailing = { IconBtn(Icons.Rounded.Close, "Remover", { app.data.toggleWatchLater(m) }, size = 32.dp, iconSize = 18.dp) },
@@ -201,7 +201,7 @@ fun LibraryScreen(tab: LibraryTab) {
                     if (liked.isEmpty()) item("l-empty") {
                         EmptyState(Icons.Rounded.ThumbUp, "Nenhuma curtida", "Os vídeos que você curtir aparecem aqui.")
                     }
-                    items(liked, key = { it.key }) { m ->
+                    items(liked.distinctBy { it.key }, key = { it.key }) { m ->
                         VideoRow(
                             m, upNext = liked.filter { it.key != m.key },
                             trailing = { IconBtn(Icons.Rounded.Close, "Descurtir", { app.data.setReaction(m, 0) }, size = 32.dp, iconSize = 18.dp) },
@@ -318,7 +318,7 @@ fun PlaylistScreen(id: String) {
             if (pl.items.isEmpty()) item("empty") {
                 EmptyState(Icons.Rounded.PlaylistPlay, "Playlist vazia", "Use “Adicionar à playlist…” no menu de qualquer vídeo.")
             }
-            items(pl.items, key = { it.key }) { m ->
+            items(pl.items.distinctBy { it.key }, key = { it.key }) { m ->
                 VideoRow(
                     m, upNext = pl.items.filter { it.key != m.key },
                     trailing = { IconBtn(Icons.Rounded.Close, "Remover", { app.data.togglePlaylistItem(pl.id, m) }, size = 32.dp, iconSize = 18.dp) },
@@ -467,7 +467,7 @@ fun RemotePlaylistScreen(id: String, title: String) {
                 if (error != null) ErrorBox(error.orEmpty(), { list.refresh() })
                 else EmptyState(Icons.Rounded.PlaylistPlay, "Playlist vazia", "Nenhum vídeo nesta playlist.")
             }
-            items(items, key = { it.key }) { m -> VideoRow(m, upNext = items.filter { it.key != m.key }) }
+            items(items.distinctBy { it.key }, key = { it.key }) { m -> VideoRow(m, upNext = items.filter { it.key != m.key }) }
             if (loading) item("loading") { Text("Carregando…", color = ApexColors.Muted) }
         }
     }

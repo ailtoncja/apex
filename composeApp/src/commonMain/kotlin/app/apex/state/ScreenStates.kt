@@ -12,6 +12,7 @@ import app.apex.model.Comment
 import app.apex.model.LiveCategory
 import app.apex.model.Media
 import app.apex.model.Platform
+import app.apex.source.RemotePlaylist
 import app.apex.nav.LiveFilter
 import app.apex.source.ChannelHit
 import app.apex.source.ChannelTab
@@ -387,6 +388,12 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
             Platform.Kick -> Page(app.kick.vods(seed), null)
             Platform.YouTube -> Page(emptyList(), null)
         }
+    }
+
+    /** Playlists do canal (só YouTube). */
+    val playlists = Paged<RemotePlaylist>(app.scope, { it.id }) { token ->
+        if (seed.platform != Platform.YouTube) Page(emptyList(), null)
+        else app.youtube.channelPlaylists(seed.id, token).let { Page(it.items, it.continuation) }
     }
 
     /** Como os clipes ficam ordenados na aba "Clipes". */

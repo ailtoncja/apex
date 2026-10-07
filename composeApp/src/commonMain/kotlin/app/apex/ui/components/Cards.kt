@@ -24,6 +24,8 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.DropdownMenu
@@ -133,6 +135,23 @@ fun MediaMenu(media: Media, expanded: Boolean, onDismiss: () -> Unit) {
     val later by app.data.watchLater.collectAsState()
     val isLater = later.any { it.key == media.key }
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text("Reproduzir") },
+            leadingIcon = { Icon(Icons.Rounded.PlayArrow, null) },
+            onClick = { app.openMedia(media); onDismiss() },
+        )
+        // Só faz sentido com algo tocando: o que está na fila passa depois deste.
+        if (app.session.current.value != null && app.session.current.value?.key != media.key) {
+            DropdownMenuItem(
+                text = { Text("Tocar em seguida") },
+                leadingIcon = { Icon(Icons.Rounded.SkipNext, null) },
+                onClick = {
+                    app.session.setUpNext(listOf(media) + app.session.upNext.value.filter { it.key != media.key })
+                    app.toast("Vai tocar em seguida")
+                    onDismiss()
+                },
+            )
+        }
         if (!media.isLive) {
             DropdownMenuItem(
                 text = { Text(if (isLater) "Remover de Assistir depois" else "Salvar em Assistir depois") },
@@ -185,9 +204,13 @@ fun VideoCard(media: Media, modifier: Modifier = Modifier, upNext: List<Media>? 
     var menu by remember { mutableStateOf(false) }
     val progress = rememberProgress(media)
 
-    Column(
+    ContextMenuHost(
         modifier.clip(RoundedCornerShape(12.dp)).hoverable(source)
             .clickable(interactionSource = source, indication = null) { app.openMedia(media, upNext) },
+        menu = { dismiss -> MediaMenu(media, true, dismiss) },
+    ) {
+    Column(
+        Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box {
@@ -233,6 +256,7 @@ fun VideoCard(media: Media, modifier: Modifier = Modifier, upNext: List<Media>? 
             }
         }
     }
+    }
 }
 
 /** Cartão horizontal (busca, relacionados, biblioteca). */
@@ -252,9 +276,13 @@ fun VideoRow(
     var menu by remember { mutableStateOf(false) }
     val progress = rememberProgress(media)
 
-    Row(
+    ContextMenuHost(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).hoverable(source)
             .clickable(interactionSource = source, indication = null) { onClick?.invoke() ?: app.openMedia(media, upNext) },
+        menu = { dismiss -> MediaMenu(media, true, dismiss) },
+    ) {
+    Row(
+        Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         MediaThumbnail(media, Modifier.width(thumbWidth), progress, radius = if (hovered) 4.dp else 12.dp)
@@ -290,6 +318,7 @@ fun VideoRow(
             } else Box(Modifier.size(28.dp))
             MediaMenu(media, menu) { menu = false }
         }
+    }
     }
 }
 

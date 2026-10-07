@@ -46,6 +46,7 @@ import app.apex.ui.components.SubscribeButton
 import app.apex.ui.components.VerifiedMark
 import app.apex.ui.components.VideoCard
 import app.apex.ui.components.fullSpan
+import app.apex.ui.components.playlistItems
 import app.apex.ui.components.skeletons
 import app.apex.ui.components.videoItems
 import app.apex.util.formatCount
@@ -62,7 +63,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     val isYt = seed.platform == Platform.YouTube
     val channel = details?.channel?.let { it.copy(avatarUrl = it.avatarUrl ?: seed.avatarUrl) } ?: seed
     var tab by remember(seed.key) { mutableIntStateOf(initialTab) }
-    val tabs = if (isYt) listOf("Vídeos", "Transmissões", "Sobre") else listOf("Ao vivo", "VODs", "Clipes", "Sobre")
+    val tabs = if (isYt) listOf("Vídeos", "Transmissões", "Playlists", "Sobre") else listOf("Ao vivo", "VODs", "Clipes", "Sobre")
 
     val list = when {
         isYt && tab == 0 -> st.videos
@@ -71,7 +72,11 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
         !isYt && tab == 2 -> st.clips
         else -> null
     }
+    val playlists by st.playlists.items.collectAsState()
+    val playlistsLoading by st.playlists.loading.collectAsState()
+    val playlistsError by st.playlists.error.collectAsState()
     LaunchedEffect(tab, st) {
+        if (isYt && tab == 2) st.playlists.loadIfNeeded()
         if (isYt && tab == 1) st.pastLives.loadIfNeeded()
         if (!isYt && tab == 1) st.vods.loadIfNeeded()
         if (!isYt && tab == 2) st.clips.loadIfNeeded()
@@ -80,7 +85,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     val loading by (list?.loading ?: st.videos.loading).collectAsState()
     val error by (list?.error ?: st.videos.error).collectAsState()
     val state = rememberLazyGridState()
-    OnNearEnd(state) { list?.loadMore() }
+    OnNearEnd(state) { if (isYt && tab == 2) st.playlists.loadMore() else list?.loadMore() }
 
     ApexGrid(state) {
         fullSpan("header") {
@@ -125,7 +130,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
             }
         }
 
-        val aboutTab = if (isYt) 2 else 3
+        val aboutTab = 3
         if (!isYt && tab == 2) fullSpan("clip-sort") {
             val sort by st.clipSort.collectAsState()
             ChipRow(ClipSort.entries.map { it.label }, sort.ordinal, { st.setClipSort(ClipSort.entries[it]) })
@@ -143,6 +148,12 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                     }
                     ActionButton("Abrir no site", { app.system.openUrl(channel.url.ifBlank { seed.url }) }, icon = Icons.Rounded.OpenInBrowser)
                 }
+            }
+            isYt && tab == 2 -> when {
+                playlists.isNotEmpty() -> playlistItems(playlists)
+                playlistsLoading -> skeletons(6)
+                playlistsError != null -> fullSpan("pl-err") { ErrorBox(playlistsError.orEmpty(), { st.playlists.refresh() }) }
+                else -> fullSpan("pl-none") { EmptyState(Icons.Rounded.VideoLibrary, "Sem playlists", "${channel.name} não tem playlists públicas.") }
             }
             !isYt && tab == 0 -> if (liveNow == null) fullSpan("offline") {
                 EmptyState(
@@ -163,6 +174,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                 }
             }
         }
-        if (loading && items.isNotEmpty() && tab != aboutTab) skeletons(4)
+        if (loading && items.isNotEmpty() && tab != aboutTab && !(isYt && tab == 2)) skeletons(4)
+        if (isYt && tab == 2 && playlistsLoading && playlists.isNotEmpty()) skeletons(3)
     }
 }

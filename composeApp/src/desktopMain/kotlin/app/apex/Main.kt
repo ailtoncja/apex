@@ -1,4 +1,4 @@
-﻿package app.apex
+package app.apex
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -263,7 +263,8 @@ private fun navigateFromEnv(app: AppContainer) {
         "twitch" -> app.openMedia(Media(Platform.Twitch, arg, arg, isLive = true, url = "https://www.twitch.tv/$arg"))
         "kick" -> app.openMedia(Media(Platform.Kick, arg, arg, isLive = true, url = "https://kick.com/$arg"))
         "live" -> app.nav.goRoot(Route.Live(LiveFilter.All))
-        "channel" -> app.openChannel(Channel(Platform.YouTube, arg, arg))
+        // `channel:UC…` abre o canal do YouTube; `channel:UC…:2` já na aba 2 (Playlists).
+        "channel" -> app.nav.push(Route.ChannelPage(Channel(Platform.YouTube, arg.substringBefore(':'), arg.substringBefore(':')), arg.substringAfter(':', "0").toIntOrNull() ?: 0))
         "library" -> app.nav.goRoot(Route.Library(LibraryTab.History))
         "clips" -> app.nav.goRoot(Route.Library(LibraryTab.Clips))
         // `tchannel:gaules:2` abre o canal da Twitch na aba 2 (Clipes); `kchannel:` é o da Kick.

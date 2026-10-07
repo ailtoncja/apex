@@ -252,6 +252,35 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
         return id
     }
 
+    /**
+     * Cria playlist(s) locais com [items] (a cópia de uma playlist do YouTube). A sincronização aceita até 60 mil caracteres por
+     * playlist, então listas grandes viram "Nome (1/3)", "Nome (2/3)"… Devolve os ids criados.
+     */
+    fun importPlaylist(name: String, items: List<Media>): List<String> {
+        val clean = name.trim().ifBlank { "Playlist" }
+        val parts = mutableListOf<MutableList<Media>>()
+        var size = 0
+        for (m in items.distinctBy { it.key }.map { it.compactForPlaylist() }) {
+            val chars = AppJson.encodeToString(Media.serializer(), m).length + 1
+            if (parts.isEmpty() || size + chars > MAX_PLAYLIST_CHARS) {
+                parts.add(mutableListOf())
+                size = 0
+            }
+            parts.last() += m
+            size += chars
+        }
+        if (parts.isEmpty()) return emptyList()
+        val stamp = currentTimeMillis()
+        val created = parts.mapIndexed { i, part ->
+            LocalPlaylist("pl_${stamp}_$i", if (parts.size > 1) "$clean (${i + 1}/${parts.size})" else clean, part)
+        }
+        _playlists.update { it + created }
+        return created.map { it.id }
+    }
+
+    /** Sem o que só enfeita (avatar, seguidores…): cada item de playlist ocupa menos na sincronização. */
+    private fun Media.compactForPlaylist() = copy(channel = channel?.copy(avatarUrl = null, handle = null, followers = null, support = null))
+
     fun renamePlaylist(id: String, name: String) =
         _playlists.update { list -> list.map { if (it.id == id) it.copy(name = name.trim().ifBlank { it.name }) else it } }
 
@@ -390,3 +419,6 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
         _settings.update { it.copy(blockedChannels = emptyList(), searchHistory = emptyList()) }
     }
 }
+
+/** A sincronização aceita até 60 mil caracteres por playlist; fica abaixo disso com folga para o nome e o id. */
+private const val MAX_PLAYLIST_CHARS = 50_000

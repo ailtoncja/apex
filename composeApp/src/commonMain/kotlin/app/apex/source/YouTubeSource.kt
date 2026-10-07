@@ -20,6 +20,8 @@ data class VideoPage(val items: List<Media>, val continuation: String?)
 
 data class RemotePlaylist(val id: String, val title: String, val thumbnailUrl: String?, val countText: String?)
 
+data class PlaylistPage(val items: List<RemotePlaylist>, val continuation: String?)
+
 data class PlaylistOption(val id: String, val title: String, val contains: Boolean)
 
 sealed interface LiveChatStart {
@@ -48,6 +50,9 @@ data class SearchFilters(
     val liveOnly: Boolean = false,
     val channelsOnly: Boolean = false,
 )
+
+/** Parâmetro do `browse` que abre a aba "Playlists" de um canal (o mesmo para todos os canais). */
+private const val PLAYLISTS_TAB = "EglwbGF5bGlzdHPyBgQKAkIA"
 
 enum class ChannelTab(val prefix: String) { Videos("UULF"), Lives("UULV") }
 
@@ -252,6 +257,35 @@ class YouTubeSource(val tube: InnerTube) {
     /** Playlists que a conta criou ou salvou. */
     suspend fun accountPlaylists(): List<RemotePlaylist> {
         val root = tube.call("browse") { put("browseId", "FEplaylist_aggregation") } ?: return emptyList()
+        return parsePlaylists(root).filter { it.id != "WL" && it.id != "LL" }
+    }
+
+    /** Playlists públicas de um canal (a aba "Playlists" dele). */
+    suspend fun channelPlaylists(channelId: String, continuation: String? = null): PlaylistPage {
+        val root = tube.call("browse") {
+            if (continuation != null) put("continuation", continuation)
+            else {
+                put("browseId", channelId)
+                put("params", PLAYLISTS_TAB)
+            }
+        } ?: return PlaylistPage(emptyList(), null)
+        return PlaylistPage(parsePlaylists(root), root.continuationToken())
+    }
+
+    /** Todos os vídeos de uma playlist (percorre as páginas, até [limit]). */
+    suspend fun playlistAll(id: String, limit: Int = 1000): List<Media> {
+        val out = mutableListOf<Media>()
+        var token: String? = null
+        var pages = 0
+        do {
+            val page = playlistVideos(id, token)
+            out += page.items
+            token = page.continuation
+        } while (token != null && out.size < limit && ++pages < 60)
+        return out.distinctBy { it.id }.take(limit)
+    }
+
+    internal fun parsePlaylists(root: JsonElement): List<RemotePlaylist> {
         val out = mutableListOf<RemotePlaylist>()
         for ((key, node) in root.collect("lockupViewModel", "gridPlaylistRenderer", "playlistRenderer")) {
             if (key == "lockupViewModel") {
@@ -268,7 +302,7 @@ class YouTubeSource(val tube: InnerTube) {
                 out += RemotePlaylist(id, title, node["thumbnail"]["thumbnails"].list().lastOrNull()?.get("url").str(), node["videoCountText"]["runs"][0]["text"].str())
             }
         }
-        return out.distinctBy { it.id }.filter { it.id != "WL" && it.id != "LL" }
+        return out.distinctBy { it.id }
     }
 
     suspend fun playlistVideos(id: String, continuation: String? = null): VideoPage = accountList("VL$id", continuation)

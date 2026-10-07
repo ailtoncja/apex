@@ -52,16 +52,20 @@ a cada 5 minutos. Se crescer, o plano pago do Render (US$ 7/mês) acaba com isso
 - Crie uma *branch* separada para testes manuais e deixe a principal só para as contas reais. Os testes automáticos já usam um banco embutido.
 - Olhe de vez em quando o espaço usado (painel do Neon). Se chegar perto de 0,5 GB, reduza o `MAX_USERS` ou passe para um plano pago.
 
-### 5. Distribuir o app
+### 5. Distribuir o app (feito: repositório público + Release 1.0.0)
 
-- Como o Apex é **GPL-3.0**, quem receber o programa precisa poder obter o código. O caminho mais simples é tornar o repositório do GitHub **público**
-  (antes disso confira que nada seu está nele: o histórico foi verificado e não tem senhas, chaves nem strings de conexão) e anexar o `.jar`
-  numa *Release* do GitHub. Depois, coloque o link em `DOWNLOAD_URL` no Render para ele aparecer na página inicial.
-- Para distribuir, rode `Empacotar.cmd`: ele gera `dist\Apex-1.0.0-windows-x64.zip` (cerca de 116 MB) com o Java 21 dentro. Quem receber só precisa do **VLC 64 bits**
-  (o `LEIA-ME.txt` do zip explica). Ele precisa de um JDK 21 completo em `%USERPROFILE%\.apex\jdk` (o Temurin 21 já está lá neste PC). Antes de cada versão nova,
-  mude `packageVersion` em `composeApp/build.gradle.kts` e `VERSION` em `Empacotar.cmd`.
-- Um instalador `.msi`/`.exe` (com atalho no menu Iniciar) já está configurado no Gradle, mas precisa do [WiX Toolset](https://wixtoolset.org) instalado; sem ele, o zip serve.
-- Sem assinatura de código, o Windows (SmartScreen) mostra um aviso na primeira abertura. A assinatura custa por ano; deixe para quando houver público.
+- Como o Apex é **GPL-3.0**, quem receber o programa precisa poder obter o código: por isso o repositório `ailtoncja/apex` é **público**
+  (o histórico foi verificado antes: não tem senhas, chaves nem strings de conexão, e os commits usam o e-mail `noreply` do GitHub).
+  Nunca commite arquivos `.env` nem a string de conexão do Neon.
+- `Empacotar.cmd` gera em `dist\`: o **zip portátil**, os instaladores **`.msi` e `.exe`** (atalho no menu Iniciar e na área de trabalho, instalação só para o
+  usuário atual, sem administrador) e o `SHA256SUMS.txt`. Todos trazem o Java 21; quem receber só precisa do **VLC 64 bits**.
+- Ele usa duas ferramentas que ficam **fora do projeto**, em `%USERPROFILE%\.apex\`: o JDK Temurin 21 (`jdk\`) e o WiX Toolset 3.14 (`wix\`). Em outro PC, baixe
+  o zip do Temurin 21 (adoptium.net) e o `wix314-binaries.zip` (github.com/wixtoolset/wix3) e extraia nessas pastas.
+- **Nova versão:** mude `packageVersion` em `composeApp/build.gradle.kts` e `VERSION` em `Empacotar.cmd`, rode `Empacotar.cmd`, crie uma tag e uma Release:
+  `gh release create v1.0.1 dist/Apex-1.0.1* dist/SHA256SUMS.txt --title "Apex 1.0.1" --notes "..."`.
+- O servidor mostra o link da página de Releases na página inicial (mude com `DOWNLOAD_URL` no Render se hospedar em outro lugar).
+- Sem assinatura de código, o Windows (SmartScreen) mostra um aviso na primeira abertura (o `LEIA-ME` e o README explicam o que clicar). A assinatura é paga
+  por ano; deixe para quando houver público.
 
 ### 6. Fase 2: ligar com as plataformas por OAuth oficial
 

@@ -40,6 +40,9 @@ data class ServerConfig(
     val isProduction: Boolean get() = database != null
 
     companion object {
+        /** Onde ficam os downloads do app (a página de Releases do projeto). */
+        const val DEFAULT_DOWNLOAD_URL = "https://github.com/ailtoncja/apex/releases/latest"
+
         /** Variáveis do sistema; as que faltarem vêm de um arquivo `.env` (na pasta atual ou em `~/.apex-server`). */
         fun load(): ServerConfig {
             val system = System.getenv()
@@ -78,7 +81,7 @@ data class ServerConfig(
                 devDataDir = dataDir,
                 contactEmail = env["CONTACT_EMAIL"]?.trim()?.takeIf { it.isNotBlank() },
                 operatorName = env["OPERATOR_NAME"]?.trim()?.takeIf { it.isNotBlank() },
-                downloadUrl = env["DOWNLOAD_URL"]?.trim()?.takeIf { it.startsWith("https://") },
+                downloadUrl = env["DOWNLOAD_URL"]?.trim()?.takeIf { it.startsWith("https://") } ?: DEFAULT_DOWNLOAD_URL,
                 maxUsers = env["MAX_USERS"]?.toIntOrNull()?.coerceAtLeast(0) ?: 2000,
                 registerLimitPerHour = env["REGISTER_LIMIT_PER_HOUR"]?.toIntOrNull()?.coerceAtLeast(1) ?: 20,
                 mailLimitPerHour = env["MAIL_LIMIT_PER_HOUR"]?.toIntOrNull()?.coerceAtLeast(1) ?: 10,

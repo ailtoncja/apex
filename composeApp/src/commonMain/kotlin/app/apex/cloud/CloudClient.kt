@@ -48,7 +48,19 @@ class CloudClient(
 
     private fun base() = serverUrl().trim().ifBlank { DEFAULT_SERVER_URL }.trimEnd('/')
 
+    /** Senha e tokens só viajam por https; http é aceito só no próprio computador (servidor de teste). */
+    private fun requireSecure(url: String) {
+        // Só vale o que vem depois de "usuario@": "http://localhost@invasor.com" é o servidor invasor.com, não o localhost.
+        val authority = url.substringAfter("://", "").substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
+        val host = (if (authority.startsWith("[")) authority.substringAfter('[').substringBefore(']') else authority.substringBefore(':')).lowercase()
+        val local = host == "localhost" || host == "127.0.0.1" || host == "::1" || host.endsWith(".localhost")
+        if (!url.startsWith("https://") && !(url.startsWith("http://") && local)) {
+            throw CloudException("insecure_server", "O servidor do Apex precisa usar https:// (só o próprio computador pode usar http://).")
+        }
+    }
+
     private suspend fun raw(url: String, body: String?, token: String?, method: HttpMethod = HttpMethod.Post): HttpResponse = try {
+        requireSecure(url)
         val block: io.ktor.client.request.HttpRequestBuilder.() -> Unit = {
             // Hospedagens grátis "dormem" e levam cerca de um minuto para acordar na primeira chamada.
             timeout { requestTimeoutMillis = 70_000; connectTimeoutMillis = 30_000 }
@@ -65,6 +77,8 @@ class CloudClient(
         }
     } catch (e: CancellationException) {
         throw e
+    } catch (e: CloudException) {
+        throw e
     } catch (e: Exception) {
         throw CloudException("offline", "Não consegui falar com o servidor do Apex. Verifique a internet e o endereço do servidor.")
     }
@@ -79,7 +93,7 @@ class CloudClient(
 
     /** Acorda o servidor (se estiver dormindo) sem esperar nada dele. */
     suspend fun wake() {
-        runCatching { http.get("${base()}/health") { timeout { requestTimeoutMillis = 70_000; connectTimeoutMillis = 30_000 } } }
+        runCatching { requireSecure(base()); http.get("${base()}/health") { timeout { requestTimeoutMillis = 70_000; connectTimeoutMillis = 30_000 } } }
     }
 
     // ---------- sem sessão

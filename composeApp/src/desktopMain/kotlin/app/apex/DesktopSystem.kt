@@ -36,7 +36,10 @@ class DesktopSystem(
     }
 
     override fun openUrl(url: String) {
-        runCatching { Desktop.getDesktop().browse(URI(url)) }
+        // Os endereços vêm de plataformas e de dados sincronizados: só abre http(s). Um "file:" ou um protocolo do Windows
+        // (ms-msdt:, search-ms:…) executaria coisas fora do navegador.
+        if (!isSafeWebUrl(url)) return
+        runCatching { Desktop.getDesktop().browse(URI(url.trim())) }
     }
 
     override fun copyText(text: String) {
@@ -63,4 +66,10 @@ class DesktopSystem(
     override fun signOut(platform: Platform) = accounts.signOut(platform)
 
     override suspend fun refreshAccount(account: Account): Account? = withContext(Dispatchers.IO) { accounts.refreshLinked(account) }
+}
+
+/** `true` só para endereços http(s) com um servidor; nada de `file:`, `javascript:` ou protocolos do Windows. */
+internal fun isSafeWebUrl(url: String): Boolean {
+    val uri = runCatching { URI(url.trim()) }.getOrNull() ?: return false
+    return uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrBlank()
 }

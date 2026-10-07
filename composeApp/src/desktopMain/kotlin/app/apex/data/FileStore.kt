@@ -19,8 +19,8 @@ class FileStore(val dir: File) : KeyValueStore {
     }
 
     override fun write(name: String, text: String) {
-        val protectedText = if (name in SECRET) protect(text) else null
-        val content = if (protectedText != null) PREFIX + protectedText else text
+        // Logins nunca vão para o disco em texto puro: se o Windows não conseguir cifrar, não grava (o login vale só até fechar o app).
+        val content = if (name in SECRET) PREFIX + (protect(text) ?: error("Não foi possível cifrar $name com o Windows.")) else text
         val target = file(name)
         val tmp = File(dir, "$name.json.tmp")
         tmp.writeText(content)
@@ -30,7 +30,7 @@ class FileStore(val dir: File) : KeyValueStore {
         }
     }
 
-    /** `null` se a cifragem do Windows falhar (aí o arquivo fica sem o prefixo e continua legível pelo app). */
+    /** `null` se a cifragem do Windows falhar. */
     private fun protect(text: String): String? =
         runCatching { Base64.getEncoder().encodeToString(Crypt32Util.cryptProtectData(text.toByteArray())) }.getOrNull()
 

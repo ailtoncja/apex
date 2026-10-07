@@ -24,6 +24,8 @@ data class ServerConfig(
     val devDataDir: File,
     /** Quantos proxies de confiança (balanceador, CDN) ficam na frente do servidor; só o que eles acrescentam ao X-Forwarded-For vale. */
     val trustedProxyHops: Int = 1,
+    /** Cabeçalho que o CDN da frente preenche com o IP do cliente (na Render, `CF-Connecting-IP`). Tem prioridade sobre o X-Forwarded-For. */
+    val clientIpHeader: String? = null,
     /** Quem responde pelo serviço; aparece na Política de Privacidade e nos Termos. */
     val contactEmail: String? = null,
     val operatorName: String? = null,
@@ -86,6 +88,7 @@ data class ServerConfig(
                 mailWebhookSecret = env["MAIL_WEBHOOK_SECRET"]?.takeIf { it.isNotBlank() },
                 trustProxy = env["TRUST_PROXY"] == "true",
                 trustedProxyHops = env["TRUSTED_PROXY_HOPS"]?.toIntOrNull()?.coerceIn(1, 5) ?: 1,
+                clientIpHeader = env["CLIENT_IP_HEADER"]?.trim()?.takeIf { it.matches(Regex("[A-Za-z0-9-]{1,64}")) },
                 devDataDir = dataDir,
                 contactEmail = env["CONTACT_EMAIL"]?.trim()?.takeIf { it.isNotBlank() },
                 operatorName = env["OPERATOR_NAME"]?.trim()?.takeIf { it.isNotBlank() },

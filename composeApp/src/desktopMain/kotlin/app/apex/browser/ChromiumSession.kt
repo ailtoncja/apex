@@ -79,7 +79,6 @@ class ChromiumSession private constructor(
                 add(exe.absolutePath)
                 add("--user-data-dir=${profileDir.absolutePath}")
                 add("--remote-debugging-port=$port")
-                add("--remote-allow-origins=*")
                 add("--no-first-run")
                 add("--no-default-browser-check")
                 if (headless) add("--headless=new")

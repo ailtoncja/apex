@@ -9,6 +9,7 @@ import app.apex.data.Account
 import app.apex.model.Platform
 import app.apex.source.CookieHygiene
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -31,28 +32,16 @@ class DesktopAccounts(
     /** Navegadores instalados (só muda nos testes). */
     private val installedBrowsers: () -> List<InstalledBrowser> = { Browsers.installed() },
 ) {
-    /** Onde o yt-dlp lê os cookies para o YouTube; só as linhas do Google/YouTube. */
-    val youtubeCookieFile: File get() = File(dataDir, "cookies/youtube.txt")
-
     private val browsers: List<InstalledBrowser> by lazy { installedBrowsers() }
 
     init {
-        runCatching { cleanSavedJar() }
+        runCatching { deleteLegacyCookieJar() }
     }
 
-    /** Logins feitos antes da limpeza guardaram centenas de cookies inúteis também no arquivo do yt-dlp; tira-os. */
-    private fun cleanSavedJar() {
-        val file = youtubeCookieFile.takeIf { it.isFile } ?: return
-        val lines = file.readLines()
-        val kept = lines.filter { l ->
-            if (l.isBlank() || (l.startsWith("#") && !l.startsWith("#HttpOnly_"))) return@filter true
-            val p = l.removePrefix("#HttpOnly_").split('\t')
-            if (p.size < 7) return@filter true
-            val domain = p[0].trimStart('.')
-            val isGoogle = domain == "google.com" || domain.endsWith(".google.com")
-            !CookieHygiene.isNoise(p[5], p[6].length) && (!isGoogle || p[5] in CookieHygiene.AUTH)
-        }
-        if (kept.size < lines.size) file.writeText(kept.joinToString("\n") + "\n")
+    /** Versões antigas guardavam os cookies do YouTube em texto puro neste arquivo; ele não existe mais (o yt-dlp recebe um arquivo temporário). */
+    private fun deleteLegacyCookieJar() {
+        File(dataDir, "cookies/youtube.txt").delete()
+        File(dataDir, "cookies").takeIf { it.isDirectory && it.list().isNullOrEmpty() }?.delete()
     }
 
     fun installedBrowserOptions(): List<BrowserOption> = browsers.map {
@@ -115,16 +104,28 @@ class DesktopAccounts(
     private suspend fun chromiumLogin(platform: Platform, browser: InstalledBrowser, onStatus: (String) -> Unit): Account? {
         onStatus("Abrindo o ${browser.label}…")
         val profile = File(dataDir, "login-browser/${browser.id}")
-        ChromiumSession.open(browser.exe, profile, loginUrl(platform)).use { session ->
-            onStatus("Entre na sua conta na janela que abriu. O Apex detecta sozinho e fecha a janela.")
-            while (coroutineContext.isActive) {
-                delay(2_000)
-                val cookies = runCatching { session.cookies() }.getOrNull()
-                if (cookies != null) accountFromCookies(platform, cookies)?.let { return it }
-                if (!session.isAlive) return null
+        try {
+            ChromiumSession.open(browser.exe, profile, loginUrl(platform)).use { session ->
+                onStatus("Entre na sua conta na janela que abriu. O Apex detecta sozinho e fecha a janela.")
+                while (coroutineContext.isActive) {
+                    delay(2_000)
+                    val cookies = runCatching { session.cookies() }.getOrNull()
+                    if (cookies != null) accountFromCookies(platform, cookies)?.let { return it }
+                    if (!session.isAlive) return null
+                }
             }
+        } finally {
+            // A sessão do Google fica guardada no perfil do navegador; o login já foi lido, então o perfil não deve ficar no disco.
+            withContext(NonCancellable) { deleteProfile(profile) }
         }
         return null
+    }
+
+    private suspend fun deleteProfile(dir: File) {
+        repeat(20) {
+            if (!dir.exists() || dir.deleteRecursively()) return
+            delay(250)
+        }
     }
 
     fun accountFromCookies(platform: Platform, cookies: List<Cookie>): Account? {
@@ -140,7 +141,6 @@ class DesktopAccounts(
                 if (!hasLogin || !visitedYouTube) return null
                 // O SAPISID costuma existir só no google.com; junta os dois (os do youtube.com vencem).
                 val header = CookieHygiene.cleanHeader((google + yt).associate { it.name to it.value }.entries.joinToString("; ") { "${it.key}=${it.value}" })
-                writeFilteredJar(youtubeCookieFile, (yt + google).map { it.line })
                 Account(Platform.YouTube, "Conta do Google", null, header)
             }
             Platform.Twitch -> {
@@ -157,12 +157,7 @@ class DesktopAccounts(
         }
     }
 
-    private fun writeFilteredJar(target: File, lines: List<String>) {
-        target.parentFile.mkdirs()
-        target.writeText("# Netscape HTTP Cookie File\n" + lines.joinToString("\n") + "\n")
-    }
-
     fun signOut(platform: Platform) {
-        if (platform == Platform.YouTube) youtubeCookieFile.delete()
+        // O login fica só no Apex (cifrado); nada a apagar no disco além disso.
     }
 }

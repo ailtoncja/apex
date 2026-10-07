@@ -29,6 +29,12 @@ services:
         sync: false
       - key: TRUST_PROXY
         value: "true"
+      # Na Render o X-Forwarded-For chega como "cliente, Cloudflare, rede interna" (3 entradas); o Cloudflare também preenche CF-Connecting-IP.
+      # Sem isso, quem inventa um X-Forwarded-For burla todos os limites de uso.
+      - key: TRUSTED_PROXY_HOPS
+        value: "3"
+      - key: CLIENT_IP_HEADER
+        value: "CF-Connecting-IP"
       # E-mail grátis sem domínio (relay no Apps Script/Vercel; veja docs/email-relay). Preencha no painel.
       - key: MAIL_WEBHOOK_URL
         sync: false

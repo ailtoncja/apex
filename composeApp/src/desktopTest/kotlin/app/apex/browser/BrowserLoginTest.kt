@@ -42,7 +42,8 @@ class BrowserLoginTest {
     fun le_o_login_do_perfil_do_firefox() {
         val root = tempDir()
         val profile = fakeFirefoxProfile(root, "abc123.default")
-        val accounts = DesktopAccounts(tempDir())
+        val dataDir = tempDir()
+        val accounts = DesktopAccounts(dataDir)
 
         val cookies = FirefoxCookies.readProfile(profile)
         // Só traz cookies das plataformas do Apex, nunca de outros sites.
@@ -51,7 +52,8 @@ class BrowserLoginTest {
         val youtube = assertNotNull(accounts.accountFromCookies(Platform.YouTube, cookies))
         assertTrue("__Secure-3PAPISID=apisid-falso" in youtube.credential)
         assertTrue("SAPISID=sapisid-google-falso" in youtube.credential)
-        assertTrue(accounts.youtubeCookieFile.readText().contains("LOGIN_INFO"))
+        // O login não fica em texto puro no disco (o yt-dlp recebe um arquivo temporário só durante cada execução).
+        assertTrue(!File(dataDir, "cookies/youtube.txt").exists())
 
         assertEquals("token-twitch-falso", accounts.accountFromCookies(Platform.Twitch, cookies)?.credential)
         assertEquals("fulano", accounts.accountFromCookies(Platform.Twitch, cookies)?.displayName)

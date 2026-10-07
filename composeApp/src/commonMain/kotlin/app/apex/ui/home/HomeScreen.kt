@@ -183,7 +183,7 @@ fun HomeScreen() {
                 fullSpan("followed-row") { MediaRow(followed) }
             }
 
-            val top = topLive.withoutBlocked(blocked).filter { platforms.allows(it.platform) }
+            val top = topLive.withoutBlocked(blocked).filter { t -> platforms.allows(t.platform) && followedLive.none { it.key == t.key } }
             if (on(HomeSource.Live) && (top.isNotEmpty() || liveLoading)) {
                 anyShown = true
                 fullSpan("live-title") {

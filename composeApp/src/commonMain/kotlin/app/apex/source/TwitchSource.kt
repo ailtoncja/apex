@@ -138,6 +138,25 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         return out
     }
 
+    /**
+     * Como [channels], mas devolve `null` quando a Twitch não responde direito (erro ou resposta sem a lista), para quem vigia as lives
+     * não confundir "a Twitch falhou" com "ninguém está ao vivo".
+     */
+    suspend fun channelsOrNull(logins: List<String>): List<ChannelHit>? {
+        if (logins.isEmpty()) return emptyList()
+        val out = mutableListOf<ChannelHit>()
+        for (chunk in logins.chunked(35)) {
+            val list = chunk.joinToString(",") { lit(it) }
+            val data = gql(
+                """{ users(logins: [$list]) { login displayName profileImageURL(width: 70)
+                followers { totalCount } stream { $streamFields } } }""",
+            ) ?: return null
+            val users = data["users"] ?: return null
+            users.list().mapNotNullTo(out) { userToHit(it) }
+        }
+        return out
+    }
+
     private fun userToHit(u: JsonElement?): ChannelHit? {
         val login = u["login"].str() ?: return null
         val name = u["displayName"].str() ?: login

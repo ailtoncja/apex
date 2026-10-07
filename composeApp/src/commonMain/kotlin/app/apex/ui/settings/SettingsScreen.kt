@@ -95,6 +95,9 @@ fun SettingsScreen() {
                 Setting("Reprodução automática", "Toca o próximo vídeo ao terminar") {
                     Toggle(settings.autoplayNext) { v -> app.data.updateSettings { it.copy(autoplayNext = v) } }
                 }
+                Setting("Avisar quando entrarem ao vivo", "Mostra um aviso quando um canal que você segue começa a transmitir") {
+                    Toggle(settings.liveAlerts) { v -> app.data.updateSettings { it.copy(liveAlerts = v) } }
+                }
                 Setting("Continuar de onde parei", "Retoma vídeos longos pelo ponto em que você saiu") {
                     Toggle(settings.rememberPosition) { v -> app.data.updateSettings { it.copy(rememberPosition = v) } }
                 }

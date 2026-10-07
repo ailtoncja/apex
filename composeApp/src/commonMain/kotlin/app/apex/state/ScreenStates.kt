@@ -205,8 +205,8 @@ class HomeState(private val app: AppContainer) {
 
     var selected by mutableIntStateOf(0)
 
-    private val _followedLive = MutableStateFlow<List<Media>>(emptyList())
-    val followedLive: StateFlow<List<Media>> = _followedLive.asStateFlow()
+    /** As lives dos canais que a pessoa segue: vêm do [LiveWatcher], que confere sozinho. */
+    val followedLive: StateFlow<List<Media>> get() = app.liveWatcher.live
 
     private val _topLive = MutableStateFlow<List<Media>>(emptyList())
     val topLive: StateFlow<List<Media>> = _topLive.asStateFlow()
@@ -276,10 +276,9 @@ class HomeState(private val app: AppContainer) {
 
     fun refreshLive() {
         _liveLoading.value = true
+        app.liveWatcher.refreshNow()
         app.scope.launch {
             try {
-                val followed = loadFollowedLive(app)
-                _followedLive.value = followed
                 val settings = app.data.settings.value
                 val top = coroutineScope {
                     val t = async { runCatching { app.twitch.topStreams(14, settings.twitchLanguage) }.getOrDefault(emptyList()) }
@@ -289,7 +288,7 @@ class HomeState(private val app: AppContainer) {
                     }
                     interleave(listOf(t.await(), k.await(), y.await()))
                 }
-                _topLive.value = top.filter { t -> followed.none { it.key == t.key } }
+                _topLive.value = top
             } finally {
                 _liveLoading.value = false
             }
@@ -330,39 +329,13 @@ fun <T> interleave(lists: List<List<T>>): List<T> {
     return out
 }
 
-/** Lives dos canais que o usuário segue nas três plataformas. */
-suspend fun loadFollowedLive(app: AppContainer): List<Media> = coroutineScope {
-    val subs = app.data.subscriptions.value
-    val twitch = async {
-        runCatching {
-            val logins = subs.filter { it.platform == Platform.Twitch }.map { it.id }
-            app.twitch.channels(logins).mapNotNull { it.live }
-        }.getOrDefault(emptyList())
-    }
-    val kick = async {
-        runCatching {
-            val slugs = subs.filter { it.platform == Platform.Kick }.map { it.id }
-            app.kick.channels(slugs).mapNotNull { it.live }
-        }.getOrDefault(emptyList())
-    }
-    val youtube = async {
-        runCatching {
-            subs.filter { it.platform == Platform.YouTube }.take(40).map { ch ->
-                async { runCatching { app.youtube.channelLive(ch.id)?.let { m -> m.copy(channel = m.channel ?: ch) } }.getOrNull() }
-            }.awaitAll().filterNotNull()
-        }.getOrDefault(emptyList())
-    }
-    (twitch.await() + kick.await() + youtube.await()).sortedByDescending { it.viewCount ?: 0 }
-}
-
 // ---------------------------------------------------------------------------------------------
 
 class LiveState(private val app: AppContainer) {
     /** Plataformas escolhidas (vazio = todas); dá para ligar duas ao mesmo tempo. */
     var platforms by mutableStateOf<Set<Platform>>(emptySet())
 
-    private val _followed = MutableStateFlow<List<Media>>(emptyList())
-    val followed: StateFlow<List<Media>> = _followed.asStateFlow()
+    val followed: StateFlow<List<Media>> get() = app.liveWatcher.live
 
     val twitchCategories = Loadable(app.scope, emptyList<LiveCategory>()) { app.twitch.categories(24) }
     val kickCategories = Loadable(app.scope, emptyList<LiveCategory>()) { app.kick.categories(24) }
@@ -411,14 +384,11 @@ class LiveState(private val app: AppContainer) {
         lists().forEach { it.loadIfNeeded() }
         if (platforms.allows(Platform.Twitch)) twitchCategories.loadIfNeeded()
         if (platforms.allows(Platform.Kick)) kickCategories.loadIfNeeded()
-        if (!started) {
-            started = true
-            app.scope.launch { _followed.value = loadFollowedLive(app) }
-        }
+        app.liveWatcher.refreshIfStale()
     }
 
     fun refresh() {
-        app.scope.launch { _followed.value = loadFollowedLive(app) }
+        app.liveWatcher.refreshNow()
         lists().forEach { it.refresh() }
         twitchCategories.reload()
         kickCategories.reload()
@@ -431,17 +401,16 @@ class SubscriptionsState(private val app: AppContainer) {
     private val _feedLoading = MutableStateFlow(false)
     val feedLoading: StateFlow<Boolean> = _feedLoading.asStateFlow()
 
-    private val _liveChannels = MutableStateFlow<Set<String>>(emptySet())
-    val liveChannels: StateFlow<Set<String>> = _liveChannels.asStateFlow()
+    /** Os canais seguidos que estão ao vivo (do [LiveWatcher]). */
+    val liveChannels: StateFlow<Set<String>> get() = app.liveWatcher.liveKeys
 
-    private val _liveNow = MutableStateFlow<List<Media>>(emptyList())
-    val liveNow: StateFlow<List<Media>> = _liveNow.asStateFlow()
+    val liveNow: StateFlow<List<Media>> get() = app.liveWatcher.live
 
     fun refreshFeedIfStale() {
         val cache = app.data.feed.value
         val stale = currentTimeMillis() - cache.updatedAt > 20 * 60_000
         if (stale && app.data.subscriptions.value.any { it.platform == Platform.YouTube }) refreshFeed()
-        refreshLive()
+        app.liveWatcher.refreshIfStale()
     }
 
     fun refreshFeed() {
@@ -459,14 +428,7 @@ class SubscriptionsState(private val app: AppContainer) {
         }
     }
 
-    fun refreshLive() {
-        app.scope.launch {
-            val live = loadFollowedLive(app)
-            ImagePrefetch.request(live)
-            _liveNow.value = live
-            _liveChannels.value = live.mapNotNull { it.channel?.key }.toSet()
-        }
-    }
+    fun refreshLive() = app.liveWatcher.refreshNow()
 }
 
 // ---------------------------------------------------------------------------------------------

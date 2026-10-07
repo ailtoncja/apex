@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -85,13 +84,14 @@ fun WatchScreen(fullscreen: Boolean) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 1080.dp
         val maxH = maxHeight
+        val maxW = maxWidth
         val theater = app.ui.theater
         val scroll = rememberScrollState()
         Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
             if (theater) {
-                PlayerView(
-                    Modifier.fillMaxWidth().heightIn(max = maxH * 0.74f).aspectRatio(16f / 9f).align(Alignment.CenterHorizontally),
-                )
+                // Altura calculada de forma explícita (16:9, no máximo 74% da tela). Com `heightIn` + `aspectRatio` numa coluna rolável o
+                // player era medido menor do que desenhado e o restante da página subia por cima dele.
+                PlayerView(Modifier.fillMaxWidth().height(minOf(maxW * 9f / 16f, maxH * 0.74f)))
             }
             if (wide) {
                 Row(Modifier.padding(horizontal = 24.dp, vertical = if (theater) 16.dp else 8.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {

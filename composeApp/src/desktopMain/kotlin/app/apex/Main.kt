@@ -1,4 +1,4 @@
-package app.apex
+﻿package app.apex
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -17,9 +17,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,7 +29,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -211,15 +207,11 @@ private fun runApp() = application {
         }
     }
 
-    // Tela cheia como o F11: sem barra de título nem bordas, cobrindo o monitor inteiro (e a barra de tarefas).
-    // O Compose não deixa trocar `undecorated` com a janela aberta (dá IllegalComponentStateException), então a janela é recriada já
-    // nos limites certos. Nada se perde: a navegação, o player e os dados ficam fora dela.
+    // Tela cheia como o F11 (sem barra de título nem bordas, cobrindo o monitor): ver WindowsFullscreen.
     val requested = boot.getOrNull()?.system?.fullscreen?.collectAsState()?.value ?: false
-    var applied by remember { mutableStateOf(false) }
-    var before by remember { mutableStateOf<WindowBeforeFullscreen?>(null) }
+    val fullscreenController = remember { FullscreenController(windowState) }
 
     // Atalho para testes: `APEX_FULLSCREEN=1` abre já em tela cheia; `cycle` entra e, depois de alguns segundos, sai.
-    // Fica fora da janela, que é recriada ao trocar de modo.
     LaunchedEffect(Unit) {
         val app = boot.getOrNull() ?: return@LaunchedEffect
         when (System.getenv("APEX_FULLSCREEN")) {
@@ -233,54 +225,30 @@ private fun runApp() = application {
         }
     }
 
-    key(applied) {
-        Window(
-            onCloseRequest = {
-                // Grava o que ainda estava esperando (as mudanças dos últimos instantes).
-                boot.getOrNull()?.data?.flush()
-                boot.getOrNull()?.player?.release()
-                exitApplication()
+    Window(
+        onCloseRequest = {
+            // Grava o que ainda estava esperando (as mudanças dos últimos instantes).
+            boot.getOrNull()?.data?.flush()
+            boot.getOrNull()?.player?.release()
+            exitApplication()
+        },
+        title = "Apex",
+        icon = AppIcon,
+        state = windowState,
+    ) {
+        LaunchedEffect(requested) { fullscreenController.apply(window, requested) }
+        boot.fold(
+            onSuccess = { app ->
+                CompositionLocalProvider(LocalApp provides app) { ApexApp() }
             },
-            title = "Apex",
-            icon = AppIcon,
-            state = windowState,
-            undecorated = applied,
-        ) {
-            LaunchedEffect(requested) {
-                if (requested == applied) return@LaunchedEffect
-                if (requested) {
-                    before = WindowBeforeFullscreen(windowState.placement, windowState.position, windowState.size)
-                    val screen = window.graphicsConfiguration?.bounds
-                        ?: java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration.bounds
-                    windowState.placement = WindowPlacement.Floating
-                    windowState.position = WindowPosition(screen.x.dp, screen.y.dp)
-                    windowState.size = DpSize(screen.width.dp, screen.height.dp)
-                } else {
-                    before?.let {
-                        windowState.placement = it.placement
-                        if (it.placement == WindowPlacement.Floating) {
-                            windowState.position = it.position
-                            windowState.size = it.size
-                        }
-                    }
-                    before = null
-                }
-                applied = requested
-            }
-            boot.fold(
-                onSuccess = { app ->
-                    CompositionLocalProvider(LocalApp provides app) { ApexApp() }
-                },
-                onFailure = { StartupProblem(it) },
-            )
-        }
+            onFailure = { StartupProblem(it) },
+        )
     }
 }
 
-private class WindowBeforeFullscreen(val placement: WindowPlacement, val position: WindowPosition, val size: DpSize)
-
 /** Atalho para testes: `APEX_START=search:rally`, `watch:ID`, `link:URL`, `live`, `channel:UC…`, `library`, `settings`. */
 private fun navigateFromEnv(app: AppContainer) {
+    if (System.getenv("APEX_THEATER") == "1") app.ui.theater = true
     val start = System.getenv("APEX_START")?.takeIf { it.isNotBlank() } ?: return
     val kind = start.substringBefore(':')
     val arg = start.substringAfter(':', "")

@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -250,6 +251,9 @@ private fun runApp() = application {
         LaunchedEffect(requested) { fullscreenController.apply(window, requested) }
         boot.fold(
             onSuccess = { app ->
+                // Voltou para a janela (de outro programa): confere na hora quem entrou ao vivo enquanto a pessoa estava fora.
+                val focused = LocalWindowInfo.current.isWindowFocused
+                LaunchedEffect(focused) { if (focused) app.liveWatcher.refreshIfStale(5_000) }
                 CompositionLocalProvider(LocalApp provides app) { ApexApp() }
             },
             onFailure = { StartupProblem(it) },

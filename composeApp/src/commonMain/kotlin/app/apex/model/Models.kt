@@ -165,4 +165,6 @@ data class AppSettings(
     /** Filtros da tela inicial (nomes de HomeSource e de Platform); vazio = tudo. Ficam só neste aparelho. */
     val homeSources: List<String> = emptyList(),
     val homePlatforms: List<String> = emptyList(),
+    /** Avisar quando um canal que a pessoa segue entra ao vivo. */
+    val liveAlerts: Boolean = true,
 )

@@ -92,6 +92,8 @@ class AppContainer(
     val ui = UiState()
     val session = PlaybackSession(scope, player, extractor, twitch, kick, data)
     val cloud = CloudAccount(scope, data, app.apex.source.Http.client)
+    /** Quem a pessoa segue está ao vivo: conferido sozinho, em segundo plano (antes das telas, que leem daqui). */
+    val liveWatcher = app.apex.state.LiveWatcher(this)
     val screens = ScreenStates(this)
 
     private val _twitchTurbo = kotlinx.coroutines.flow.MutableStateFlow<Boolean?>(null)
@@ -140,6 +142,7 @@ class AppContainer(
             }
         }
         cloud.start()
+        liveWatcher.start()
         scope.launch {
             val result = runCatching { extractor.ensureReady() }.getOrNull()
             if (result is app.apex.source.ExtractorState.Missing) toast(result.reason)
@@ -206,8 +209,7 @@ class AppContainer(
      */
     fun openLive(channel: Channel, known: Media? = null) {
         val live = known?.takeIf { it.isLive }
-            ?: screens.subs.liveNow.value.firstOrNull { it.channel?.key == channel.key && it.isLive }
-            ?: screens.home.followedLive.value.firstOrNull { it.channel?.key == channel.key && it.isLive }
+            ?: liveWatcher.live.value.firstOrNull { it.channel?.key == channel.key && it.isLive }
         if (live != null) return openMedia(live.copy(channel = live.channel ?: channel))
         when (channel.platform) {
             Platform.Twitch -> openMedia(Media(Platform.Twitch, channel.id, channel.name, channel, isLive = true, url = "https://www.twitch.tv/${channel.id}"))

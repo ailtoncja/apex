@@ -91,7 +91,7 @@ fun RemotePlaylistMenu(playlist: RemotePlaylist, expanded: Boolean, onDismiss: (
         DropdownMenuItem(
             text = { Text("Abrir") },
             leadingIcon = { Icon(Icons.Rounded.PlayArrow, null) },
-            onClick = { app.nav.push(Route.RemotePlaylist(playlist.id, playlist.title)); onDismiss() },
+            onClick = { app.nav.push(Route.RemotePlaylist(playlist.id, playlist.title, playlist.thumbnailUrl, playlist.countText)); onDismiss() },
         )
         DropdownMenuItem(
             text = { Text("Copiar para minhas playlists") },
@@ -120,7 +120,7 @@ fun RemotePlaylistCard(playlist: RemotePlaylist, modifier: Modifier = Modifier) 
     var menu by remember { mutableStateOf(false) }
     ContextMenuHost(
         modifier.clip(RoundedCornerShape(12.dp)).hoverable(source)
-            .clickable(interactionSource = source, indication = null) { app.nav.push(Route.RemotePlaylist(playlist.id, playlist.title)) },
+            .clickable(interactionSource = source, indication = null) { app.nav.push(Route.RemotePlaylist(playlist.id, playlist.title, playlist.thumbnailUrl, playlist.countText)) },
         menu = { dismiss -> RemotePlaylistMenu(playlist, true, dismiss) },
     ) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -160,7 +160,7 @@ fun RemotePlaylistRow(playlist: RemotePlaylist, modifier: Modifier = Modifier) {
     var menu by remember { mutableStateOf(false) }
     ContextMenuHost(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .clickable { app.nav.push(Route.RemotePlaylist(playlist.id, playlist.title)) },
+            .clickable { app.nav.push(Route.RemotePlaylist(playlist.id, playlist.title, playlist.thumbnailUrl, playlist.countText)) },
         menu = { dismiss -> RemotePlaylistMenu(playlist, true, dismiss) },
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {

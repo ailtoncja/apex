@@ -104,7 +104,7 @@ private fun Content(route: Route) {
         Route.Subscriptions -> SubscriptionsScreen()
         is Route.Library -> LibraryScreen(route.tab)
         is Route.PlaylistPage -> PlaylistScreen(route.id)
-        is Route.RemotePlaylist -> app.apex.ui.library.RemotePlaylistScreen(route.id, route.title)
+        is Route.RemotePlaylist -> app.apex.ui.library.RemotePlaylistScreen(route.id, route.title, route.coverUrl, route.countText)
         Route.Settings -> SettingsScreen()
     }
 }

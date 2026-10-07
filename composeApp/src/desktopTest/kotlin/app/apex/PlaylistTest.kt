@@ -119,66 +119,8 @@ class PlaylistTest {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// Os cartões de verdade (com o app inteiro por trás, só que com peças de mentira) abrem o menu com o botão direito.
-
-private class FakeUpdater : app.apex.update.Updater {
-    override val currentVersion = "0"
-    override val state = kotlinx.coroutines.flow.MutableStateFlow<app.apex.update.UpdateState>(app.apex.update.UpdateState.Idle)
-    override val canInstall = false
-    override fun check(manual: Boolean) {}
-    override fun download() {}
-    override fun installAndRestart() {}
-}
-
-private class FakeSystem : SystemServices {
-    override val updater = FakeUpdater()
-    override val fullscreen = kotlinx.coroutines.flow.MutableStateFlow(false)
-    override fun setFullscreen(on: Boolean) { fullscreen.value = on }
-    override fun openUrl(url: String) {}
-    override fun copyText(text: String) { copied = text }
-    var copied: String? = null
-    override fun saveDownload(fileName: String, text: String): String? = null
-    override val installedBrowsers = emptyList<BrowserOption>()
-    override val defaultBrowserId: String? = null
-    override suspend fun browserLogin(platform: Platform, browserId: String, onStatus: (String) -> Unit): app.apex.data.Account? = null
-    override fun signOut(platform: Platform) {}
-    override suspend fun refreshAccount(account: app.apex.data.Account): app.apex.data.Account? = null
-}
-
-private class FakePlayer2 : app.apex.player.PlayerController {
-    override val state = kotlinx.coroutines.flow.MutableStateFlow(app.apex.player.PlayerState())
-    override fun play(source: app.apex.player.PlaySource) {}
-    override fun togglePause() {}
-    override fun pause() {}
-    override fun resume() {}
-    override fun seekTo(positionMs: Long) {}
-    override fun seekBy(deltaMs: Long) {}
-    override fun setVolume(percent: Int) {}
-    override fun setMuted(muted: Boolean) {}
-    override fun setRate(rate: Float) {}
-    override fun setSubtitle(url: String?) {}
-    override fun stop() {}
-    override fun release() {}
-    @androidx.compose.runtime.Composable override fun Video(modifier: androidx.compose.ui.Modifier) {}
-}
-
-private class FakeExtractor2 : app.apex.source.Extractor {
-    override val state = kotlinx.coroutines.flow.MutableStateFlow<app.apex.source.ExtractorState>(app.apex.source.ExtractorState.Ready)
-    override suspend fun ensureReady() = app.apex.source.ExtractorState.Ready
-    override suspend fun resolve(media: Media): app.apex.model.Resolved = error("não usado")
-    override suspend fun comments(media: Media, limit: Int, newest: Boolean) = emptyList<app.apex.model.Comment>()
-    override suspend fun channelDetails(channelId: String): app.apex.model.ChannelDetails = error("não usado")
-    override suspend fun updateEngine() = ""
-}
-
 class ContextMenuCardsTest {
-    private fun newApp(): Pair<AppContainer, FakeSystem> {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val system = FakeSystem()
-        val data = UserData(FileStore(Files.createTempDirectory("apex-ctx").toFile()), scope)
-        return AppContainer(scope, system, data, FakeExtractor2(), FakePlayer2()) to system
-    }
+    private fun newApp(): Pair<AppContainer, FakeSystem> = newTestApp()
 
     @OptIn(ExperimentalTestApi::class)
     @Test

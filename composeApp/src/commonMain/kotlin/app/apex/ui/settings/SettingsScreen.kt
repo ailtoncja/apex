@@ -296,6 +296,47 @@ private fun AccountRow(platform: Platform, account: Account?) {
             }
         }
         message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted) }
+        if (account != null && platform == Platform.Twitch) TwitchTurboStatus(account)
     }
     if (login) BrowserLoginDialog(platform) { login = false }
+}
+
+/** Se a conta da Twitch tem Turbo (sem anúncios) e como trazer a conta certa do navegador. */
+@Composable
+private fun TwitchTurboStatus(account: Account) {
+    val app = LocalApp.current
+    val scope = rememberCoroutineScope()
+    val turbo by app.twitchTurbo.collectAsState()
+    var message by remember { mutableStateOf<String?>(null) }
+    Column(
+        Modifier.fillMaxWidth().background(ApexColors.SurfaceHigh, RoundedCornerShape(12.dp)).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        when (turbo) {
+            true -> Text("Twitch Turbo ativo em ${account.displayName}: as lives tocam sem anúncios.", style = MaterialTheme.typography.bodyMedium, color = ApexColors.OnSurface)
+            false -> {
+                Text(
+                    "A conta ${account.displayName} não tem o Twitch Turbo, então a Twitch mostra anúncios nas lives (em geral a cada 4 ou 5 minutos).",
+                    style = MaterialTheme.typography.bodyMedium, color = ApexColors.OnSurface,
+                )
+                Text(
+                    "O Apex já usa a sua sessão da Twitch no player; quem tem Turbo, ou é inscrito no canal, não vê anúncios. Se o Turbo está em outra conta, " +
+                        "entre com ela na Twitch pelo navegador e toque em Sincronizar.",
+                    style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted,
+                )
+            }
+            null -> Text("Conferindo o Twitch Turbo…", style = MaterialTheme.typography.bodyMedium, color = ApexColors.Muted)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            ActionButton("Sincronizar com o navegador", {
+                scope.launch {
+                    message = "Sincronizando…"
+                    val changed = runCatching { app.refreshAccountFromBrowser(Platform.Twitch) }.getOrDefault(false)
+                    app.refreshTwitchTurbo()
+                    message = if (changed) "Sessão atualizada com a conta que está no navegador." else "A sessão já estava igual à do navegador."
+                }
+            })
+            message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted) }
+        }
+    }
 }

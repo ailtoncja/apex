@@ -66,7 +66,11 @@ import kotlin.math.abs
 fun RemoteImage(url: String?, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
     Box(modifier.background(ApexColors.SurfaceHigh)) {
         if (!url.isNullOrBlank()) {
-            AsyncImage(model = url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = contentScale)
+            AsyncImage(
+                model = url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = contentScale,
+                // "Medium" reduz com mipmaps: capas cheias de detalhe (jogos) não ficam serrilhadas/pixeladas.
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium,
+            )
         }
     }
 }

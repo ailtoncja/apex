@@ -17,6 +17,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
 
+class KickLivePage(val items: List<Media>, val next: String?)
+
 class KickClipPage(val items: List<Media>, val next: String?)
 
 class KickChannelInfo(val hit: ChannelHit, val chatroomId: Long?, val playbackUrl: String?)
@@ -38,7 +40,57 @@ class KickSource(private val http: HttpClient = Http.client) {
 
     var hideMature: Boolean = true
 
-    suspend fun liveStreams(language: String? = "pt", pages: Int = 3, category: String? = null): List<Media> = coroutineScope {
+    /**
+     * Lives da Kick com o idioma, a categoria e a ordem por espectadores filtrados pelo próprio servidor (o endereço antigo ignorava o
+     * idioma). [cursor] é o [KickLivePage.next] da página anterior.
+     */
+    suspend fun lives(
+        language: String? = null, categoryId: String? = null, ascending: Boolean = false, cursor: String? = null, limit: Int = 24,
+    ): KickLivePage {
+        val url = buildString {
+            append("https://web.kick.com/api/v1/livestreams?limit=$limit&sort=").append(if (ascending) "viewer_count_asc" else "viewer_count_desc")
+            language?.takeIf { it.isNotBlank() }?.let { append("&language=").append(it.encodeURLParameter()) }
+            categoryId?.takeIf { it.isNotBlank() }?.let { append("&category_id=").append(it.encodeURLParameter()) }
+            cursor?.takeIf { it.isNotBlank() }?.let { append("&cursor=").append(it.encodeURLParameter()) }
+        }
+        val data = json(url)["data"] ?: error("A Kick não devolveu a lista de lives.")
+        val items = data["livestreams"].list().filter { !(hideMature && it["is_mature"].bool() == true) }.mapNotNull { webLiveToMedia(it) }
+        return KickLivePage(items, data["pagination"]["next_cursor"].str()?.takeIf { it.isNotBlank() })
+    }
+
+    internal fun webLiveToMedia(s: JsonElement?): Media? {
+        val ch = s["channel"] ?: return null
+        val slug = ch["slug"].str() ?: return null
+        val name = ch["username"].str() ?: slug
+        return Media(
+            platform = Platform.Kick,
+            id = slug,
+            title = s["title"].str().orEmpty().ifBlank { name },
+            channel = Channel(Platform.Kick, slug, name, ch["profile_pic"].str(), "@$slug", url = slugUrl(slug)),
+            thumbnailUrl = s["thumbnail"]["src"].str(),
+            viewCount = s["viewer_count"].long(),
+            isLive = true,
+            category = s["category"]["name"].str(),
+            url = slugUrl(slug),
+        )
+    }
+
+    suspend fun liveStreams(language: String? = "pt", pages: Int = 3, category: String? = null): List<Media> {
+        // Primeiro o endereço novo (com o idioma funcionando); se ele falhar ou vier vazio, o antigo.
+        val fresh = runCatching {
+            val out = mutableListOf<Media>()
+            var cursor: String? = null
+            repeat(pages) {
+                val page = lives(language, category?.takeIf { it.all(Char::isDigit) }, cursor = cursor)
+                out += page.items
+                cursor = page.next ?: return@runCatching out.distinctBy { it.id }
+            }
+            out.distinctBy { it.id }
+        }.getOrNull()
+        return fresh?.takeIf { it.isNotEmpty() } ?: legacyLiveStreams(language, pages, category)
+    }
+
+    private suspend fun legacyLiveStreams(language: String?, pages: Int, category: String?): List<Media> = coroutineScope {
         val lang = language?.takeIf { it.isNotBlank() } ?: "en"
         (1..pages).map { page ->
             async {
@@ -120,7 +172,8 @@ class KickSource(private val http: HttpClient = Http.client) {
         return data["data"].list().mapNotNull {
             val name = it["name"].str() ?: return@mapNotNull null
             LiveCategory(
-                it["slug"].str().orEmpty(), name, it["viewers"].long(),
+                // O id numérico é o que o filtro de categoria das lives entende.
+                it["id"].long()?.toString() ?: it["slug"].str().orEmpty(), name, it["viewers"].long(),
                 it["banner"]["src"].str() ?: it["banner"]["responsive"].str()?.substringBefore(' '),
             )
         }

@@ -35,6 +35,7 @@ import androidx.compose.ui.window.rememberWindowState
 import app.apex.data.FileStore
 import app.apex.data.UserData
 import app.apex.model.Channel
+import app.apex.model.LiveCategory
 import app.apex.model.Media
 import app.apex.model.Platform
 import app.apex.nav.LibraryTab
@@ -267,6 +268,13 @@ private fun navigateFromEnv(app: AppContainer) {
         "channel" -> app.nav.push(Route.ChannelPage(Channel(Platform.YouTube, arg.substringBefore(':'), arg.substringBefore(':')), arg.substringAfter(':', "0").toIntOrNull() ?: 0))
         "library" -> app.nav.goRoot(Route.Library(LibraryTab.History))
         "clips" -> app.nav.goRoot(Route.Library(LibraryTab.Clips))
+        "playlist" -> app.nav.push(Route.RemotePlaylist(arg, "Playlist"))
+        // `category:twitch:Just Chatting` ou `category:kick:just-chatting` abre a categoria.
+        "category" -> {
+            val platform = if (arg.substringBefore(':') == "kick") Platform.Kick else Platform.Twitch
+            val name = arg.substringAfter(':')
+            app.nav.push(Route.Category(platform, LiveCategory(name, name, null, null)))
+        }
         // `tchannel:gaules:2` abre o canal da Twitch na aba 2 (Clipes); `kchannel:` é o da Kick.
         "tchannel", "kchannel" -> {
             val platform = if (kind == "tchannel") Platform.Twitch else Platform.Kick

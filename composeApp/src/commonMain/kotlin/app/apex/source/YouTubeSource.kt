@@ -22,6 +22,18 @@ data class RemotePlaylist(val id: String, val title: String, val thumbnailUrl: S
 
 data class PlaylistPage(val items: List<RemotePlaylist>, val continuation: String?)
 
+/** O cabeçalho de uma playlist do YouTube: dono, contagem, visualizações, "atualizado há…" e descrição. */
+data class PlaylistInfo(
+    val title: String?,
+    val owner: Channel?,
+    /** Por exemplo: "30 vídeos", "2.341 visualizações", "Atualizado há 3 dias". */
+    val stats: List<String>,
+    val description: String?,
+)
+
+/** A primeira página de uma playlist traz também o cabeçalho ([info]); as seguintes só os vídeos. */
+class PlaylistContents(val info: PlaylistInfo?, val page: VideoPage)
+
 data class PlaylistOption(val id: String, val title: String, val contains: Boolean)
 
 sealed interface LiveChatStart {
@@ -29,7 +41,7 @@ sealed interface LiveChatStart {
     data class Unavailable(val message: String) : LiveChatStart
 }
 
-data class SearchPage(val videos: List<Media>, val channels: List<Channel>, val continuation: String?)
+data class SearchPage(val videos: List<Media>, val channels: List<Channel>, val continuation: String?, val playlists: List<RemotePlaylist> = emptyList())
 
 enum class SearchSort(val label: String, val code: Int) {
     Relevance("Relevância", 0), UploadDate("Data de envio", 2), Views("Visualizações", 3), Rating("Avaliação", 1)
@@ -43,13 +55,31 @@ enum class SearchDuration(val label: String, val code: Int) {
     Any("Qualquer duração", 0), Short("Menos de 4 min", 1), Medium("4 a 20 min", 3), Long("Mais de 20 min", 2)
 }
 
+enum class SearchType(val label: String, val code: Int) { Any("Tudo", 0), Video("Vídeo", 1), Channel("Canal", 2), Playlist("Playlist", 3) }
+
+/** Os "Recursos" do filtro de pesquisa do YouTube. [tag] é o campo do filtro codificado no parâmetro da busca. */
+enum class SearchFeature(val label: String, val tag: List<Int>) {
+    HD("HD", listOf(0x20)),
+    Subtitles("Legendas/CC", listOf(0x28)),
+    CreativeCommons("Creative Commons", listOf(0x30)),
+    FourK("4K", listOf(0x70)),
+    Vr360("360°", listOf(0x78)),
+    HDR("HDR", listOf(0xC8, 0x01)),
+}
+
 data class SearchFilters(
     val sort: SearchSort = SearchSort.Relevance,
     val date: SearchDate = SearchDate.Any,
     val duration: SearchDuration = SearchDuration.Any,
     val liveOnly: Boolean = false,
     val channelsOnly: Boolean = false,
-)
+    val type: SearchType = SearchType.Video,
+    val features: Set<SearchFeature> = emptySet(),
+) {
+    /** Quantos filtros estão ligados (para o botão "Filtros"). */
+    val activeCount: Int
+        get() = listOf(sort != SearchSort.Relevance, date != SearchDate.Any, duration != SearchDuration.Any, liveOnly, type != SearchType.Any).count { it } + features.size
+}
 
 /** Parâmetro do `browse` que abre a aba "Playlists" de um canal (o mesmo para todos os canais). */
 private const val PLAYLISTS_TAB = "EglwbGF5bGlzdHPyBgQKAkIA"
@@ -65,17 +95,21 @@ class YouTubeSource(val tube: InnerTube) {
     // ---------- busca ----------
 
     @OptIn(ExperimentalEncodingApi::class)
-    private fun searchParams(f: SearchFilters): String? {
+    internal fun searchParams(f: SearchFilters): String? {
         val filters = mutableListOf<Int>()
         if (f.date.code > 0) filters += listOf(0x08, f.date.code)
-        if (f.channelsOnly) filters += listOf(0x10, 2) else filters += listOf(0x10, 1)
+        val type = if (f.channelsOnly) SearchType.Channel.code else f.type.code
+        if (type > 0) filters += listOf(0x10, type)
         if (f.duration.code > 0) filters += listOf(0x18, f.duration.code)
         if (f.liveOnly) filters += listOf(0x40, 1)
+        f.features.forEach { filters += f.tagFor(it) + 1 }
         val bytes = mutableListOf<Int>()
         if (f.sort.code > 0) bytes += listOf(0x08, f.sort.code)
         bytes += listOf(0x12, filters.size) + filters
         return Base64.encode(ByteArray(bytes.size) { bytes[it].toByte() })
     }
+
+    private fun SearchFilters.tagFor(feature: SearchFeature): List<Int> = feature.tag
 
     suspend fun search(query: String, filters: SearchFilters = SearchFilters(), continuation: String? = null): SearchPage {
         val root = tube.call("search") {
@@ -87,7 +121,7 @@ class YouTubeSource(val tube: InnerTube) {
         } ?: return SearchPage(emptyList(), emptyList(), null)
         val videos = parseVideos(root)
         val channels = root.collect("channelRenderer").mapNotNull { parseChannelRenderer(it.second) }
-        return SearchPage(videos, channels, root.continuationToken())
+        return SearchPage(videos, channels, root.continuationToken(), parsePlaylists(root))
     }
 
     suspend fun suggestions(query: String): List<String> {
@@ -307,6 +341,38 @@ class YouTubeSource(val tube: InnerTube) {
 
     suspend fun playlistVideos(id: String, continuation: String? = null): VideoPage = accountList("VL$id", continuation)
 
+    /** Como [playlistVideos], mas na primeira página devolve também o cabeçalho da playlist. */
+    suspend fun playlist(id: String, continuation: String? = null): PlaylistContents {
+        val root = tube.call("browse") {
+            if (continuation != null) put("continuation", continuation) else put("browseId", "VL$id")
+        } ?: return PlaylistContents(null, VideoPage(emptyList(), null))
+        val items = parseVideos(root) + root.collect("playlistVideoRenderer").mapNotNull { videoRendererToMedia(it.second, currentTimeMillis()) }
+        return PlaylistContents(if (continuation == null) parsePlaylistInfo(root) else null, VideoPage(items.distinctBy { it.id }, root.continuationToken()))
+    }
+
+    internal fun parsePlaylistInfo(root: JsonElement): PlaylistInfo? {
+        val header = root.path("header", "pageHeaderRenderer", "content", "pageHeaderViewModel")
+        val sidebar = root.collect("playlistSidebarPrimaryInfoRenderer").firstOrNull()?.second
+        val title = header.path("title", "dynamicTextViewModel", "text", "content").str() ?: sidebar.path("title", "runs", 0, "text").str()
+        fun runs(e: JsonElement?) = e["runs"].list().joinToString("") { it["text"].str().orEmpty() }.trim().ifBlank { e["simpleText"].str() }
+        val stats = sidebar["stats"].list().mapNotNull { runs(it) }.ifEmpty {
+            header.path("metadata", "contentMetadataViewModel", "metadataRows", 1, "metadataParts").list()
+                .mapNotNull { it["text"]["content"].str() }.filter { it != "Playlist" }
+        }
+        val ownerRenderer = root.collect("videoOwnerRenderer").firstOrNull()?.second
+        val ownerName = ownerRenderer.path("title", "runs", 0, "text").str()
+            ?: header.path("metadata", "contentMetadataViewModel", "metadataRows", 0, "metadataParts", 0, "avatarStack", "avatarStackViewModel", "text", "content").str()?.removePrefix("por ")
+        val ownerId = ownerRenderer.path("title", "runs", 0, "navigationEndpoint", "browseEndpoint", "browseId").str()
+            ?: ownerRenderer?.collect("browseEndpoint")?.firstNotNullOfOrNull { it.second["browseId"].str() }
+        val description = header.path("description", "descriptionPreviewViewModel", "description", "content").str()
+            ?: sidebar.path("description", "simpleText").str()
+        if (title == null && ownerName == null && stats.isEmpty()) return null
+        return PlaylistInfo(
+            title, ownerName?.let { Channel(Platform.YouTube, ownerId.orEmpty(), it, url = ownerId?.let { id -> "https://www.youtube.com/channel/$id" }.orEmpty()) },
+            stats, description?.takeIf { it.isNotBlank() },
+        )
+    }
+
     /** Em quais playlists da conta o vídeo já está (para o diálogo "Salvar em…"). */
     suspend fun playlistOptions(videoId: String): List<PlaylistOption> {
         val root = tube.call("playlist/get_add_to_playlist") { put("videoId", videoId); put("excludeWatchLater", false) } ?: return emptyList()
@@ -458,8 +524,10 @@ class YouTubeSource(val tube: InnerTube) {
         )
     }
 
+    /** A capa maior que o YouTube oferece (até ~800 px): as pequenas, de 320 px, ficam borradas nos cartões grandes. */
     private fun pickThumb(sources: List<Pair<String, Int>>, id: String): String =
-        sources.firstOrNull { it.second >= 320 }?.first
+        sources.filter { it.second in 1..800 }.maxByOrNull { it.second }?.first
+            ?: sources.firstOrNull { it.second >= 320 }?.first
             ?: sources.lastOrNull()?.first
             ?: "https://i.ytimg.com/vi/$id/mqdefault.jpg"
 }

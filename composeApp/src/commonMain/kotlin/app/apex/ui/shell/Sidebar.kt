@@ -46,6 +46,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
+import app.apex.model.Platform
+import app.apex.model.Channel
+import androidx.compose.runtime.mutableStateMapOf
 import app.apex.nav.LibraryTab
 import app.apex.nav.LiveFilter
 import app.apex.nav.Route
@@ -90,23 +93,55 @@ fun Sidebar(expanded: Boolean) {
                 app.nav.goRoot(Route.Library(LibraryTab.Playlists))
             }
             Spacer(Modifier.height(6.dp)); Divider(); Spacer(Modifier.height(6.dp))
+            // Os canais ficam separados por plataforma (quem está ao vivo e quem a pessoa apoia aparece primeiro em cada grupo).
+            val collapsed = remember { mutableStateMapOf<Platform, Boolean>() }
+            val groups = remember(subs, liveKeys) {
+                listOf(Platform.YouTube, Platform.Twitch, Platform.Kick).map { p ->
+                    p to subs.filter { it.platform == p }.sortedWith(
+                        compareByDescending<Channel> { it.key in liveKeys }.thenByDescending { it.support != null }.thenBy { it.name.lowercase() },
+                    )
+                }.filter { it.second.isNotEmpty() }
+            }
             Text("Seus canais", Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium, color = ApexColors.Muted)
             LazyColumn(Modifier.weight(1f)) {
-                items(subs, key = { it.key }) { ch ->
-                    val source = remember { MutableInteractionSource() }
-                    val hovered by source.collectIsHoveredAsState()
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).hoverable(source)
-                            .background(if (hovered) ApexColors.SurfaceHigh else androidx.compose.ui.graphics.Color.Transparent)
-                            .clickable(interactionSource = source, indication = null) { app.openChannel(ch) }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Avatar(ch.avatarUrl, ch.name, 26.dp)
-                        Text(ch.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (ch.key in liveKeys) Box(Modifier.size(8.dp).background(ApexColors.Live, CircleShape))
-                        else Box(Modifier.size(6.dp).background(ch.platform.color().copy(alpha = 0.7f), CircleShape))
+                groups.forEach { (platform, list) ->
+                    item("h-${platform.name}") {
+                        val liveCount = list.count { it.key in liveKeys }
+                        val closed = collapsed[platform] == true
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(8.dp))
+                                .clickable { collapsed[platform] = !closed }.padding(horizontal = 12.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(Modifier.size(8.dp).background(platform.color(), CircleShape))
+                            Text(
+                                platform.label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge,
+                                color = ApexColors.OnSurface, maxLines = 1,
+                            )
+                            if (liveCount > 0) Text("$liveCount ao vivo", style = MaterialTheme.typography.labelSmall, color = ApexColors.Live)
+                            Text("${list.size}", style = MaterialTheme.typography.labelSmall, color = ApexColors.Muted)
+                            Text(if (closed) "▸" else "▾", style = MaterialTheme.typography.labelSmall, color = ApexColors.Muted)
+                        }
+                    }
+                    if (collapsed[platform] != true) {
+                        items(list, key = { it.key }) { ch ->
+                            val source = remember { MutableInteractionSource() }
+                            val hovered by source.collectIsHoveredAsState()
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).hoverable(source)
+                                    .background(if (hovered) ApexColors.SurfaceHigh else androidx.compose.ui.graphics.Color.Transparent)
+                                    .clickable(interactionSource = source, indication = null) { app.openChannel(ch) }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Avatar(ch.avatarUrl, ch.name, 26.dp)
+                                Text(ch.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (ch.key in liveKeys) Box(Modifier.size(8.dp).background(ApexColors.Live, CircleShape))
+                                else if (ch.support != null) Box(Modifier.size(6.dp).background(ApexColors.Support, CircleShape))
+                            }
+                        }
                     }
                 }
             }

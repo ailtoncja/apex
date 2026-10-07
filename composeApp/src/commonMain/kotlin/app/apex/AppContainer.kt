@@ -94,11 +94,22 @@ class AppContainer(
     val cloud = CloudAccount(scope, data, app.apex.source.Http.client)
     val screens = ScreenStates(this)
 
+    private val _twitchTurbo = kotlinx.coroutines.flow.MutableStateFlow<Boolean?>(null)
+
+    /** A conta da Twitch tem Turbo? `null` = sem conta ou ainda conferindo. */
+    val twitchTurbo: StateFlow<Boolean?> = _twitchTurbo
+
+    fun refreshTwitchTurbo() {
+        scope.launch { _twitchTurbo.value = runCatching { twitch.hasTurbo() }.getOrNull() }
+    }
+
     init {
         scope.launch {
             data.accounts.collect { accounts ->
                 tube.cookieHeader = accounts[Platform.YouTube.name]?.credential
                 twitch.authToken = accounts[Platform.Twitch.name]?.credential
+                // Troca de conta (ou entrada/saída): confere de novo se a Twitch dessa conta tem Turbo.
+                if (accounts[Platform.Twitch.name] != null) refreshTwitchTurbo() else _twitchTurbo.value = null
                 kick.sessionToken = accounts[Platform.Kick.name]?.credential
             }
         }
@@ -120,8 +131,10 @@ class AppContainer(
             }
         }
         // O navegador troca os cookies do YouTube de tempos em tempos; relemos o perfil dele para a sessão não cair.
+        // A Twitch entra na mesma conferência: quem trocar de conta no navegador (por exemplo para a que tem Turbo) é acompanhado.
         scope.launch {
             while (true) {
+                runCatching { refreshAccountFromBrowser(Platform.Twitch) }
                 runCatching { refreshAccountFromBrowser(Platform.YouTube) }
                 kotlinx.coroutines.delay(ACCOUNT_REFRESH_MS)
             }
@@ -201,7 +214,7 @@ class AppContainer(
         return true
     }
 
-    fun search(query: String, filters: SearchFilters = SearchFilters()) {
+    fun search(query: String, filters: SearchFilters = SearchFilters(type = app.apex.source.SearchType.Any)) {
         if (query.isBlank()) return
         if (openLink(query)) return
         data.addSearchHistory(query)
@@ -219,7 +232,13 @@ class AppContainer(
         if (fresh.credential == current.credential) return false
         data.setAccount(fresh, platform)
         // Já vale para o próximo pedido, sem esperar o observador das contas.
-        if (platform == Platform.YouTube) tube.cookieHeader = fresh.credential
+        when (platform) {
+            Platform.YouTube -> tube.cookieHeader = fresh.credential
+            Platform.Twitch -> twitch.authToken = fresh.credential
+            Platform.Kick -> kick.sessionToken = fresh.credential
+        }
+        // O navegador pode estar em outra conta agora: pega o nome e a foto dela.
+        refreshAccountProfile(platform)
         return true
     }
 

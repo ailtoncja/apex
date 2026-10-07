@@ -29,8 +29,6 @@ import io.ktor.server.plugins.PayloadTooLargeException
 import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.server.plugins.forwardedheaders.XForwardedHeaders
-import io.ktor.server.plugins.origin
 import io.ktor.server.plugins.ratelimit.RateLimit
 import io.ktor.server.plugins.ratelimit.RateLimitName
 import io.ktor.server.plugins.ratelimit.rateLimit
@@ -85,11 +83,10 @@ private fun securityHeaders(hsts: Boolean) = createApplicationPlugin("SecurityHe
 
 fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, syncOverlapSeconds: Long = 5) {
     val jwt = JwtService(config.jwtSecret)
-    val auth = AuthService(db, jwt, mailer, config)
+    val auth = AuthService(db, jwt, mailer, config, this)
     val sync = SyncService(db, syncOverlapSeconds, config.maxRowsPerUser, config.maxBytesPerUser)
     val pages = WebPages(config)
 
-    if (config.trustProxy) install(XForwardedHeaders)
     install(securityHeaders(hsts = config.publicUrl.startsWith("https://")))
     // Sem a query na linha do log: os links dos e-mails levam um token (?token=...).
     install(CallLogging) {
@@ -120,19 +117,19 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
     install(RateLimit) {
         register(AUTH_LIMIT) {
             rateLimiter(limit = 30, refillPeriod = 1.minutes)
-            requestKey { call -> call.request.origin.remoteHost }
+            requestKey { call -> call.clientIp(config) }
         }
         register(REGISTER_LIMIT) {
             rateLimiter(limit = config.registerLimitPerHour, refillPeriod = 1.hours)
-            requestKey { call -> call.request.origin.remoteHost }
+            requestKey { call -> call.clientIp(config) }
         }
         register(MAIL_LIMIT) {
             rateLimiter(limit = config.mailLimitPerHour, refillPeriod = 1.hours)
-            requestKey { call -> call.request.origin.remoteHost }
+            requestKey { call -> call.clientIp(config) }
         }
         register(SYNC_LIMIT) {
             rateLimiter(limit = 120, refillPeriod = 1.minutes)
-            requestKey { call -> call.principal<JWTPrincipal>()?.subject ?: call.request.origin.remoteHost }
+            requestKey { call -> call.principal<JWTPrincipal>()?.subject ?: call.clientIp(config) }
         }
     }
     install(Authentication) {
@@ -148,6 +145,16 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
 
     routing {
         get("/health") { call.respondText("ok") }
+        // TEMPORÁRIO: descobrir quantos proxies a hospedagem coloca na frente (sai no próximo commit).
+        get("/v1/_whoami") {
+            val h = call.request.headers
+            fun all(n: String) = (h.getAll(n) ?: emptyList()).joinToString(" | ")
+            val lines = listOf(
+                "direct=${call.request.local.remoteAddress}", "xff=${all("X-Forwarded-For")}", "cf=${all("CF-Connecting-IP")}",
+                "true=${all("True-Client-IP")}", "real=${all("X-Real-IP")}", "fwd=${all("Forwarded")}",
+            )
+            call.respondText(lines.joinToString(System.lineSeparator()))
+        }
         get("/") { call.respondText(pages.home(), ContentType.Text.Html) }
         get("/terms") { call.respondText(pages.terms(), ContentType.Text.Html) }
         get("/privacy") { call.respondText(pages.privacy(), ContentType.Text.Html) }
@@ -165,7 +172,7 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
                 }
                 post("/auth/login") {
                     val req = call.receive<LoginRequest>()
-                    call.respond(auth.login(req.copy(device = req.device ?: call.request.userAgent()?.take(80))))
+                    call.respond(auth.login(req.copy(device = req.device ?: call.request.userAgent()?.take(80)), call.clientIp(config)))
                 }
                 post("/auth/refresh") { call.respond(auth.refresh(call.receive<RefreshRequest>().refreshToken)) }
                 post("/auth/logout") {
@@ -238,7 +245,7 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
                 val form = call.receiveParameters()
                 val page = try {
                     if (form["confirm"] != "yes") throw ApiException(HttpStatusCode.BadRequest, "not_confirmed", "Marque a caixa para confirmar.")
-                    auth.deleteAccount(form["email"].orEmpty(), form["password"].orEmpty())
+                    auth.deleteAccount(form["email"].orEmpty(), form["password"].orEmpty(), call.clientIp(config))
                     pages.message("Conta excluída", "Pronto. A sua conta e os dados guardados no servidor foram apagados.")
                 } catch (e: ApiException) {
                     pages.deleteForm(e.message)
@@ -256,6 +263,18 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
             delay(6.hours)
         }
     }
+}
+
+/**
+ * IP de quem fez o pedido, para os limites de uso. Atrás de proxy o `X-Forwarded-For` traz o que o cliente mandou (que ele pode inventar)
+ * seguido do que cada proxy nosso acrescentou; só vale o que os nossos proxies acrescentaram, contando [ServerConfig.trustedProxyHops]
+ * entradas a partir do fim da lista. Sem proxy configurado, o cabeçalho é ignorado.
+ */
+fun ApplicationCall.clientIp(config: ServerConfig): String {
+    val direct = request.local.remoteAddress
+    if (!config.trustProxy) return direct
+    val entries = request.headers.getAll("X-Forwarded-For").orEmpty().flatMap { it.split(',') }.map { it.trim() }.filter { it.isNotEmpty() }
+    return entries.getOrNull(entries.size - config.trustedProxyHops) ?: direct
 }
 
 private fun ApplicationCall.userId(): UUID =

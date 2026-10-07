@@ -12,7 +12,9 @@ import app.apex.shared.SyncRequest
 import app.apex.shared.SyncResponse
 import app.apex.shared.UserDto
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -33,6 +35,13 @@ class LoginThrottle(private val maxFailures: Int = 8, private val windowMs: Long
 
     private val entries = ConcurrentHashMap<String, Entry>()
 
+    /** Sem isto, quem testa milhões de e-mails diferentes encheria a memória. */
+    private fun purge(now: Long) {
+        if (entries.size < MAX_ENTRIES) return
+        entries.entries.removeIf { now - it.value.start > windowMs }
+        if (entries.size >= MAX_ENTRIES) entries.clear()
+    }
+
     fun check(key: String) {
         val e = entries[key] ?: return
         if (System.currentTimeMillis() - e.start > windowMs) entries.remove(key, e)
@@ -41,11 +50,19 @@ class LoginThrottle(private val maxFailures: Int = 8, private val windowMs: Long
 
     fun failure(key: String) {
         val now = System.currentTimeMillis()
+        purge(now)
         entries.compute(key) { _, old -> if (old == null || now - old.start > windowMs) Entry(1, now) else old.also { it.count++ } }
     }
 
     fun success(key: String) {
         entries.remove(key)
+    }
+
+    /** Quantas chaves a barreira guarda agora (para os testes). */
+    internal fun size(): Int = entries.size
+
+    private companion object {
+        const val MAX_ENTRIES = 20_000
     }
 }
 
@@ -54,10 +71,18 @@ class AuthService(
     private val jwt: JwtService,
     private val mailer: Mailer,
     private val config: ServerConfig,
+    /** Para tarefas que não devem atrasar a resposta (como mandar e-mail). */
+    private val scope: CoroutineScope,
 ) {
     private val log = LoggerFactory.getLogger("auth")
-    private val throttle = LoginThrottle()
-    private val emailRegex = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$")
+
+    // Duas barreiras: poucas tentativas por pessoa (IP) em cada e-mail e, no total, um teto maior por e-mail. Assim um atacante sozinho
+    // não consegue trancar a conta de outra pessoa (ela entra de outro IP), mas um ataque espalhado por muitos IPs também é contido.
+    private val throttleByIp = LoginThrottle(maxFailures = 6)
+    private val throttleByEmail = LoginThrottle(maxFailures = 25)
+
+    // Sem vírgula, ponto e vírgula, aspas ou <>: o e-mail vai em cabeçalhos e listas de destinatários.
+    private val emailRegex = Regex("^[\\p{L}\\p{N}._%+'-]+@[\\p{L}\\p{N}.-]+\\.\\p{L}{2,}$")
 
     private fun normalizeEmail(raw: String): String {
         val email = raw.trim().lowercase()
@@ -109,20 +134,24 @@ class AuthService(
     }
 
     /** Confere e-mail e senha (com a barreira de tentativas) e devolve a pessoa. */
-    private suspend fun authenticate(rawEmail: String, password: String): UserRow {
+    private suspend fun authenticate(rawEmail: String, password: String, ip: String): UserRow {
         val email = rawEmail.trim().lowercase()
-        throttle.check(email)
+        val ipKey = "$ip|$email"
+        throttleByIp.check(ipKey)
+        throttleByEmail.check(email)
         val user = db.query { UserRepo.findByEmail(it, email) }
         val ok = withContext(Dispatchers.Default) { Passwords.verify(password, user?.passwordHash) }
         if (user == null || !ok) {
-            throttle.failure(email)
+            throttleByIp.failure(ipKey)
+            throttleByEmail.failure(email)
             fail(HttpStatusCode.Unauthorized, "invalid_credentials", "E-mail ou senha incorretos.")
         }
-        throttle.success(email)
+        throttleByIp.success(ipKey)
+        throttleByEmail.success(email)
         return user
     }
 
-    suspend fun login(req: LoginRequest): AuthResponse = session(authenticate(req.email, req.password), req.device)
+    suspend fun login(req: LoginRequest, ip: String): AuthResponse = session(authenticate(req.email, req.password, ip), req.device)
 
     suspend fun refresh(raw: String): AuthResponse {
         val result = db.query { TokenRepo.rotate(it, raw) }
@@ -148,7 +177,8 @@ class AuthService(
         val email = rawEmail.trim().lowercase()
         val user = db.query { UserRepo.findByEmail(it, email) } ?: return
         val token = db.query { TokenRepo.createEmailToken(it, user.id, "reset", 3600) }
-        sendMail(MailTemplates.reset(user.email, "${config.publicUrl}/reset?token=$token"))
+        // Em segundo plano: se esperássemos o e-mail sair, a resposta demoraria mais só para quem tem conta (e isso revelaria quem tem).
+        scope.launch { sendMail(MailTemplates.reset(user.email, "${config.publicUrl}/reset?token=$token")) }
     }
 
     suspend fun reset(token: String, newPassword: String) {
@@ -173,8 +203,8 @@ class AuthService(
     }
 
     /** Apagar a conta pela página do site, sem precisar do app. */
-    suspend fun deleteAccount(email: String, password: String) {
-        val user = authenticate(email, password)
+    suspend fun deleteAccount(email: String, password: String, ip: String) {
+        val user = authenticate(email, password, ip)
         db.query { UserRepo.delete(it, user.id) }
         log.info("Conta apagada pelo site.")
     }

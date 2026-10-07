@@ -311,7 +311,10 @@ class ApiTest {
         val withBinding = ServerConfig.parseDatabaseUrl("postgresql://neondb_owner:abc@ep-x.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
         assertEquals("jdbc:postgresql://ep-x.sa-east-1.aws.neon.tech/neondb?sslmode=require", withBinding.jdbcUrl)
         val onlyBinding = ServerConfig.parseDatabaseUrl("postgresql://u:p@h/db?channel_binding=require")
-        assertEquals("jdbc:postgresql://h/db", onlyBinding.jdbcUrl)
+        // Banco fora da própria máquina: sem sslmode na string, a conexão passa a ser criptografada por padrão.
+        assertEquals("jdbc:postgresql://h/db?sslmode=require", onlyBinding.jdbcUrl)
+        assertEquals("jdbc:postgresql://h/db?sslmode=require", ServerConfig.parseDatabaseUrl("postgres://u:p@h/db").jdbcUrl)
+        assertEquals("jdbc:postgresql://h/db?sslmode=verify-full", ServerConfig.parseDatabaseUrl("postgres://u:p@h/db?sslmode=verify-full").jdbcUrl)
         val local = ServerConfig.parseDatabaseUrl("postgres://u:p@localhost:5432/apex")
         assertEquals("jdbc:postgresql://localhost:5432/apex", local.jdbcUrl)
         assertNotNull(local.user)

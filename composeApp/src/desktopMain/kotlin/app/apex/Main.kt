@@ -300,6 +300,11 @@ private fun navigateFromEnv(app: AppContainer) {
             val login = arg.substringBefore(':')
             app.nav.push(Route.ChannelPage(Channel(platform, login, login), arg.substringAfter(':', "0").toIntOrNull() ?: 0))
         }
+        // `home:2` abre o início já no assunto de número 2 (Música).
+        "home" -> {
+            app.screens.home.selected = arg.toIntOrNull() ?: 0
+            app.nav.goRoot(Route.Home)
+        }
         "settings" -> app.nav.goRoot(Route.Settings)
         "subs" -> app.nav.goRoot(Route.Subscriptions)
         "link" -> app.openLink(arg)

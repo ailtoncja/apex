@@ -47,15 +47,17 @@ class KickSource(private val http: HttpClient = Http.client) {
     suspend fun lives(
         language: String? = null, categoryId: String? = null, ascending: Boolean = false, cursor: String? = null, limit: Int = 24,
     ): KickLivePage {
-        val url = buildString {
-            append("https://web.kick.com/api/v1/livestreams?limit=$limit&sort=").append(if (ascending) "viewer_count_asc" else "viewer_count_desc")
-            language?.takeIf { it.isNotBlank() }?.let { append("&language=").append(it.encodeURLParameter()) }
-            categoryId?.takeIf { it.isNotBlank() }?.let { append("&category_id=").append(it.encodeURLParameter()) }
-            cursor?.takeIf { it.isNotBlank() }?.let { append("&cursor=").append(it.encodeURLParameter()) }
-        }
-        val data = json(url)["data"] ?: error("A Kick não devolveu a lista de lives.")
+        val data = json(livesUrl(language, categoryId, ascending, cursor, limit))["data"] ?: error("A Kick não devolveu a lista de lives.")
         val items = data["livestreams"].list().filter { !(hideMature && it["is_mature"].bool() == true) }.mapNotNull { webLiveToMedia(it) }
         return KickLivePage(items, data["pagination"]["next_cursor"].str()?.takeIf { it.isNotBlank() })
+    }
+
+    /** `limit` vai até 100. A página seguinte se pede com `after=` (o antigo `cursor=` passou a ser ignorado e devolvia sempre a primeira). */
+    internal fun livesUrl(language: String?, categoryId: String?, ascending: Boolean, cursor: String?, limit: Int): String = buildString {
+        append("https://web.kick.com/api/v1/livestreams?limit=${limit.coerceIn(1, 100)}&sort=").append(if (ascending) "viewer_count_asc" else "viewer_count_desc")
+        language?.takeIf { it.isNotBlank() }?.let { append("&language=").append(it.encodeURLParameter()) }
+        categoryId?.takeIf { it.isNotBlank() }?.let { append("&category_id=").append(it.encodeURLParameter()) }
+        cursor?.takeIf { it.isNotBlank() }?.let { append("&after=").append(it.encodeURLParameter()) }
     }
 
     internal fun webLiveToMedia(s: JsonElement?): Media? {

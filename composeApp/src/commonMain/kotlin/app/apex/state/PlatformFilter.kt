@@ -1,6 +1,7 @@
 package app.apex.state
 
 import app.apex.model.Channel
+import app.apex.model.HistoryEntry
 import app.apex.model.Media
 import app.apex.model.Platform
 
@@ -37,3 +38,15 @@ enum class HomeSource(val label: String) {
 }
 
 fun <E : Enum<E>> List<String>.toEnumSet(values: Array<E>): Set<E> = mapNotNull { name -> values.firstOrNull { it.name == name } }.toSet()
+
+/** As categorias (já sem acento e em minúsculas) que a pessoa mais assistiu, da mais para a menos vista. */
+fun watchedCategories(history: List<HistoryEntry>, limit: Int = 5): List<String> =
+    history.mapNotNull { it.media.category?.takeIf { c -> c.isNotBlank() }?.let(::normalizeText) }
+        .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(limit).map { it.key }
+
+/** As lives que estão nessas categorias (a das categorias mais vistas primeiro; dentro de cada uma segue a ordem de público). */
+fun List<Media>.inCategories(categories: List<String>): List<Media> {
+    if (categories.isEmpty()) return emptyList()
+    val rank = categories.withIndex().associate { (i, c) -> c to i }
+    return mapNotNull { m -> m.category?.let(::normalizeText)?.let { c -> rank[c]?.let { r -> r to m } } }.sortedBy { it.first }.map { it.second }
+}

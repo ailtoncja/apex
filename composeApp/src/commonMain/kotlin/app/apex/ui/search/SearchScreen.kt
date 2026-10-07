@@ -98,6 +98,11 @@ fun SearchScreen(route: Route.Search) {
     val liveNow by app.screens.subs.liveNow.collectAsState()
     val platforms = st.platforms
     val onlySubs = st.onlySubs
+    // Cada combinação de consulta e filtros do YouTube tem o seu estado: ao mudar um filtro, leva junto as plataformas e "Inscrições" ligadas.
+    fun changeFilters(filters: SearchFilters) {
+        app.screens.search(route.query, filters).also { it.platforms = st.platforms; it.onlySubs = st.onlySubs }
+        app.nav.replaceTop(route.copy(filters = filters))
+    }
     // Com uma plataforma só, a lista mostra mais resultados dela; com várias (ou todas), um pouco de cada.
     val single = platforms.size == 1
     val listState = rememberLazyListState()
@@ -150,7 +155,7 @@ fun SearchScreen(route: Route.Search) {
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             ApexChip(if (route.filters.activeCount > 0) "Filtros (${route.filters.activeCount})" else "Filtros", false, { showFilters = true })
                             activeFilters(route.filters).forEach { (label, without) ->
-                                ApexChip("$label  ✕", true, { app.nav.replaceTop(route.copy(filters = without)) })
+                                ApexChip("$label  ✕", true, { changeFilters(without) })
                             }
                         }
                     }
@@ -236,7 +241,7 @@ fun SearchScreen(route: Route.Search) {
     }
 
     if (showFilters) {
-        FiltersDialog(route.filters, onChange = { app.nav.replaceTop(route.copy(filters = it)) }, onClose = { showFilters = false })
+        FiltersDialog(route.filters, onChange = { changeFilters(it) }, onClose = { showFilters = false })
     }
 }
 

@@ -220,6 +220,25 @@ class HomeState(private val app: AppContainer) {
     val trending = Paged<Media>(app.scope, { it.key }) { trendingPage() }
 
     private val topicLists = HashMap<String, Paged<Media>>()
+    private val topicLiveLists = HashMap<String, Loadable<List<Media>>>()
+
+    /** As lives mais vistas de uma plataforma (a mesma lista da tela Ao vivo); o YouTube não tem lista de "só lives" aqui. */
+    fun topLives(platform: Platform): Paged<Media>? = when (platform) {
+        Platform.Twitch -> app.screens.live.twitch
+        Platform.Kick -> app.screens.live.kick
+        Platform.YouTube -> null
+    }
+
+    /** Lives da Twitch e da Kick sobre o assunto, para quando o filtro de plataforma deixa de fora o YouTube. */
+    fun topicLives(topic: HomeTopic): Loadable<List<Media>> = topicLiveLists.getOrPut(topic.label) {
+        Loadable(app.scope, emptyList()) {
+            coroutineScope {
+                val t = async { runCatching { app.twitch.searchStreams(topic.label, 24) }.getOrDefault(emptyList()) }
+                val k = async { runCatching { app.kick.search(topic.label).mapNotNull { it.live } }.getOrDefault(emptyList()) }
+                interleave(listOf(t.await(), k.await()))
+            }
+        }
+    }
 
     fun topicList(topic: HomeTopic): Paged<Media> = topicLists.getOrPut(topic.label) {
         Paged(app.scope, { it.key }) { token ->
@@ -244,6 +263,8 @@ class HomeState(private val app: AppContainer) {
         if (trending.loaded.value) trending.refresh()
         app.screens.subs.refreshFeed()
         topicLists.values.forEach { it.refresh() }
+        topicLiveLists.values.forEach { it.reload() }
+        listOf(Platform.Twitch, Platform.Kick).mapNotNull { topLives(it) }.filter { it.loaded.value }.forEach { it.refresh() }
     }
 
     fun refreshLive() {

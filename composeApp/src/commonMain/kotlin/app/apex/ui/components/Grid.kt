@@ -39,8 +39,14 @@ fun LazyGridScope.fullSpan(key: Any? = null, content: @Composable () -> Unit) {
     item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
 }
 
-fun LazyGridScope.videoItems(list: List<Media>, upNext: List<Media>? = null) {
-    gridItems(list, key = { it.key }) { VideoCard(it, upNext = upNext ?: list.filter { m -> m.key != it.key }) }
+/**
+ * Os cartões de uma lista. A chave de cada item tem de ser única em TODA a grade: o mesmo vídeo pode aparecer em duas seções
+ * (por exemplo no feed das inscrições e nos recomendados), por isso cada seção usa o seu [section]; e, dentro da lista,
+ * repetidos são ignorados. Com chave repetida o Compose derruba o app ("Key was already used").
+ */
+fun LazyGridScope.videoItems(list: List<Media>, upNext: List<Media>? = null, section: String = "") {
+    val unique = list.distinctBy { it.key }
+    gridItems(unique, key = { section + it.key }) { VideoCard(it, upNext = upNext ?: unique.filter { m -> m.key != it.key }) }
 }
 
 fun LazyGridScope.playlistItems(list: List<app.apex.source.RemotePlaylist>) {
@@ -54,8 +60,9 @@ fun LazyGridScope.skeletons(count: Int = 8) {
 /** Fileira horizontal de cartões (ao vivo, relacionados). */
 @Composable
 fun MediaRow(list: List<Media>, modifier: Modifier = Modifier, cardWidth: androidx.compose.ui.unit.Dp = 290.dp) {
+    val unique = list.distinctBy { it.key }
     LazyRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-        items(list, key = { it.key }) { VideoCard(it, Modifier.width(cardWidth), upNext = list.filter { m -> m.key != it.key }) }
+        items(unique, key = { it.key }) { VideoCard(it, Modifier.width(cardWidth), upNext = unique.filter { m -> m.key != it.key }) }
     }
 }
 

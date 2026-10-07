@@ -101,7 +101,7 @@ fun HomeScreen() {
                         trailing = { ActionButton("Ver todas", { app.nav.goRoot(Route.Subscriptions) }) },
                     )
                 }
-                videoItems(subFeed)
+                videoItems(subFeed, section = "feed:")
             } else if (subs.none { it.platform == Platform.YouTube } && !feedLoading) {
                 fullSpan("feed-empty") {
                     Row(

@@ -3,7 +3,7 @@ FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY . .
 ENV APEX_SERVER_ONLY=true
-RUN ./gradlew :server:installDist --no-daemon -x test -Dorg.gradle.jvmargs="-Xmx1g -Dfile.encoding=UTF-8" -Dkotlin.daemon.jvm.options="-Xmx768m"
+RUN chmod +x gradlew && ./gradlew :server:installDist --no-daemon -x test -Dorg.gradle.jvmargs="-Xmx1g -Dfile.encoding=UTF-8" -Dkotlin.daemon.jvm.options="-Xmx768m"
 
 FROM eclipse-temurin:21-jre
 RUN useradd --system --create-home apex

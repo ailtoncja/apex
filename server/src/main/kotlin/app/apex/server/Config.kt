@@ -33,6 +33,9 @@ data class ServerConfig(
     val registerLimitPerHour: Int = 20,
     /** Pedidos de "esqueci a senha" por hora, por endereço (cada um manda um e-mail). */
     val mailLimitPerHour: Int = 10,
+    /** E-mail grátis sem domínio: endereço (https) e senha de um relay seu; veja docs/email-relay/. Só vale se não houver `resendApiKey`. */
+    val mailWebhookUrl: String? = null,
+    val mailWebhookSecret: String? = null,
     /** Limites de dados sincronizados por conta (linhas e bytes). */
     val maxRowsPerUser: Long = SyncService.MAX_ROWS_PER_USER,
     val maxBytesPerUser: Long = SyncService.MAX_BYTES_PER_USER,
@@ -77,6 +80,8 @@ data class ServerConfig(
                 publicUrl = (env["PUBLIC_URL"] ?: "http://localhost:$port").trimEnd('/'),
                 resendApiKey = env["RESEND_API_KEY"]?.takeIf { it.isNotBlank() },
                 mailFrom = env["MAIL_FROM"] ?: "Apex <onboarding@resend.dev>",
+                mailWebhookUrl = env["MAIL_WEBHOOK_URL"]?.trim()?.takeIf { it.startsWith("https://") },
+                mailWebhookSecret = env["MAIL_WEBHOOK_SECRET"]?.takeIf { it.isNotBlank() },
                 trustProxy = env["TRUST_PROXY"] == "true",
                 devDataDir = dataDir,
                 contactEmail = env["CONTACT_EMAIL"]?.trim()?.takeIf { it.isNotBlank() },

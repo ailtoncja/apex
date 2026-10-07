@@ -3,11 +3,14 @@ package app.apex.server
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.request.bearerAuth
+import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import io.ktor.http.takeFrom
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -19,6 +22,12 @@ class Mail(val to: String, val subject: String, val html: String, val text: Stri
 interface Mailer {
     suspend fun send(mail: Mail)
 }
+
+/** Escolhe como enviar e-mails: Resend (com domínio), um relay seu (grátis, sem domínio) ou só o log (desenvolvimento). */
+fun mailerFor(config: ServerConfig): Mailer =
+    config.resendApiKey?.let { ResendMailer(it, config.mailFrom) }
+        ?: config.mailWebhookUrl?.let { url -> config.mailWebhookSecret?.let { WebhookMailer(url, it) } }
+        ?: LogMailer()
 
 /** Sem provedor de e-mail configurado (desenvolvimento): escreve o e-mail no log para você clicar no link. */
 class LogMailer : Mailer {
@@ -50,6 +59,43 @@ class ResendMailer(private val apiKey: String, private val from: String) : Maile
             setBody(body.toString())
         }
         if (!response.status.isSuccess()) log.warn("Resend recusou o e-mail para {}: HTTP {}", mail.to, response.status.value)
+    }
+}
+
+/**
+ * Envio por um "relay" seu: um pequeno endereço HTTPS (Google Apps Script ou uma função da Vercel) que manda o e-mail pela sua conta do Gmail.
+ * Serve para ter e-mail grátis sem domínio próprio. Veja docs/email-relay/. Recebe um JSON com `secret`, `to`, `subject`, `html` e `text`
+ * e responde `{"ok":true}`.
+ */
+class WebhookMailer(private val url: String, private val secret: String) : Mailer {
+    // O Apps Script responde ao POST com um redirecionamento (302) para a página do resultado; seguimos nós mesmos, com GET.
+    private val client = HttpClient(CIO) {
+        followRedirects = false
+        expectSuccess = false
+    }
+
+    override suspend fun send(mail: Mail) {
+        val body = buildJsonObject {
+            put("secret", secret)
+            put("to", mail.to)
+            put("subject", mail.subject)
+            put("html", mail.html)
+            put("text", mail.text)
+        }
+        var response = client.post(url) {
+            contentType(ContentType.Application.Json)
+            setBody(body.toString())
+        }
+        val location = response.headers[io.ktor.http.HttpHeaders.Location]
+        if (response.status.value in 301..303 && location != null) {
+            // O e-mail já foi enviado pelo POST; o GET só busca a resposta para sabermos se deu certo.
+            response = client.get(io.ktor.http.URLBuilder(url).takeFrom(location).buildString())
+        }
+        val text = runCatching { response.bodyAsText() }.getOrDefault("")
+        // Quem chama (AuthService) registra o erro no log e segue em frente.
+        check(response.status.isSuccess() && text.replace(" ", "").contains("\"ok\":true")) {
+            "O relay de e-mail recusou o envio: HTTP ${response.status.value} ${text.take(120)}"
+        }
     }
 }
 

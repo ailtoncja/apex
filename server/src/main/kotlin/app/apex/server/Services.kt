@@ -80,11 +80,11 @@ class AuthService(
     }
 
     /**
-     * Espera o e-mail sair (até 5 s). Em hospedagens que limitam o processador depois da resposta (Cloud Run, por exemplo),
+     * Espera o e-mail sair (até 10 s). Em hospedagens que limitam o processador depois da resposta (Cloud Run, por exemplo),
      * deixar o envio "em segundo plano" faria o e-mail nunca sair.
      */
     private suspend fun sendMail(mail: Mail) {
-        val sent = withTimeoutOrNull(5_000) { runCatching { mailer.send(mail) }.onFailure { log.warn("Falha ao enviar e-mail: {}", it.message) } }
+        val sent = withTimeoutOrNull(10_000) { runCatching { mailer.send(mail) }.onFailure { log.warn("Falha ao enviar e-mail: {}", it.message) } }
         if (sent == null) log.warn("O envio de e-mail para {} demorou demais e foi abandonado.", mail.to)
     }
 

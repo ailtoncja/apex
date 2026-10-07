@@ -29,6 +29,11 @@ services:
         sync: false
       - key: TRUST_PROXY
         value: "true"
+      # E-mail grátis sem domínio (relay no Apps Script/Vercel; veja docs/email-relay). Preencha no painel.
+      - key: MAIL_WEBHOOK_URL
+        sync: false
+      - key: MAIL_WEBHOOK_SECRET
+        sync: false
       # Quem responde pelo serviço: aparece na Política de Privacidade e nos Termos. Preencha no painel.
       - key: CONTACT_EMAIL
         sync: false

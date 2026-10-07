@@ -109,12 +109,18 @@ object TokenRepo {
     // ---- links de e-mail (confirmar e redefinir senha)
 
     fun createEmailToken(c: Connection, userId: UUID, purpose: String, ttlSeconds: Long): String {
+        // Só o link mais novo vale: os anteriores (que podem estar numa caixa de e-mail velha ou vazada) deixam de funcionar.
+        expireEmailTokens(c, userId, purpose)
         val raw = Tokens.random()
         c.execute(
             "insert into email_tokens (token_hash, user_id, purpose, expires_at) values (?, ?, ?, ?)",
             Tokens.sha256(raw), userId, purpose, Instant.now().plusSeconds(ttlSeconds),
         )
         return raw
+    }
+
+    fun expireEmailTokens(c: Connection, userId: UUID, purpose: String) {
+        c.execute("update email_tokens set used_at = now() where user_id = ? and purpose = ? and used_at is null", userId, purpose)
     }
 
     /** Usa o link (uma vez só). Devolve a quem ele pertence, ou `null` se for inválido, vencido ou já usado. */

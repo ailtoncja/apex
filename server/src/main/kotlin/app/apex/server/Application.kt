@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import java.sql.SQLException
 import java.util.UUID
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -100,6 +101,15 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
     }
     install(StatusPages) {
         exception<ApiException> { call, e -> call.respond(e.status, ErrorResponse(ErrorBody(e.code, e.message ?: "Erro"))) }
+        exception<SQLException> { call, e ->
+            // Dado que o PostgreSQL não aceita (caractere nulo, texto inválido, número fora do limite) é erro de quem mandou, não do servidor.
+            if (e.sqlState in setOf("22021", "22P05", "22P02", "22003", "22001")) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse(ErrorBody("bad_request", "Pedido inválido.")))
+            } else {
+                log.error("Erro de banco em {}", call.request.local.uri, e)
+                call.respond(HttpStatusCode.InternalServerError, ErrorResponse(ErrorBody("internal", "Algo deu errado do nosso lado.")))
+            }
+        }
         exception<PayloadTooLargeException> { call, _ ->
             call.respond(HttpStatusCode.PayloadTooLarge, ErrorResponse(ErrorBody("too_large", "O pedido é grande demais.")))
         }

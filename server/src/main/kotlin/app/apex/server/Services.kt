@@ -100,7 +100,7 @@ class AuthService(
     private fun UserRow.dto() = UserDto(id.toString(), email, displayName, avatarUrl, emailVerified)
 
     private suspend fun session(user: UserRow, device: String?): AuthResponse {
-        val refresh = db.query { TokenRepo.issue(it, user.id, device) }
+        val refresh = db.query { TokenRepo.issue(it, user.id, device?.filterNot { c -> c.isISOControl() }) }
         return AuthResponse(jwt.issue(user.id), refresh, JwtService.ACCESS_TTL_SEC, user.dto())
     }
 
@@ -120,7 +120,7 @@ class AuthService(
         if (db.query { UserRepo.count(it) } >= config.maxUsers) {
             fail(HttpStatusCode.ServiceUnavailable, "registrations_closed", "No momento não estamos aceitando contas novas. Tente de novo mais tarde.")
         }
-        val name = req.displayName?.trim()?.take(60)?.ifBlank { null } ?: email.substringBefore('@')
+        val name = req.displayName?.filterNot { it.isISOControl() }?.trim()?.take(60)?.ifBlank { null } ?: email.substringBefore('@')
         val hash = hash(req.password)
         val user = try {
             db.query { UserRepo.create(it, email, hash, name, Legal.VERSION) }
@@ -135,6 +135,10 @@ class AuthService(
 
     /** Confere e-mail e senha (com a barreira de tentativas) e devolve a pessoa. */
     private suspend fun authenticate(rawEmail: String, password: String, ip: String): UserRow {
+        // Texto com caractere de controle (como o NUL, que o PostgreSQL recusa) ou enorme nunca é um e-mail de verdade.
+        if (rawEmail.length > 254 || rawEmail.any { it.isISOControl() }) {
+            fail(HttpStatusCode.Unauthorized, "invalid_credentials", "E-mail ou senha incorretos.")
+        }
         val email = rawEmail.trim().lowercase()
         val ipKey = "$ip|$email"
         throttleByIp.check(ipKey)
@@ -174,6 +178,7 @@ class AuthService(
         db.query { UserRepo.findById(it, userId) }?.dto() ?: fail(HttpStatusCode.Unauthorized, "unknown_user", "Conta não encontrada.")
 
     suspend fun forgot(rawEmail: String) {
+        if (rawEmail.length > 254 || rawEmail.any { it.isISOControl() }) return
         val email = rawEmail.trim().lowercase()
         val user = db.query { UserRepo.findByEmail(it, email) } ?: return
         val token = db.query { TokenRepo.createEmailToken(it, user.id, "reset", 3600) }
@@ -292,7 +297,7 @@ class SyncService(
 
     private fun validate(c: SyncChange, maxFuture: Long): Prepared {
         if (c.collection !in SyncCollections.all) fail(HttpStatusCode.BadRequest, "invalid_collection", "Coleção desconhecida: ${c.collection}")
-        if (c.key.isBlank() || c.key.length > 200) fail(HttpStatusCode.BadRequest, "invalid_key", "Chave inválida.")
+        if (c.key.isBlank() || c.key.length > 200 || c.key.any { it.isISOControl() }) fail(HttpStatusCode.BadRequest, "invalid_key", "Chave inválida.")
         val text = if (c.deleted || c.data == null || c.data is JsonNull) null else c.data.toString()
         if (text != null && text.length > MAX_ITEM_CHARS) fail(HttpStatusCode.PayloadTooLarge, "item_too_large", "Item grande demais.")
         return Prepared(c.collection, c.key, text, minOf(c.modifiedAt, maxFuture), c.deleted)

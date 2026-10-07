@@ -207,6 +207,65 @@ class SecurityTest {
         assertEquals(HttpStatusCode.Created, client.register("fulano+tag.${UUID.randomUUID().toString().take(8)}@exemplo.com.br").status)
     }
 
+    // ---------------------------------------------------------------- texto que o banco recusa
+
+    @Test
+    fun caractere_nulo_e_texto_estranho_nunca_derrubam_o_servidor() = run { client ->
+        // O que viaja no JSON é a sequência de escape (seis caracteres), que o servidor converte em um NUL de verdade.
+        val nul = "\\u0000"
+        suspend fun status(path: String, body: String, token: String? = null) =
+            client.post(path) { token?.let { bearerAuth(it) }; contentType(ContentType.Application.Json); setBody(body) }.status
+
+        // Login e "esqueci a senha": como qualquer e-mail inexistente, sem erro 500.
+        assertEquals(HttpStatusCode.Unauthorized, status("/v1/auth/login", """{"email":"a${nul}b@apex.test","password":"x"}"""))
+        assertEquals(HttpStatusCode.Unauthorized, status("/v1/auth/login", """{"email":"${"a".repeat(5_000)}@apex.test","password":"x"}"""))
+        assertEquals(HttpStatusCode.Accepted, status("/v1/auth/forgot", """{"email":"a${nul}b@apex.test"}"""))
+
+        // Cadastro com nome e aparelho cheios de caracteres de controle: aceita, mas limpa.
+        val email = email()
+        val registered = client.post("/v1/auth/register") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"email":"$email","password":"senha-forte-123","displayName":"Ful${nul}ano\u0007","acceptTerms":true}""")
+        }
+        assertEquals(HttpStatusCode.Created, registered.status)
+        val auth: app.apex.shared.AuthResponse = registered.body()
+        assertEquals("Fulano", auth.user.displayName)
+        assertEquals(HttpStatusCode.OK, status("/v1/auth/login", """{"email":"$email","password":"senha-forte-123","device":"PC${nul}1"}"""))
+
+        // Sincronização: chave com NUL é pedido inválido; dado com NUL dentro do JSON (que o jsonb recusa) também, nunca 500.
+        val now = System.currentTimeMillis()
+        assertEquals(HttpStatusCode.BadRequest, status("/v1/sync", """{"changes":[{"collection":"watch_later","key":"k${nul}1","data":{"v":"x"},"modifiedAt":$now}]}""", auth.accessToken))
+        assertEquals(HttpStatusCode.BadRequest, status("/v1/sync", """{"changes":[{"collection":"watch_later","key":"k2","data":{"v":"a\u0000b"},"modifiedAt":$now}]}""", auth.accessToken))
+        assertEquals(HttpStatusCode.OK, status("/v1/sync", """{"changes":[{"collection":"watch_later","key":"k3","data":{"v":"normal"},"modifiedAt":$now}]}""", auth.accessToken))
+    }
+
+    // ---------------------------------------------------------------- links de e-mail
+
+    @Test
+    fun so_o_link_de_senha_mais_novo_vale_e_cada_um_vale_uma_vez() {
+        val mailer = LogMailer()
+        run(mailer = mailer) { client ->
+            val email = email()
+            assertEquals(HttpStatusCode.Created, client.register(email).status)
+            fun tokenOf(index: Int) = Regex("token=([A-Za-z0-9_-]+)").find(mailer.outbox.filter { it.to == email && it.subject.contains("senha") }[index].text)!!.groupValues[1]
+            suspend fun waitFor(n: Int) = repeat(50) { if (mailer.outbox.count { it.to == email && it.subject.contains("senha") } < n) delay(100) }
+            assertEquals(HttpStatusCode.Accepted, client.forgot(email).status); waitFor(1)
+            assertEquals(HttpStatusCode.Accepted, client.forgot(email).status); waitFor(2)
+            val old = tokenOf(0)
+            val newest = tokenOf(1)
+            suspend fun reset(token: String, password: String) = client.post("/v1/auth/reset") {
+                contentType(ContentType.Application.Json); setBody("""{"token":"$token","newPassword":"$password"}""")
+            }.status
+            // O link antigo morreu quando o novo foi pedido.
+            assertEquals(HttpStatusCode.BadRequest, reset(old, "senha-do-invasor-1"))
+            assertEquals(HttpStatusCode.NoContent, reset(newest, "senha-nova-1234"))
+            // E o novo também só serve uma vez.
+            assertEquals(HttpStatusCode.BadRequest, reset(newest, "outra-senha-1234"))
+            assertEquals(HttpStatusCode.OK, client.login(email, "senha-nova-1234").status)
+            assertEquals(HttpStatusCode.Unauthorized, client.login(email, "senha-forte-123").status)
+        }
+    }
+
     // ---------------------------------------------------------------- tempo de resposta
 
     @Test

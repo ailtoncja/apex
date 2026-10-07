@@ -22,7 +22,7 @@ Só a versão mais recente da [página de Releases](https://github.com/ailtoncja
   pessoa e por e-mail, teto de contas, cota de dados por conta e limite de tamanho de pedido.
 - Respostas que não revelam quem tem conta (login, "esqueci a senha"), sem diferença de tempo; links de e-mail de uso único e sem aparecer nos logs.
 - Cabeçalhos de segurança (HSTS, CSP, sem cache nas páginas com token), conexão criptografada com o banco, consultas sempre parametrizadas.
-- Dependências verificadas contra o banco de vulnerabilidades OSV (Jackson atualizado para 2.22.3).
+- Dependências verificadas contra o banco de vulnerabilidades OSV (Jackson atualizado para 2.22.3; o relay da Vercel usa o nodemailer 10).
 
 **App** (`composeApp/`)
 - Senhas das plataformas nunca passam pelo Apex: o login é feito no navegador; o que fica guardado é cifrado com a conta do Windows (DPAPI) e,

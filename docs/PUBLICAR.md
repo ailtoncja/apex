@@ -57,7 +57,10 @@ a cada 5 minutos. Se crescer, o plano pago do Render (US$ 7/mês) acaba com isso
 - Como o Apex é **GPL-3.0**, quem receber o programa precisa poder obter o código. O caminho mais simples é tornar o repositório do GitHub **público**
   (antes disso confira que nada seu está nele: o histórico foi verificado e não tem senhas, chaves nem strings de conexão) e anexar o `.jar`
   numa *Release* do GitHub. Depois, coloque o link em `DOWNLOAD_URL` no Render para ele aparecer na página inicial.
-- O `.jar` exige **Java 21+** e **VLC 64 bits** instalados. Um pacote com o Java dentro (e instalador `.msi`) precisa de um JDK com `jpackage`.
+- Para distribuir, rode `Empacotar.cmd`: ele gera `dist\Apex-1.0.0-windows-x64.zip` (cerca de 116 MB) com o Java 21 dentro. Quem receber só precisa do **VLC 64 bits**
+  (o `LEIA-ME.txt` do zip explica). Ele precisa de um JDK 21 completo em `%USERPROFILE%\.apex\jdk` (o Temurin 21 já está lá neste PC). Antes de cada versão nova,
+  mude `packageVersion` em `composeApp/build.gradle.kts` e `VERSION` em `Empacotar.cmd`.
+- Um instalador `.msi`/`.exe` (com atalho no menu Iniciar) já está configurado no Gradle, mas precisa do [WiX Toolset](https://wixtoolset.org) instalado; sem ele, o zip serve.
 - Sem assinatura de código, o Windows (SmartScreen) mostra um aviso na primeira abertura. A assinatura custa por ano; deixe para quando houver público.
 
 ### 6. Fase 2: ligar com as plataformas por OAuth oficial

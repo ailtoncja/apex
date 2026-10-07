@@ -51,10 +51,28 @@ compose.desktop {
         mainClass = "app.apex.MainKt"
         jvmArgs += listOf("--enable-native-access=ALL-UNNAMED")
 
+        // Para empacotar com o Java dentro é preciso um JDK completo (com jpackage); o do Android Studio não tem.
+        // Aponte para ele com -Papex.jdk=C:\caminho\do\jdk ou com a variável APEX_PACKAGE_JDK.
+        (providers.gradleProperty("apex.jdk").orNull ?: System.getenv("APEX_PACKAGE_JDK"))?.let { javaHome = it }
+
         nativeDistributions {
+            // .msi e .exe precisam do WiX Toolset instalado; sem ele, use :composeApp:createDistributable (pasta pronta para zipar).
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Apex"
             packageVersion = "1.0.0"
+            description = "Vídeos e lives do YouTube, Twitch e Kick num lugar só"
+            vendor = "Apex"
+            licenseFile.set(rootProject.file("LICENSE"))
+            // Só o que o app usa (descoberto com :composeApp:suggestRuntimeModules): o pacote fica bem menor que com o JDK todo.
+            modules("java.base", "java.desktop", "java.instrument", "java.logging", "java.net.http", "java.sql", "jdk.unsupported", "jdk.crypto.ec", "java.naming", "java.management", "jdk.zipfs")
+            windows {
+                iconFile.set(project.file("packaging/apex.ico"))
+                menuGroup = "Apex"
+                shortcut = true
+                dirChooser = true
+                perUserInstall = true
+                upgradeUuid = "6b0f3c2e-8a41-4d57-9c1e-2f7a5d8e1b34"
+            }
         }
     }
 }

@@ -43,7 +43,7 @@ class TwitchSource(private val http: HttpClient = Http.client) {
 
     private val streamFields = """
         id title viewersCount createdAt
-        previewImageURL(width: 440, height: 248)
+        previewImageURL(width: 640, height: 360)
         game { displayName }
         broadcaster { login displayName profileImageURL(width: 70) }
     """.trimIndent()
@@ -73,8 +73,14 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         return data["streams"]["edges"].list().mapNotNull { streamToMedia(it["node"]) }
     }
 
-    suspend fun streamsByCategory(name: String, limit: Int = 30): List<Media> {
-        val data = gql("{ game(name: ${lit(name)}) { streams(first: $limit) { edges { node { $streamFields } } } } }")
+    /**
+     * Lives de uma categoria. [language] é o código da Twitch (PT, EN, ES…); [ascending] traz primeiro as de menos espectadores.
+     * A Twitch só entrega os primeiros 100 de cada consulta (a próxima página exige a verificação do navegador).
+     */
+    suspend fun streamsByCategory(name: String, limit: Int = 30, language: String? = null, ascending: Boolean = false): List<Media> {
+        val options = "sort: ${if (ascending) "VIEWER_COUNT_ASC" else "VIEWER_COUNT"}" +
+            (language?.takeIf { it.matches(Regex("[A-Z_]{2,6}")) }?.let { ", broadcasterLanguages: [$it]" } ?: "")
+        val data = gql("{ game(name: ${lit(name)}) { streams(first: ${limit.coerceAtMost(100)}, options: {$options}) { edges { node { $streamFields } } } } }")
         return data["game"]["streams"]["edges"].list().mapNotNull { streamToMedia(it["node"]) }
     }
 
@@ -133,6 +139,15 @@ class TwitchSource(private val http: HttpClient = Http.client) {
             )
         } else null
         return ChannelHit(channel, live)
+    }
+
+    /**
+     * A conta ligada tem o **Twitch Turbo** (sem anúncios nas lives)? `null` se não há conta ligada ou a Twitch não respondeu.
+     * O app já pede o vídeo com a sessão da conta, que é o que a Twitch usa para pular os anúncios de quem tem Turbo.
+     */
+    suspend fun hasTurbo(): Boolean? {
+        if (authToken == null) return null
+        return gql("{ currentUser { hasTurbo } }")["currentUser"]["hasTurbo"].bool()
     }
 
     suspend fun currentUser(): Pair<String, String?>? {

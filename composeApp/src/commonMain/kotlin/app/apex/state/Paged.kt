@@ -42,6 +42,9 @@ class Paged<T>(
         load()
     }
 
+    /** Há mais páginas para carregar (e a primeira já veio). */
+    val hasMore: Boolean get() = _loaded.value && !exhausted
+
     fun loadIfNeeded() {
         if (!_loaded.value && !_loading.value) load()
     }

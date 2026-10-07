@@ -288,56 +288,6 @@ private fun PlaylistGrid(playlists: List<LocalPlaylist>) {
 }
 
 @Composable
-fun PlaylistScreen(id: String) {
-    val app = LocalApp.current
-    val playlists by app.data.playlists.collectAsState()
-    val pl = playlists.firstOrNull { it.id == id }
-    var rename by remember { mutableStateOf(false) }
-    var delete by remember { mutableStateOf(false) }
-
-    if (pl == null) {
-        EmptyState(Icons.Rounded.PlaylistPlay, "Playlist não encontrada", "Ela pode ter sido excluída.")
-        return
-    }
-    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-        LazyColumn(
-            Modifier.widthIn(max = 1100.dp).fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            item("title") {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SectionTitle(pl.name, Modifier.padding(top = 8.dp), "${pl.items.size} vídeos • Playlist local")
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (pl.items.isNotEmpty()) ActionButton("Reproduzir tudo", { app.openMedia(pl.items.first(), pl.items.drop(1)) }, icon = Icons.Rounded.PlayArrow, primary = true)
-                        ActionButton("Renomear", { rename = true }, icon = Icons.Rounded.Edit)
-                        ActionButton("Excluir", { delete = true }, icon = Icons.Rounded.Delete)
-                    }
-                }
-            }
-            if (pl.items.isEmpty()) item("empty") {
-                EmptyState(Icons.Rounded.PlaylistPlay, "Playlist vazia", "Use “Adicionar à playlist…” no menu de qualquer vídeo.")
-            }
-            items(pl.items.distinctBy { it.key }, key = { it.key }) { m ->
-                VideoRow(
-                    m, upNext = pl.items.filter { it.key != m.key },
-                    trailing = { IconBtn(Icons.Rounded.Close, "Remover", { app.data.togglePlaylistItem(pl.id, m) }, size = 32.dp, iconSize = 18.dp) },
-                )
-            }
-        }
-    }
-    if (rename) NamePlaylistDialog("Renomear playlist", pl.name, { rename = false }) { app.data.renamePlaylist(pl.id, it); rename = false }
-    if (delete) AlertDialog(
-        onDismissRequest = { delete = false },
-        title = { Text("Excluir “${pl.name}”?") },
-        text = { Text("Os vídeos continuam disponíveis, só a lista será removida.") },
-        confirmButton = { TextButton({ app.data.deletePlaylist(pl.id); delete = false; app.nav.back() }) { Text("Excluir", color = ApexColors.Accent) } },
-        dismissButton = { TextButton({ delete = false }) { Text("Cancelar") } },
-        containerColor = ApexColors.SurfaceHigh,
-    )
-}
-
-@Composable
 fun NamePlaylistDialog(title: String, initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var name by remember { mutableStateOf(initial) }
     AlertDialog(
@@ -430,45 +380,4 @@ fun AddToPlaylistDialog(media: Media, onDismiss: () -> Unit) {
         dismissButton = { TextButton({ creating = true }) { Text("Nova playlist") } },
         containerColor = ApexColors.SurfaceHigh,
     )
-}
-
-/** Uma playlist da conta do YouTube. */
-@Composable
-fun RemotePlaylistScreen(id: String, title: String) {
-    val app = LocalApp.current
-    val list = remember(id) {
-        Paged<Media>(app.scope, { it.key }) { token -> app.youtube.playlistVideos(id, token).let { Page(it.items, it.continuation) } }
-    }
-    LaunchedEffect(list) { list.loadIfNeeded() }
-    val items by list.items.collectAsState()
-    val loading by list.loading.collectAsState()
-    val error by list.error.collectAsState()
-    val state = rememberLazyListState()
-    OnNearEnd(state) { list.loadMore() }
-
-    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-        LazyColumn(
-            Modifier.widthIn(max = 1100.dp).fillMaxWidth(), state = state,
-            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            item("title") {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SectionTitle(title, Modifier.padding(top = 8.dp), "Playlist do YouTube")
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (items.isNotEmpty()) ActionButton("Reproduzir tudo", { app.openMedia(items.first(), items.drop(1)) }, icon = Icons.Rounded.PlayArrow, primary = true)
-                        ActionButton("Copiar para minhas playlists", { app.copyRemotePlaylist(id, title) }, icon = Icons.Rounded.PlaylistAdd)
-                        ActionButton("Copiar link", { app.system.copyText("https://www.youtube.com/playlist?list=$id"); app.toast("Link copiado") }, icon = Icons.Rounded.ContentCopy)
-                        ActionButton("Abrir no navegador", { app.system.openUrl("https://www.youtube.com/playlist?list=$id") }, icon = Icons.Rounded.OpenInBrowser)
-                    }
-                }
-            }
-            if (items.isEmpty() && !loading) item("empty") {
-                if (error != null) ErrorBox(error.orEmpty(), { list.refresh() })
-                else EmptyState(Icons.Rounded.PlaylistPlay, "Playlist vazia", "Nenhum vídeo nesta playlist.")
-            }
-            items(items.distinctBy { it.key }, key = { it.key }) { m -> VideoRow(m, upNext = items.filter { it.key != m.key }) }
-            if (loading) item("loading") { Text("Carregando…", color = ApexColors.Muted) }
-        }
-    }
 }

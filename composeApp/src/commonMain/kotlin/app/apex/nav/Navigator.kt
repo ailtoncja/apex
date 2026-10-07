@@ -24,7 +24,7 @@ sealed interface Route {
     data object Subscriptions : Route
     data class Library(val tab: LibraryTab = LibraryTab.History) : Route
     data class PlaylistPage(val id: String) : Route
-    data class RemotePlaylist(val id: String, val title: String) : Route
+    data class RemotePlaylist(val id: String, val title: String, val coverUrl: String? = null, val countText: String? = null) : Route
     data object Settings : Route
 }
 

@@ -37,7 +37,7 @@ class ScreenStates(private val app: AppContainer) {
 
     private val searches = LinkedHashMap<String, SearchState>()
     private val channels = LinkedHashMap<String, ChannelState>()
-    private val categories = LinkedHashMap<String, Paged<Media>>()
+    private val categories = LinkedHashMap<String, CategoryState>()
     val watch = WatchState(app)
 
     fun search(query: String, filters: SearchFilters): SearchState {
@@ -53,17 +53,71 @@ class ScreenStates(private val app: AppContainer) {
         ChannelState(app, channel)
     }
 
-    fun category(platform: Platform, category: LiveCategory): Paged<Media> =
+    fun category(platform: Platform, category: LiveCategory): CategoryState =
         categories.getOrPut("${platform.name}:${category.id}") {
-            Paged(app.scope, { it.key }) {
-                val list = when (platform) {
-                    Platform.Twitch -> app.twitch.streamsByCategory(category.name, 60)
-                    Platform.Kick -> app.kick.liveStreams(app.data.settings.value.kickLanguage, pages = 3, category = category.id)
-                    Platform.YouTube -> emptyList()
-                }
-                Page(list.sortedByDescending { it.viewCount ?: 0 }, null)
-            }
+            if (categories.size > 10) categories.remove(categories.keys.first())
+            CategoryState(app, platform, category)
         }
+}
+
+/** Idioma que se pode escolher dentro de uma categoria. [code] é o código ISO em minúsculas (a Twitch usa o mesmo em maiúsculas). */
+class CategoryLanguage(val label: String, val code: String?)
+
+val CATEGORY_LANGUAGES = listOf(
+    CategoryLanguage("Todos os idiomas", null),
+    CategoryLanguage("Português", "pt"), CategoryLanguage("Inglês", "en"), CategoryLanguage("Espanhol", "es"),
+    CategoryLanguage("Francês", "fr"), CategoryLanguage("Alemão", "de"), CategoryLanguage("Italiano", "it"),
+    CategoryLanguage("Russo", "ru"), CategoryLanguage("Japonês", "ja"), CategoryLanguage("Coreano", "ko"),
+    CategoryLanguage("Turco", "tr"), CategoryLanguage("Árabe", "ar"), CategoryLanguage("Polonês", "pl"),
+)
+
+enum class ViewerSort(val label: String) { Most("Mais espectadores"), Least("Menos espectadores") }
+
+enum class ViewerRange(val label: String, val min: Long, val max: Long) {
+    Any("Qualquer público", 0, Long.MAX_VALUE),
+    Tiny("Até 100", 0, 100),
+    Small("100 a 1 mil", 100, 1_000),
+    Medium("1 mil a 10 mil", 1_000, 10_000),
+    Big("Mais de 10 mil", 10_000, Long.MAX_VALUE),
+}
+
+/** Lives de uma categoria com filtro de idioma, ordem e faixa de espectadores e busca pelo nome. */
+class CategoryState(private val app: AppContainer, val platform: Platform, val category: LiveCategory) {
+    var language by mutableStateOf(CATEGORY_LANGUAGES.first())
+        private set
+    var sort by mutableStateOf(ViewerSort.Most)
+        private set
+    var range by mutableStateOf(ViewerRange.Any)
+    var query by mutableStateOf("")
+
+    val streams = Paged<Media>(app.scope, { it.key }) { token ->
+        when (platform) {
+            Platform.Twitch -> Page(app.twitch.streamsByCategory(category.name, 100, language.code?.uppercase(), sort == ViewerSort.Least), null)
+            Platform.Kick -> app.kick.lives(language.code, category.id, sort == ViewerSort.Least, token).let { Page(it.items, it.next) }
+            Platform.YouTube -> Page(emptyList(), null)
+        }
+    }
+
+    fun selectLanguage(value: CategoryLanguage) {
+        if (value == language) return
+        language = value
+        streams.refresh()
+    }
+
+    fun selectSort(value: ViewerSort) {
+        if (value == sort) return
+        sort = value
+        streams.refresh()
+    }
+
+    /** O que aparece: a faixa de espectadores e as palavras da busca (no título, no canal e na categoria; sem ligar para acentos). */
+    fun visible(items: List<Media>): List<Media> {
+        val words = searchWords(query)
+        return items.filter { m ->
+            val viewers = m.viewCount ?: 0
+            viewers >= range.min && (viewers < range.max || range.max == Long.MAX_VALUE) && matchesWords(words, m.title, m.channel?.name, m.category)
+        }
+    }
 }
 
 fun List<Media>.withoutBlocked(blocked: List<String>): List<Media> =
@@ -326,7 +380,7 @@ class SubscriptionsState(private val app: AppContainer) {
 
 // ---------------------------------------------------------------------------------------------
 
-enum class SearchTab(val label: String) { All("Tudo"), YouTube("YouTube"), Twitch("Twitch"), Kick("Kick") }
+enum class SearchTab(val label: String) { All("Tudo"), YouTube("YouTube"), Twitch("Twitch"), Kick("Kick"), Subs("Inscrições") }
 
 class SearchState(private val app: AppContainer, val query: String, val filters: SearchFilters) {
     var tab by mutableStateOf(SearchTab.All)
@@ -334,9 +388,15 @@ class SearchState(private val app: AppContainer, val query: String, val filters:
     private val _ytChannels = MutableStateFlow<List<Channel>>(emptyList())
     val ytChannels: StateFlow<List<Channel>> = _ytChannels.asStateFlow()
 
+    private val _ytPlaylists = MutableStateFlow<List<RemotePlaylist>>(emptyList())
+    val ytPlaylists: StateFlow<List<RemotePlaylist>> = _ytPlaylists.asStateFlow()
+
     val youtube = Paged<Media>(app.scope, { it.key }) { token ->
         val page = app.youtube.search(query, filters, token)
-        if (token == null) _ytChannels.value = page.channels
+        if (token == null) {
+            _ytChannels.value = page.channels
+            _ytPlaylists.value = page.playlists
+        }
         Page(page.videos, page.continuation)
     }
 

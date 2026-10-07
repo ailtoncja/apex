@@ -152,7 +152,7 @@ private fun SearchField(modifier: Modifier) {
         ) {
             Icon(Icons.Rounded.Search, null, tint = ApexColors.Muted, modifier = Modifier.size(20.dp))
             Box(Modifier.weight(1f)) {
-                if (text.isEmpty()) Text("Buscar vídeos, lives e canais", color = ApexColors.Faint, fontSize = 15.sp)
+                if (text.isEmpty()) Text("Buscar vídeos, lives e canais, ou colar um link", color = ApexColors.Faint, fontSize = 15.sp)
                 BasicTextField(
                     value = text,
                     onValueChange = { text = it },

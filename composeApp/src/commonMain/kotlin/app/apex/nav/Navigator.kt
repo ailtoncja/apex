@@ -9,7 +9,7 @@ import app.apex.model.Platform
 import app.apex.source.SearchFilters
 
 enum class LibraryTab(val label: String) {
-    History("Histórico"), WatchLater("Assistir depois"), Liked("Curtidos"), Playlists("Playlists")
+    History("Histórico"), WatchLater("Assistir depois"), Liked("Curtidos"), Clips("Clipes"), Playlists("Playlists")
 }
 
 enum class LiveFilter(val label: String) { All("Tudo"), YouTube("YouTube"), Twitch("Twitch"), Kick("Kick") }
@@ -18,7 +18,7 @@ sealed interface Route {
     data object Home : Route
     data class Search(val query: String, val filters: SearchFilters = SearchFilters()) : Route
     data object Watch : Route
-    data class ChannelPage(val channel: Channel) : Route
+    data class ChannelPage(val channel: Channel, val tab: Int = 0) : Route
     data class Live(val filter: LiveFilter = LiveFilter.All) : Route
     data class Category(val platform: Platform, val category: LiveCategory) : Route
     data object Subscriptions : Route

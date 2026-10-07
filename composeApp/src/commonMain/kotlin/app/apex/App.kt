@@ -92,7 +92,7 @@ private fun Content(route: Route) {
         Route.Home -> HomeScreen()
         is Route.Search -> SearchScreen(route)
         Route.Watch -> WatchScreen(fullscreen = false)
-        is Route.ChannelPage -> ChannelScreen(route.channel)
+        is Route.ChannelPage -> ChannelScreen(route.channel, route.tab)
         is Route.Live -> LiveScreen(route.filter)
         is Route.Category -> CategoryScreen(route.platform, route.category)
         Route.Subscriptions -> SubscriptionsScreen()
@@ -135,6 +135,11 @@ private fun handleShortcut(app: AppContainer, event: KeyEvent): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
     if (event.key == Key.Escape && app.system.fullscreen.value) {
         app.system.setFullscreen(false)
+        return true
+    }
+    // F11 como em qualquer programa do Windows: tela cheia de qualquer tela (vale até com o cursor na busca).
+    if (event.key == Key.F11) {
+        app.system.setFullscreen(!app.system.fullscreen.value)
         return true
     }
     if (app.ui.typing) return false

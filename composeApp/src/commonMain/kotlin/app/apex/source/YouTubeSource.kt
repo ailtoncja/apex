@@ -1,5 +1,6 @@
 package app.apex.source
 
+import app.apex.model.CLIP_PREFIX
 import app.apex.model.Channel
 import app.apex.model.Media
 import app.apex.model.Platform
@@ -139,6 +140,77 @@ class YouTubeSource(val tube: InnerTube) {
             if (continuation != null) put("continuation", continuation) else put("browseId", "FEwhat_to_watch")
         } ?: return VideoPage(emptyList(), null)
         return VideoPage(parseVideos(root), root.continuationToken())
+    }
+
+    /**
+     * Clipes que a conta criou (a página "Seus clipes" do YouTube, `FEclips`). O YouTube não tem lista pública de clipes por canal:
+     * só os da própria conta, ou qualquer clipe aberto pelo link ([clip]).
+     */
+    suspend fun myClips(): List<Media> {
+        val root = tube.call("browse") { put("browseId", "FEclips") } ?: return emptyList()
+        val now = currentTimeMillis()
+        return root.collect("gridVideoRenderer").mapNotNull { clipItemToMedia(it.second, now) }.distinctBy { it.id }
+    }
+
+    /** Um clipe aberto pelo link (`youtube.com/clip/…`): a página dele diz de qual vídeo é e qual trecho mostra. */
+    suspend fun clip(clipId: String): Media? {
+        val html = Http.client.getText("https://www.youtube.com/clip/${clipId.encodeURLParameter()}", mapOf("User-Agent" to Http.UA, "Accept-Language" to "pt-BR,pt;q=0.9"))
+        return clipFromPage(clipId, html)
+    }
+
+    internal fun clipFromPage(clipId: String, html: String): Media? {
+        val marker = "var ytInitialData = "
+        val from = html.indexOf(marker).takeIf { it >= 0 }?.plus(marker.length) ?: return null
+        val to = html.indexOf(";</script>", from).takeIf { it > from } ?: return null
+        val data = parseJson(html.substring(from, to)) ?: return null
+        val videoId = data.path("currentVideoEndpoint", "watchEndpoint", "videoId").str() ?: return null
+        val block = Regex(""""clipConfig":\{([^}]*)\}""").find(html)?.groupValues?.get(1) ?: return null
+        fun field(name: String) = Regex(""""$name":"(\d+)"""").find(block)?.groupValues?.get(1)?.toLongOrNull()
+        val start = field("startTimeMs")
+        val end = field("endTimeMs")
+        if (start == null || end == null || end <= start) return null
+        val attribution = data.collect("clipAttributionRenderer").firstOrNull()?.second
+        val owner = data.collect("videoOwnerRenderer").firstOrNull()?.second
+        val ownerName = owner["title"]["runs"][0]["text"].str()
+        val ownerId = owner.path("title", "runs", 0, "navigationEndpoint", "browseEndpoint", "browseId").str()
+        val title = attribution["title"]["runs"][0]["text"].str()
+            ?: data.collect("videoPrimaryInfoRenderer").firstOrNull()?.second["title"]["runs"][0]["text"].str() ?: "Clipe"
+        // "8 visualizações · há 4 anos": as visualizações e a idade são do clipe, não do vídeo de onde ele saiu.
+        val created = attribution["createdText"]["simpleText"].str()?.split('·')?.map { it.trim() }.orEmpty()
+        val views = created.firstOrNull()?.let { parseCountText(it) }
+        val published = created.getOrNull(1)?.let { parsePublished(it, currentTimeMillis()) }
+        return Media(
+            platform = Platform.YouTube, id = CLIP_PREFIX + clipId, title = title,
+            channel = ownerId?.let {
+                Channel(
+                    Platform.YouTube, it, ownerName.orEmpty(), owner["thumbnail"]["thumbnails"].list().lastOrNull()?.get("url").str().httpsUrl(),
+                    url = "https://www.youtube.com/channel/$it",
+                )
+            },
+            thumbnailUrl = "https://i.ytimg.com/vi/$videoId/mqdefault.jpg",
+            durationSec = (end - start) / 1000, viewCount = views, publishedAt = published,
+            url = "https://www.youtube.com/watch?v=$videoId", clipStartMs = start, clipEndMs = end,
+        )
+    }
+
+    internal fun clipItemToMedia(v: JsonElement, now: Long): Media? {
+        val config = v.path("navigationEndpoint", "watchEndpoint", "watchEndpointClipConfig", "clipConfig") ?: return null
+        val postId = config["postId"].str() ?: return null
+        val videoId = v["videoId"].str() ?: return null
+        val start = config["startTimeMs"].str()?.toLongOrNull() ?: return null
+        val end = config["endTimeMs"].str()?.toLongOrNull()?.takeIf { it > start } ?: return null
+        val title = v["title"]["runs"][0]["text"].str() ?: v["title"]["simpleText"].str() ?: "Clipe"
+        // "de Fulano": o nome é o do canal do vídeo de onde o clipe saiu (a lista não traz o endereço do canal).
+        val byline = v["longBylineText"]["runs"].list().mapNotNull { it["text"].str() }.filter { it.isNotBlank() && it.trim() != "de" }.lastOrNull()
+        val created = v["publishedTimeText"]["runs"].list().lastOrNull()["text"].str() ?: v["publishedTimeText"]["simpleText"].str()
+        val views = v["viewCountText"]["simpleText"].str() ?: v["viewCountText"]["runs"].list().joinToString("") { it["text"].str().orEmpty() }.ifBlank { null }
+        return Media(
+            platform = Platform.YouTube, id = CLIP_PREFIX + postId, title = title,
+            channel = byline?.let { Channel(Platform.YouTube, "", it) },
+            thumbnailUrl = pickThumb(v["thumbnail"]["thumbnails"].list().mapNotNull { t -> t["url"].str()?.let { it to (t["width"].int() ?: 0) } }, videoId),
+            durationSec = (end - start) / 1000, viewCount = parseCountText(views), publishedAt = parsePublished(created, now),
+            url = "https://www.youtube.com/watch?v=$videoId", clipStartMs = start, clipEndMs = end,
+        )
     }
 
     /** Vídeos de uma lista da conta: histórico (`FEhistory`), assistir depois (`VLWL`), curtidos (`VLLL`). */

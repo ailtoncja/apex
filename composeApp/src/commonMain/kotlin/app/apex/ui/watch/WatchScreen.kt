@@ -1,6 +1,7 @@
 package app.apex.ui.watch
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material.icons.rounded.ThumbUp
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -223,7 +225,17 @@ private fun SideColumn(media: Media, modifier: Modifier) {
     val settings by app.data.settings.collectAsState()
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (media.isLive && settings.showChat) ChatPanel(media, Modifier.fillMaxWidth().height(520.dp))
+        if (media.isLive) {
+            if (settings.showChat) ChatPanel(media, Modifier.fillMaxWidth().height(520.dp))
+            else Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(ApexColors.Surface)
+                    .border(1.dp, ApexColors.Outline, RoundedCornerShape(14.dp)).padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Chat oculto", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, color = ApexColors.Muted)
+                ActionButton("Mostrar chat", { app.data.updateSettings { it.copy(showChat = true) } }, icon = Icons.Rounded.Visibility)
+            }
+        }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(if (media.isLive) "Mais ao vivo" else "A seguir", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             Text("Reprodução automática", style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, modifier = Modifier.padding(end = 8.dp))

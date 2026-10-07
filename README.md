@@ -24,13 +24,14 @@ depois em *Executar assim mesmo*. Para conferir o arquivo baixado, compare o has
 
 | | |
 |---|---|
-| **YouTube** | início com recomendações, busca com filtros (ordem, data, duração, só ao vivo), canais, comentários, relacionados, curtir/não curtir, inscrições, histórico, assistir depois, playlists locais e da conta. Nunca mostra Shorts. |
-| **Twitch** | lives (por categoria, busca, canais seguidos) com chat ao vivo |
-| **Kick** | lives (por categoria, busca, canais seguidos) com chat ao vivo; esconde conteúdo +18 por padrão |
-| **Player** | libVLC com qualidade até 4K, velocidade, legendas, capítulos, retomar de onde parou, tela cheia, modo cinema e mini player |
+| **YouTube** | início com recomendações, busca com filtros (ordem, data, duração, só ao vivo), canais, comentários, relacionados, curtir/não curtir, inscrições, histórico, assistir depois, playlists locais e da conta, e os **clipes que você criou** (Biblioteca › Clipes). Nunca mostra Shorts. |
+| **Twitch** | lives (por categoria, busca, canais seguidos) com chat ao vivo, mais **VODs** e **clipes** de cada canal (ordenados por mais vistos ou mais recentes) |
+| **Kick** | lives (por categoria, busca, canais seguidos) com chat ao vivo, mais **VODs** e **clipes** de cada canal; esconde conteúdo +18 por padrão |
+| **Links** | cole na busca um link de vídeo, live, VOD ou clipe (inclusive `youtube.com/clip/…`, que o YouTube não lista por canal) e ele abre direto |
+| **Player** | libVLC com qualidade até 4K, velocidade, legendas, capítulos, retomar de onde parou, tela cheia sem borda (como o F11), modo cinema e mini player |
 
 Tem tela de **Início**, **Ao vivo**, **Inscrições** (feed misturando as três plataformas), **Biblioteca** (histórico, assistir
-depois, curtidos, playlists), **Canal**, **Busca** e **Ajustes**. Atalhos: `Espaço/K`, `F`, `T`, `M`, `←/→`, `J/L`, `↑/↓`, `0–9`, `C`, `Shift+N`, `Esc`.
+depois, curtidos, playlists), **Canal**, **Busca** e **Ajustes**. O chat das lives pode ser ocultado (botão no cabeçalho do chat). Atalhos: `Espaço/K`, `F`/`F11`, `T`, `M`, `←/→`, `J/L`, `↑/↓`, `0–9`, `C`, `Shift+N`, `Esc`.
 
 ## Como funciona por dentro
 

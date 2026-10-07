@@ -4,12 +4,20 @@ import app.apex.model.Channel
 import app.apex.model.LiveCategory
 import app.apex.model.Media
 import app.apex.model.Platform
+import app.apex.model.CLIP_PREFIX
+import app.apex.model.ClipSort
+import app.apex.model.Quality
 import app.apex.model.Resolved
+import app.apex.model.VOD_PREFIX
+import app.apex.util.parseIsoMillis
 import io.ktor.client.HttpClient
+import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
+
+class KickClipPage(val items: List<Media>, val next: String?)
 
 class KickChannelInfo(val hit: ChannelHit, val chatroomId: Long?, val playbackUrl: String?)
 
@@ -118,7 +126,123 @@ class KickSource(private val http: HttpClient = Http.client) {
         }
     }
 
+    /** VODs (transmissões passadas) do canal: a Kick entrega os 30 mais recentes de uma vez. */
+    suspend fun vods(channel: Channel): List<Media> {
+        val items = json("https://kick.com/api/v2/channels/${channel.id}/videos").list()
+        return items.mapNotNull { vodToMedia(it, channel) }
+    }
+
+    internal fun vodToMedia(item: JsonElement?, channel: Channel): Media? {
+        if (item["is_live"].bool() == true) return null
+        val video = item["video"]
+        val uuid = video["uuid"].str() ?: return null
+        // VOD apagado, privado ou limpo da Kick não toca.
+        if (video["is_private"].bool() == true || video["is_pruned"].bool() == true || video["status"].str()?.let { it != "public" } == true) return null
+        if (hideMature && item["is_mature"].bool() == true) return null
+        return Media(
+            platform = Platform.Kick,
+            id = VOD_PREFIX + uuid,
+            title = item["session_title"].str().orEmpty().ifBlank { channel.name },
+            channel = channel,
+            thumbnailUrl = item["thumbnail"]["src"].str(),
+            durationSec = item["duration"].long()?.div(1000)?.takeIf { it > 0 },
+            viewCount = video["views"].long() ?: item["views"].long(),
+            publishedAt = parseIsoMillis(item["start_time"].str() ?: item["created_at"].str()),
+            isLive = false,
+            category = item["categories"][0]["name"].str(),
+            url = "${slugUrl(channel.id)}/videos/$uuid",
+        )
+    }
+
+    private suspend fun resolveVod(media: Media): Resolved {
+        val uuid = media.id.removePrefix(VOD_PREFIX)
+        val video = json("https://kick.com/api/v1/video/$uuid") ?: error("A Kick não achou este VOD (apagado ou privado).")
+        val source = video["source"].str() ?: error("A Kick não liberou este VOD.")
+        val text = http.getText(source, headers)
+        if (!text.startsWith("#EXTM3U")) error("A Kick não entregou este VOD.")
+        return Resolved(
+            media = vodDetailToMedia(video) ?: media, description = null, likes = null, subscribers = null, uploadDate = null,
+            chapters = emptyList(), subtitles = emptyList(),
+            // Como nas lives: a lista mestra aponta legendas que travam o VLC; usa as qualidades direto.
+            qualities = parseHlsMaster(source, text).filter { it.height > 0 || it.audioOnly },
+            userAgent = null, isLive = false,
+        )
+    }
+
+    /** A resposta de um VOD sozinho (`/api/v1/video/<uuid>`) tem outro formato que a lista do canal. */
+    internal fun vodDetailToMedia(video: JsonElement?): Media? {
+        val uuid = video["uuid"].str() ?: return null
+        val live = video["livestream"]
+        val ch = live["channel"]
+        val slug = ch["slug"].str() ?: return null
+        val name = ch["user"]["username"].str() ?: slug
+        val channel = Channel(
+            Platform.Kick, slug, name, ch["user"]["profilepic"].str() ?: ch["user"]["profile_pic"].str(), "@$slug",
+            ch["followersCount"].long(), url = slugUrl(slug),
+        )
+        return Media(
+            platform = Platform.Kick,
+            id = VOD_PREFIX + uuid,
+            title = live["session_title"].str().orEmpty().ifBlank { name },
+            channel = channel,
+            thumbnailUrl = live["thumbnail"].str() ?: live["thumbnail"]["src"].str(),
+            durationSec = live["duration"].long()?.div(1000)?.takeIf { it > 0 },
+            viewCount = video["views"].long(),
+            publishedAt = parseIsoMillis(live["start_time"].str() ?: video["created_at"].str()),
+            isLive = false,
+            category = live["categories"][0]["name"].str(),
+            url = "${slugUrl(slug)}/videos/$uuid",
+        )
+    }
+
+    /** Clipes do canal. A Kick entrega páginas por cursor; [KickClipPage.next] é o cursor da seguinte (ou `null` no fim). */
+    suspend fun clips(channel: Channel, sort: ClipSort = ClipSort.Popular, cursor: String? = null): KickClipPage {
+        val order = if (sort == ClipSort.Popular) "view" else "date"
+        val data = json("https://kick.com/api/v2/channels/${channel.id}/clips?cursor=${(cursor ?: "0").encodeURLParameter()}&sort=$order&time=all")
+        val items = data["clips"].list().filter { !(hideMature && it["is_mature"].bool() == true) }.mapNotNull { clipToMedia(it, channel) }
+        return KickClipPage(items, data["nextCursor"].str()?.takeIf { it.isNotBlank() && it != "0" })
+    }
+
+    internal fun clipToMedia(c: JsonElement?, fallback: Channel? = null): Media? {
+        val id = c["id"].str() ?: return null
+        val ch = c["channel"]
+        val slug = ch["slug"].str() ?: fallback?.id ?: return null
+        val name = ch["username"].str() ?: fallback?.name ?: slug
+        val channel = fallback?.takeIf { it.id == slug }
+            ?: Channel(Platform.Kick, slug, name, ch["profile_picture"].str() ?: ch["profilepic"].str(), "@$slug", url = slugUrl(slug))
+        return Media(
+            platform = Platform.Kick,
+            id = CLIP_PREFIX + id,
+            title = c["title"].str().orEmpty().ifBlank { name },
+            channel = channel,
+            thumbnailUrl = c["thumbnail_url"].str(),
+            durationSec = c["duration"].long()?.takeIf { it > 0 },
+            viewCount = c["view_count"].long() ?: c["views"].long(),
+            publishedAt = parseIsoMillis(c["created_at"].str()),
+            isLive = false,
+            category = c["category"]["name"].str(),
+            url = "${slugUrl(slug)}/clips/$id",
+        )
+    }
+
+    private suspend fun resolveClip(media: Media): Resolved {
+        val id = media.id.removePrefix(CLIP_PREFIX)
+        val clip = json("https://kick.com/api/v2/clips/${id.encodeURLParameter()}")["clip"] ?: error("A Kick não achou este clipe (apagado ou privado).")
+        val url = clip["clip_url"].str() ?: clip["video_url"].str() ?: error("A Kick não liberou este clipe.")
+        val text = http.getText(url, headers)
+        if (!text.startsWith("#EXTM3U")) error("A Kick não entregou este clipe.")
+        // O clipe costuma ser uma lista única (uma só qualidade); se vier mestra, usa as qualidades dela.
+        val qualities = (if ("#EXT-X-STREAM-INF" in text) parseHlsMaster(url, text).filter { it.height > 0 || it.audioOnly } else emptyList())
+            .ifEmpty { listOf(Quality("Original", 0, url)) }
+        return Resolved(
+            media = clipToMedia(clip) ?: media, description = null, likes = null, subscribers = null, uploadDate = null,
+            chapters = emptyList(), subtitles = emptyList(), qualities = qualities, userAgent = null, isLive = false,
+        )
+    }
+
     suspend fun resolve(media: Media): Resolved {
+        if (media.isVod) return resolveVod(media)
+        if (media.isClip) return resolveClip(media)
         val info = channel(media.id) ?: error("Canal não encontrado na Kick.")
         val url = info.playbackUrl ?: error("A Kick não liberou o stream.")
         val text = http.getText(url, headers)

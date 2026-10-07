@@ -5,13 +5,18 @@ import app.apex.model.LiveCategory
 import app.apex.model.Media
 import app.apex.model.Platform
 import app.apex.model.Quality
+import app.apex.model.CLIP_PREFIX
+import app.apex.model.ClipSort
 import app.apex.model.Resolved
+import app.apex.model.VOD_PREFIX
+import app.apex.util.parseIsoMillis
 import io.ktor.client.HttpClient
 import io.ktor.http.encodeURLParameter
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /** Um canal e, se estiver no ar, a live em andamento. */
@@ -189,7 +194,90 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         return data["currentUser"]["subscriptionBenefits"]["edges"].list().mapNotNull { userToHit(it["node"]["user"]) }
     }
 
+    /**
+     * VODs (transmissões passadas) de um canal, os mais recentes primeiro. Vem uma página só (até [limit]): a página seguinte, por cursor,
+     * exige a verificação de integridade que só o navegador da Twitch passa.
+     */
+    suspend fun vods(login: String, limit: Int = 100): List<Media> {
+        val data = gql(
+            """{ user(login: ${lit(login)}) { videos(first: $limit, type: ARCHIVE, sort: TIME) { edges { node { $VOD_FIELDS } } } } }""",
+        )
+        return data["user"]["videos"]["edges"].list().mapNotNull { vodToMedia(it["node"]) }
+    }
+
+    private suspend fun resolveVod(media: Media): Resolved {
+        val videoId = media.id.removePrefix(VOD_PREFIX)
+        val query = """query PlaybackAccessToken_Template(${'$'}id: ID!, ${'$'}playerType: String!) {
+            videoPlaybackAccessToken(id: ${'$'}id, params: {platform: "web", playerBackend: "mediaplayer", playerType: ${'$'}playerType}) { value signature }
+            video(id: ${'$'}id) { $VOD_FIELDS }
+        }"""
+        val variables = buildJsonObject { put("id", videoId); put("playerType", "site") }.toString()
+        val data = gql(query, variables)
+        val token = data["videoPlaybackAccessToken"]["value"].str()
+        val sig = data["videoPlaybackAccessToken"]["signature"].str()
+        if (token == null || sig == null) error("A Twitch não liberou este VOD (apagado ou indisponível).")
+        // O token traz a autorização: VOD só para inscritos vem com "forbidden".
+        val authorization = parseJson(token)["authorization"]
+        if (authorization["forbidden"].bool() == true) {
+            error(authorization["reason"].str()?.takeIf { it.isNotBlank() }?.let { "Este VOD não está liberado para você ($it)." } ?: "Este VOD é só para inscritos do canal.")
+        }
+        val master = "https://usher.ttvnw.net/vod/$videoId.m3u8" +
+            "?client_id=$CLIENT_ID&token=${token.encodeURLParameter()}&sig=$sig" +
+            "&allow_source=true&allow_audio_only=true&playlist_include_framerate=true&p=${Random.nextInt(100000, 999999)}"
+        val text = http.getText(master)
+        if (!text.startsWith("#EXTM3U")) error("A Twitch não entregou este VOD.")
+        return Resolved(
+            media = vodToMedia(data["video"]) ?: media, description = null, likes = null, subscribers = null, uploadDate = null,
+            chapters = emptyList(), subtitles = emptyList(), qualities = parseHlsMaster(master, text),
+            userAgent = null, isLive = false,
+        )
+    }
+
+    /** Clipes de um canal (uma página só, até [limit]; a seguinte exigiria a verificação de integridade do navegador). */
+    suspend fun clips(login: String, sort: ClipSort = ClipSort.Popular, limit: Int = 100): List<Media> {
+        // A Twitch recusa ordenar por data ("server error"); o "em alta" dela privilegia os clipes novos, então aqui eles são reordenados pela data.
+        val order = if (sort == ClipSort.Popular) "VIEWS_DESC" else "TRENDING"
+        val data = gql(
+            """{ user(login: ${lit(login)}) { clips(first: $limit, criteria: {period: ALL_TIME, sort: $order}) { edges { node { $CLIP_FIELDS } } } } }""",
+        )
+        val list = data["user"]["clips"]["edges"].list().mapNotNull { clipToMedia(it["node"]) }
+        return if (sort == ClipSort.Recent) list.sortedByDescending { it.publishedAt ?: 0L } else list
+    }
+
+    private suspend fun resolveClip(media: Media): Resolved {
+        val slug = media.id.removePrefix(CLIP_PREFIX)
+        val query = """query ClipForPlayback(${'$'}slug: ID!) { clip(slug: ${'$'}slug) { $CLIP_FIELDS
+            playbackAccessToken(params: {platform: "web", playerBackend: "mediaplayer", playerType: "site"}) { value signature }
+            videoQualities { frameRate quality sourceURL } } }"""
+        val clip = gql(query, buildJsonObject { put("slug", slug) }.toString())["clip"] ?: error("A Twitch não achou este clipe (apagado ou indisponível).")
+        val token = clip["playbackAccessToken"]["value"].str()
+        val sig = clip["playbackAccessToken"]["signature"].str()
+        if (token == null || sig == null) error("A Twitch não liberou este clipe.")
+        val qualities = clipQualities(clip["videoQualities"].list(), token, sig)
+        if (qualities.isEmpty()) error("A Twitch não entregou este clipe.")
+        return Resolved(
+            media = clipToMedia(clip) ?: media, description = null, likes = null, subscribers = null, uploadDate = null,
+            chapters = emptyList(), subtitles = emptyList(), qualities = qualities, userAgent = null, isLive = false,
+        )
+    }
+
+    /** Os arquivos do clipe são MP4 diretos; só tocam com a assinatura e o token no endereço. */
+    internal fun clipQualities(list: List<JsonElement>, token: String, sig: String): List<Quality> =
+        list.mapNotNull { q ->
+            val src = q["sourceURL"].str() ?: return@mapNotNull null
+            val height = q["quality"].str()?.toIntOrNull() ?: return@mapNotNull null
+            val fps = q["frameRate"].double()?.roundToInt()
+            Quality(
+                label = "${height}p" + if (fps != null && fps > 30) "$fps" else "",
+                height = height,
+                videoUrl = "$src?sig=$sig&token=${token.encodeURLParameter()}",
+                fps = fps,
+            )
+        }.sortedByDescending { it.height }
+
     suspend fun resolve(media: Media): Resolved {
+        if (media.isVod) return resolveVod(media)
+        if (media.isClip) return resolveClip(media)
         val login = media.id
         val query = """query PlaybackAccessToken_Template(${'$'}login: String!, ${'$'}playerType: String!) {
             streamPlaybackAccessToken(channelName: ${'$'}login, params: {platform: "web", playerBackend: "mediaplayer", playerType: ${'$'}playerType}) { value signature }
@@ -214,10 +302,57 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         )
     }
 
+    internal fun vodToMedia(n: JsonElement?): Media? {
+        val id = n["id"].str() ?: return null
+        val owner = n["owner"]
+        val login = owner["login"].str() ?: return null
+        val name = owner["displayName"].str() ?: login
+        return Media(
+            platform = Platform.Twitch,
+            id = VOD_PREFIX + id,
+            title = n["title"].str().orEmpty().ifBlank { name },
+            channel = Channel(Platform.Twitch, login, name, owner["profileImageURL"].str(), handle = "@$login", url = "https://www.twitch.tv/$login"),
+            // Enquanto o VOD ainda está sendo processado a Twitch devolve uma imagem de "404": é melhor ficar sem miniatura.
+            thumbnailUrl = n["previewThumbnailURL"].str()?.takeIf { !it.contains("404_processing") && !it.contains("/_404/") },
+            durationSec = n["lengthSeconds"].long(),
+            viewCount = n["viewCount"].long(),
+            publishedAt = parseIsoMillis(n["createdAt"].str()),
+            isLive = false,
+            category = n["game"]["displayName"].str(),
+            url = "https://www.twitch.tv/videos/$id",
+        )
+    }
+
+    internal fun clipToMedia(n: JsonElement?): Media? {
+        val slug = n["slug"].str() ?: return null
+        val b = n["broadcaster"]
+        val login = b["login"].str() ?: return null
+        val name = b["displayName"].str() ?: login
+        return Media(
+            platform = Platform.Twitch,
+            id = CLIP_PREFIX + slug,
+            title = n["title"].str().orEmpty().ifBlank { name },
+            channel = Channel(Platform.Twitch, login, name, b["profileImageURL"].str(), handle = "@$login", url = "https://www.twitch.tv/$login"),
+            thumbnailUrl = n["thumbnailURL"].str(),
+            durationSec = n["durationSeconds"].long(),
+            viewCount = n["viewCount"].long(),
+            publishedAt = parseIsoMillis(n["createdAt"].str()),
+            isLive = false,
+            category = n["game"]["displayName"].str(),
+            url = n["url"].str() ?: "https://www.twitch.tv/$login/clip/$slug",
+        )
+    }
+
     companion object {
         const val CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
         private const val GQL_URL = "https://gql.twitch.tv/gql"
         private const val PAGE = 100
+
+        private const val VOD_FIELDS = """id title lengthSeconds createdAt viewCount previewThumbnailURL(width: 440, height: 248) game { displayName }
+            owner { login displayName profileImageURL(width: 70) }"""
+
+        private const val CLIP_FIELDS = """slug title viewCount createdAt durationSeconds thumbnailURL url
+            broadcaster { login displayName profileImageURL(width: 70) } game { displayName }"""
 
         /** Hash da consulta salva `ChannelFollows` do site da Twitch. Se a Twitch trocar, a importação avisa em vez de falhar calada. */
         private const val CHANNEL_FOLLOWS_HASH = "eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907"

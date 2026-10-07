@@ -58,6 +58,14 @@ private fun plural(n: Long, singular: String, plural: String = singular + "s"): 
     "há $n ${if (n == 1L) singular else plural}"
 
 /** "20240131" → epoch aproximado em ms (meio-dia UTC). */
+/** "2026-10-05T19:21:37Z" ou "2026-10-06 11:49:58" (sempre em UTC) → milissegundos desde 1970. */
+fun parseIsoMillis(text: String?): Long? {
+    val m = Regex("""^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})""").find(text.orEmpty().trim()) ?: return null
+    val (y, mo, d, h, mi, s) = m.destructured
+    val days = daysFromCivil(y.toInt(), mo.toInt(), d.toInt())
+    return ((days * 24 + h.toLong()) * 60 + mi.toLong()) * 60_000L + s.toLong() * 1000L
+}
+
 fun parseUploadDate(yyyymmdd: String?): Long? {
     if (yyyymmdd == null || yyyymmdd.length != 8) return null
     val y = yyyymmdd.substring(0, 4).toIntOrNull() ?: return null

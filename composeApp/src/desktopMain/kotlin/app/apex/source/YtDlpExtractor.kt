@@ -64,6 +64,8 @@ class YtDlpExtractor(
 
     private suspend fun run(args: List<String>, timeoutMs: Long = 90_000): ByteArray = gate.withPermit {
         withContext(Dispatchers.IO) {
+            // Na primeira abertura o yt-dlp ainda pode estar sendo baixado: espera a instalação em vez de falhar na cara da pessoa.
+            if (!bins.ready) runCatching { ensureReady() }
             if (!bins.ready) throw ExtractionException("O yt-dlp não está instalado. Abra Ajustes › Mecanismo para instalar.")
             // O login nunca fica em texto puro no disco: o arquivo de cookies existe só enquanto o yt-dlp roda.
             val jar = cookieHeader()?.let { CookieJar.write(it) }
@@ -147,13 +149,15 @@ class YtDlpExtractor(
             info["channel_is_verified"].bool() == true,
             info["channel_url"].str() ?: media.channel?.url.orEmpty(),
         )
+        // Num clipe, título, duração e data são os do clipe (já vêm no Media), não os do vídeo inteiro de onde ele saiu.
+        val clip = media.isClip
         val updated = media.copy(
-            title = cleanTitle(info["title"].str(), live) ?: media.title,
+            title = if (clip) media.title else cleanTitle(info["title"].str(), live) ?: media.title,
             channel = channel,
             thumbnailUrl = media.thumbnailUrl ?: info["thumbnail"].str(),
-            durationSec = info["duration"].long() ?: media.durationSec,
-            viewCount = info["view_count"].long() ?: media.viewCount,
-            publishedAt = info["timestamp"].long()?.times(1000) ?: parseUploadDate(info["upload_date"].str()) ?: media.publishedAt,
+            durationSec = if (clip) media.durationSec else info["duration"].long() ?: media.durationSec,
+            viewCount = if (clip) media.viewCount else info["view_count"].long() ?: media.viewCount,
+            publishedAt = if (clip) media.publishedAt else info["timestamp"].long()?.times(1000) ?: parseUploadDate(info["upload_date"].str()) ?: media.publishedAt,
             isLive = live,
         )
         return Resolved(
@@ -162,7 +166,8 @@ class YtDlpExtractor(
             likes = info["like_count"].long(),
             subscribers = channel.followers,
             uploadDate = info["upload_date"].str(),
-            chapters = info["chapters"].list().mapNotNull {
+            // Os capítulos são do vídeo inteiro; num clipe não valem.
+            chapters = if (clip) emptyList() else info["chapters"].list().mapNotNull {
                 val t = it["title"].str() ?: return@mapNotNull null
                 Chapter(t, it["start_time"].long() ?: 0)
             },

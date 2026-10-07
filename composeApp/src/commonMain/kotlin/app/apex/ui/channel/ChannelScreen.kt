@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
 import app.apex.model.Channel
+import app.apex.model.ClipSort
 import app.apex.model.Platform
 import app.apex.state.withoutBlocked
 import app.apex.theme.ApexColors
@@ -50,7 +51,7 @@ import app.apex.ui.components.videoItems
 import app.apex.util.formatCount
 
 @Composable
-fun ChannelScreen(seed: Channel) {
+fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     val app = LocalApp.current
     val st = remember(seed.key) { app.screens.channel(seed) }
     LaunchedEffect(st) { st.start() }
@@ -60,15 +61,21 @@ fun ChannelScreen(seed: Channel) {
     val settings by app.data.settings.collectAsState()
     val isYt = seed.platform == Platform.YouTube
     val channel = details?.channel?.let { it.copy(avatarUrl = it.avatarUrl ?: seed.avatarUrl) } ?: seed
-    var tab by remember(seed.key) { mutableIntStateOf(0) }
-    val tabs = if (isYt) listOf("Vídeos", "Transmissões", "Sobre") else listOf("Ao vivo", "Sobre")
+    var tab by remember(seed.key) { mutableIntStateOf(initialTab) }
+    val tabs = if (isYt) listOf("Vídeos", "Transmissões", "Sobre") else listOf("Ao vivo", "VODs", "Clipes", "Sobre")
 
     val list = when {
         isYt && tab == 0 -> st.videos
         isYt && tab == 1 -> st.pastLives
+        !isYt && tab == 1 -> st.vods
+        !isYt && tab == 2 -> st.clips
         else -> null
     }
-    LaunchedEffect(tab, st) { if (isYt && tab == 1) st.pastLives.loadIfNeeded() }
+    LaunchedEffect(tab, st) {
+        if (isYt && tab == 1) st.pastLives.loadIfNeeded()
+        if (!isYt && tab == 1) st.vods.loadIfNeeded()
+        if (!isYt && tab == 2) st.clips.loadIfNeeded()
+    }
     val items by (list?.items ?: st.videos.items).collectAsState()
     val loading by (list?.loading ?: st.videos.loading).collectAsState()
     val error by (list?.error ?: st.videos.error).collectAsState()
@@ -108,7 +115,7 @@ fun ChannelScreen(seed: Channel) {
         }
 
         liveNow?.let { live ->
-            if (tab == 0 || !isYt && tab == 0) {
+            if (tab == 0) {
                 fullSpan("live-now") {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Ao vivo agora", style = MaterialTheme.typography.titleLarge)
@@ -118,7 +125,11 @@ fun ChannelScreen(seed: Channel) {
             }
         }
 
-        val aboutTab = if (isYt) 2 else 1
+        val aboutTab = if (isYt) 2 else 3
+        if (!isYt && tab == 2) fullSpan("clip-sort") {
+            val sort by st.clipSort.collectAsState()
+            ChipRow(ClipSort.entries.map { it.label }, sort.ordinal, { st.setClipSort(ClipSort.entries[it]) })
+        }
         when {
             tab == aboutTab -> fullSpan("about") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 4.dp)) {
@@ -133,8 +144,11 @@ fun ChannelScreen(seed: Channel) {
                     ActionButton("Abrir no site", { app.system.openUrl(channel.url.ifBlank { seed.url }) }, icon = Icons.Rounded.OpenInBrowser)
                 }
             }
-            !isYt -> if (liveNow == null) fullSpan("offline") {
-                EmptyState(Icons.Rounded.Sensors, "Fora do ar", "${channel.name} não está transmitindo agora. Siga o canal para vê-lo aqui quando entrar ao vivo.")
+            !isYt && tab == 0 -> if (liveNow == null) fullSpan("offline") {
+                EmptyState(
+                    Icons.Rounded.Sensors, "Fora do ar",
+                    "${channel.name} não está transmitindo agora. Veja a aba VODs para assistir transmissões passadas, ou siga o canal para vê-lo aqui quando entrar ao vivo.",
+                )
             }
             items.isNotEmpty() -> videoItems(items.withoutBlocked(settings.blockedChannels).map { m ->
                 m.copy(channel = (m.channel ?: channel).copy(avatarUrl = m.channel?.avatarUrl ?: channel.avatarUrl))
@@ -142,7 +156,11 @@ fun ChannelScreen(seed: Channel) {
             loading -> skeletons(8)
             error != null -> fullSpan("err") { ErrorBox(error.orEmpty(), { list?.refresh() }) }
             else -> fullSpan("none") {
-                EmptyState(Icons.Rounded.VideoLibrary, "Sem vídeos", "Nada para mostrar nesta aba.")
+                when {
+                    !isYt && tab == 1 -> EmptyState(Icons.Rounded.VideoLibrary, "Sem VODs", "${channel.name} não tem transmissões passadas salvas (ou guarda os VODs só para inscritos).")
+                    !isYt && tab == 2 -> EmptyState(Icons.Rounded.VideoLibrary, "Sem clipes", "Ninguém criou clipes de ${channel.name} ainda.")
+                    else -> EmptyState(Icons.Rounded.VideoLibrary, "Sem vídeos", "Nada para mostrar nesta aba.")
+                }
             }
         }
         if (loading && items.isNotEmpty() && tab != aboutTab) skeletons(4)

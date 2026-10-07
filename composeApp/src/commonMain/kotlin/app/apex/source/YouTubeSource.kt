@@ -167,6 +167,16 @@ class YouTubeSource(val tube: InnerTube) {
         return (first + extra).distinctBy { it.id }
     }
 
+    /**
+     * Canais dos quais a conta é membro agora (a página "Compras e assinaturas" do YouTube). O YouTube não informa o id do canal nessa
+     * página, só o nome e a foto, então o canal é achado entre as inscrições ([known]); membro de um canal em que não está inscrito não aparece.
+     */
+    suspend fun activeMemberships(known: List<Channel>): List<Channel> {
+        val root = tube.call("browse") { put("browseId", "FEmemberships_and_purchases") } ?: return emptyList()
+        if (root["contents"] == null) throw SessionExpiredException("Sua sessão do YouTube expirou. Saia da conta e entre de novo.")
+        return parseActiveMemberships(root, known)
+    }
+
     /** Playlists que a conta criou ou salvou. */
     suspend fun accountPlaylists(): List<RemotePlaylist> {
         val root = tube.call("browse") { put("browseId", "FEplaylist_aggregation") } ?: return emptyList()
@@ -397,4 +407,35 @@ fun parsePublished(text: String?, nowMs: Long): Long? {
         else -> return null
     }
     return nowMs - n * seconds * 1000
+}
+
+/**
+ * Lê a página de assinaturas do YouTube: os cartões vêm em ordem, com um título de seção ("Assinaturas", depois "Assinaturas inativas").
+ * Só valem os canais da parte ativa. O YouTube Premium também aparece lá, mas com a logo do Premium, não a foto de um canal.
+ */
+internal fun parseActiveMemberships(root: JsonElement, known: List<Channel>): List<Channel> {
+    fun norm(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ")
+    fun avatarBase(url: String?) = url?.substringBefore('=')?.takeIf { it.isNotBlank() }
+    val byName = known.groupBy { norm(it.name) }
+    val byAvatar = known.mapNotNull { c -> avatarBase(c.avatarUrl)?.let { it to c } }.toMap()
+
+    var inactive = false
+    val out = LinkedHashMap<String, Channel>()
+    for ((_, card) in root.collect("cardItemRenderer")) {
+        val heading = card["headingRenderer"] ?: continue
+        val withImage = heading["cardItemTextWithImageRenderer"]
+        val firstText = (withImage ?: heading).collect("text").firstNotNullOfOrNull { it.second["runs"][0]["text"].str() }.orEmpty()
+        if (withImage == null) {
+            // Título de seção: tudo depois de "Assinaturas inativas" (ou "Inactive memberships") não vale.
+            val title = firstText.lowercase()
+            if (title.contains("inativ") || title.contains("inactive") || title.contains("expired")) inactive = true
+            continue
+        }
+        if (inactive) continue
+        val image = withImage.collect("url").firstNotNullOfOrNull { it.second.str() } ?: continue
+        if (!image.contains("ggpht.com") && !image.contains("googleusercontent.com")) continue
+        val channel = byAvatar[avatarBase(image)] ?: byName[norm(firstText)]?.firstOrNull() ?: continue
+        out.putIfAbsent(channel.key, channel)
+    }
+    return out.values.toList()
 }

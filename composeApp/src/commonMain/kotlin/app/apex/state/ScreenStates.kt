@@ -17,6 +17,7 @@ import app.apex.source.ChannelTab
 import app.apex.source.SearchDate
 import app.apex.source.SearchFilters
 import app.apex.source.SearchSort
+import app.apex.util.ImagePrefetch
 import app.apex.util.currentTimeMillis
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -303,6 +304,7 @@ class SubscriptionsState(private val app: AppContainer) {
         app.scope.launch {
             try {
                 val items = app.youtube.feed(channels)
+                ImagePrefetch.request(items)
                 if (items.isNotEmpty()) app.data.saveFeed(items)
             } finally {
                 _feedLoading.value = false
@@ -313,6 +315,7 @@ class SubscriptionsState(private val app: AppContainer) {
     fun refreshLive() {
         app.scope.launch {
             val live = loadFollowedLive(app)
+            ImagePrefetch.request(live)
             _liveNow.value = live
             _liveChannels.value = live.mapNotNull { it.channel?.key }.toSet()
         }

@@ -9,6 +9,10 @@ enum class Platform(val label: String) {
     Kick("Kick"),
 }
 
+/** O jeito de apoiar um canal pagando: inscrição paga (Twitch) ou membro do canal (YouTube). */
+@Serializable
+enum class SupportKind(val label: String) { Sub("Sub"), Member("Membro") }
+
 @Serializable
 data class Channel(
     val platform: Platform,
@@ -20,6 +24,8 @@ data class Channel(
     val followers: Long? = null,
     val verified: Boolean = false,
     val url: String = "",
+    /** Preenchido quando a pessoa paga por este canal (sub ou membro). */
+    val support: SupportKind? = null,
 ) {
     val key: String get() = "${platform.name}:$id"
 }
@@ -129,6 +135,8 @@ data class AppSettings(
     val subtitleLang: String = "pt",
     val subtitlesOnByDefault: Boolean = false,
     val preferHardwareDecode: Boolean = true,
+    /** Baixar as atualizações do Apex sozinho (só vale instalar quando a pessoa clicar em reiniciar). */
+    val autoUpdate: Boolean = true,
     val kickLanguage: String = "pt",
     val twitchLanguage: String = "PT",
     val blockedChannels: List<String> = emptyList(),

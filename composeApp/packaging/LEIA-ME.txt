@@ -10,6 +10,10 @@ AVISO DO WINDOWS NA PRIMEIRA VEZ
 O Windows pode mostrar "O Windows protegeu o computador" porque o programa ainda não tem assinatura digital.
 Clique em "Mais informações" e depois em "Executar assim mesmo".
 
+ATUALIZAÇÕES
+O Apex confere sozinho se saiu versão nova e avisa no topo da janela. Só instala se a atualização estiver assinada pelo projeto.
+Dá para desligar ou conferir na hora em Ajustes > Atualizações do Apex.
+
 SEUS DADOS
 Ficam em %APPDATA%\Apex. Para apagar tudo, feche o Apex e apague essa pasta.
 A conta do Apex (sincronização entre aparelhos) é opcional.

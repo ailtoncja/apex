@@ -35,9 +35,9 @@ class SyncE2ETest {
         }
     }
 
-    private class Device(serverUrl: String) {
+    private class Device(serverUrl: String, store: KeyValueStore = MemoryStore()) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val data = UserData(MemoryStore(), scope).also { d -> d.updateSettings { it.copy(serverUrl = serverUrl) } }
+        val data = UserData(store, scope).also { d -> d.updateSettings { it.copy(serverUrl = serverUrl) } }
         val account = CloudAccount(scope, data, Http.client)
 
         suspend fun sync() = account.engine.syncNow()
@@ -244,5 +244,25 @@ class SyncE2ETest {
         // O servidor de teste só escreve e-mails no log: o app não pode prometer que enviou.
         val forgot = a.account.forgot(email)
         assertTrue(forgot.contains("não envia e-mails"), forgot)
+    }
+
+    /** O que chega da conta (primeira sincronização) também precisa ir para o disco, para o app abrir com tudo mesmo sem internet. */
+    @Test
+    fun o_que_chega_da_conta_fica_gravado_no_disco() = runBlocking {
+        val email = email()
+        val a = Device(url)
+        a.data.addSubscriptions((1..120).map { channel("UC$it") })
+        a.account.signUp(email, password, null, true)
+        a.sync()
+
+        val dir = Files.createTempDirectory("apex-e2e-disco").toFile()
+        val b = Device(url, app.apex.data.FileStore(dir))
+        b.account.signIn(email, password)
+        b.sync()
+        assertEquals(120, b.data.subscriptions.value.size)
+        delay(1_500)
+        val file = java.io.File(dir, "subscriptions.json")
+        assertTrue(file.isFile && file.length() > 1_000, "subscriptions.json não foi gravado (tamanho ${file.length()})")
+        assertEquals(120, UserData(app.apex.data.FileStore(dir), CoroutineScope(SupervisorJob() + Dispatchers.Default)).subscriptions.value.size)
     }
 }

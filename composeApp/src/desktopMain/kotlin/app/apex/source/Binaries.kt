@@ -84,6 +84,8 @@ object Checksums {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    fun sha256Bytes(data: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
+
     /** Lê um arquivo `SHA2-256SUMS` (linhas `hash  nome` ou `hash *nome`) e devolve o hash do arquivo [name]. */
     fun fromSumsFile(text: String, name: String): String? = text.lineSequence()
         .map { it.trim() }

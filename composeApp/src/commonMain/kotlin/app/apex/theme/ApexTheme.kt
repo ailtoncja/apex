@@ -25,6 +25,8 @@ object ApexColors {
     val Muted = Color(0xFF9494AA)
     val Faint = Color(0xFF626277)
     val Live = Color(0xFFFF2D55)
+    /** Canais que a pessoa apoia pagando (sub ou membro). */
+    val Support = Color(0xFFFFB300)
     val Scrim = Color(0xCC000000)
 
     val YouTube = Color(0xFFFF3B30)

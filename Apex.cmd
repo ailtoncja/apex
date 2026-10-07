@@ -1,8 +1,10 @@
 @echo off
 rem Abre o Apex. Antes, gere o app uma vez:  gradlew.bat :composeApp:packageUberJarForCurrentOS
 setlocal
-set "JAR=%~dp0composeApp\build\compose\jars\Apex-windows-x64-1.0.0.jar"
-if not exist "%JAR%" (
+rem Usa o .jar mais novo (o nome leva a versao do app).
+set "JAR="
+for %%F in ("%~dp0composeApp\build\compose\jars\Apex-windows-x64-*.jar") do set "JAR=%%~fF"
+if not defined JAR (
   echo O app ainda nao foi gerado. Rode:  gradlew.bat :composeApp:packageUberJarForCurrentOS
   pause
   exit /b 1

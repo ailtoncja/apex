@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -55,6 +56,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.apex.model.Platform
+import app.apex.model.SupportKind
 import app.apex.theme.ApexColors
 import app.apex.theme.color
 import coil3.compose.AsyncImage
@@ -210,6 +212,19 @@ fun PlatformTag(platform: Platform, modifier: Modifier = Modifier) {
         color = if (platform == Platform.Kick) Color.Black else Color.White,
         style = MaterialTheme.typography.labelSmall,
     )
+}
+
+/** "SUB" (Twitch) ou "MEMBRO" (YouTube): marca os canais que a pessoa paga. */
+@Composable
+fun SupportBadge(kind: SupportKind, modifier: Modifier = Modifier) {
+    Row(
+        modifier.background(ApexColors.Support.copy(alpha = 0.18f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Icon(Icons.Rounded.Star, null, Modifier.size(11.dp), tint = ApexColors.Support)
+        Text(kind.label.uppercase(), color = ApexColors.Support, style = MaterialTheme.typography.labelSmall)
+    }
 }
 
 @Composable

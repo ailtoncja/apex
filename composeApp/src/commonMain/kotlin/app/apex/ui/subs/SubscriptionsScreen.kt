@@ -18,7 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
+import app.apex.model.Channel
 import app.apex.model.Platform
 import app.apex.nav.Route
 import app.apex.state.withoutBlocked
@@ -43,6 +44,8 @@ import app.apex.ui.components.fullSpan
 import app.apex.ui.components.skeletons
 import app.apex.ui.components.videoItems
 
+private enum class SubsTab { News, Live, Supported, Channels }
+
 @Composable
 fun SubscriptionsScreen() {
     val app = LocalApp.current
@@ -55,9 +58,23 @@ fun SubscriptionsScreen() {
     val feedLoading by subsState.feedLoading.collectAsState()
     val liveKeys by subsState.liveChannels.collectAsState()
     val liveNow by subsState.liveNow.collectAsState()
-    var tab by remember { mutableIntStateOf(0) }
+    var requestedTab by remember { mutableStateOf(SubsTab.News) }
     val state = rememberLazyGridState()
     val blocked = settings.blockedChannels
+
+    // Canais que a pessoa paga (sub da Twitch, membro do YouTube) ficam separados dos outros.
+    val supported = subs.filter { it.support != null }
+    val supportedKeys = supported.map { it.key }.toSet()
+    val order = listOfNotNull(SubsTab.News, SubsTab.Live, SubsTab.Supported.takeIf { supported.isNotEmpty() }, SubsTab.Channels)
+    val tab = requestedTab.takeIf { it in order } ?: SubsTab.News
+    val labels = order.map {
+        when (it) {
+            SubsTab.News -> "Novidades"
+            SubsTab.Live -> "Ao vivo (${liveNow.size})"
+            SubsTab.Supported -> "Apoiados (${supported.size})"
+            SubsTab.Channels -> "Canais (${subs.size})"
+        }
+    }
 
     ApexGrid(state) {
         if (subs.isNotEmpty()) {
@@ -66,13 +83,13 @@ fun SubscriptionsScreen() {
                     Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(subs.sortedByDescending { it.key in liveKeys }, key = { it.key }) { ch ->
+                    items(subs.sortedWith(compareByDescending<Channel> { it.key in liveKeys }.thenByDescending { it.support != null }), key = { it.key }) { ch ->
                         Column(
                             Modifier.width(84.dp).clip(RoundedCornerShape(12.dp)).clickable { app.openChannel(ch) }.padding(vertical = 6.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            Avatar(ch.avatarUrl, ch.name, 56.dp, ring = if (ch.key in liveKeys) ApexColors.Live else null)
+                            Avatar(ch.avatarUrl, ch.name, 56.dp, ring = if (ch.key in liveKeys) ApexColors.Live else if (ch.support != null) ApexColors.Support else null)
                             Text(
                                 ch.name, style = MaterialTheme.typography.bodySmall, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
@@ -83,7 +100,7 @@ fun SubscriptionsScreen() {
             }
         }
         fullSpan("tabs") {
-            ChipRow(listOf("Novidades", "Ao vivo (${liveNow.size})", "Canais (${subs.size})"), tab, { tab = it })
+            ChipRow(labels, order.indexOf(tab), { requestedTab = order[it] })
         }
 
         when {
@@ -94,7 +111,7 @@ fun SubscriptionsScreen() {
                     action = { ActionButton("Importar das contas", { app.nav.goRoot(Route.Settings) }, primary = true) },
                 )
             }
-            tab == 0 -> {
+            tab == SubsTab.News -> {
                 val items = feed.items.withoutBlocked(blocked)
                 if (items.isNotEmpty()) videoItems(items)
                 else if (feedLoading) skeletons(12)
@@ -109,17 +126,41 @@ fun SubscriptionsScreen() {
                     Text("Atualizando…", color = ApexColors.Muted, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            tab == 1 -> {
+            tab == SubsTab.Live -> {
                 if (liveNow.isNotEmpty()) videoItems(liveNow.withoutBlocked(blocked))
                 else fullSpan("nolive") {
                     EmptyState(Icons.Rounded.Subscriptions, "Ninguém ao vivo", "Nenhum dos seus canais está transmitindo agora.")
                 }
             }
+            tab == SubsTab.Supported -> {
+                fullSpan("supported") {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        SectionTitle(
+                            "Canais que você apoia", Modifier.padding(bottom = 8.dp),
+                            subtitle = "Subs da Twitch e memberships do YouTube. Atualizado ao abrir o app e ao importar as contas.",
+                        )
+                        supported.forEach { ch -> ChannelRow(ch, live = ch.key in liveKeys) }
+                    }
+                }
+                // O que esses canais têm de novo: ao vivo agora e vídeos recentes.
+                val mine = (liveNow + feed.items).filter { it.channel?.key in supportedKeys }.withoutBlocked(blocked).distinctBy { it.key }
+                if (mine.isNotEmpty()) {
+                    fullSpan("supported-news") { SectionTitle("Novidades dos canais apoiados", Modifier.padding(top = 16.dp, bottom = 4.dp)) }
+                    videoItems(mine)
+                }
+            }
             else -> {
                 fullSpan("channels") {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        SectionTitle("Seus canais", Modifier.padding(bottom = 8.dp))
-                        subs.forEach { ch -> ChannelRow(ch, live = ch.key in liveKeys) }
+                        if (supported.isNotEmpty()) {
+                            SectionTitle("Apoiados (${supported.size})", Modifier.padding(bottom = 8.dp))
+                            supported.forEach { ch -> ChannelRow(ch, live = ch.key in liveKeys) }
+                            SectionTitle("Outros canais", Modifier.padding(top = 20.dp, bottom = 8.dp))
+                            subs.filter { it.support == null }.forEach { ch -> ChannelRow(ch, live = ch.key in liveKeys) }
+                        } else {
+                            SectionTitle("Seus canais", Modifier.padding(bottom = 8.dp))
+                            subs.forEach { ch -> ChannelRow(ch, live = ch.key in liveKeys) }
+                        }
                     }
                 }
             }

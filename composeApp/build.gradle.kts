@@ -8,7 +8,7 @@ plugins {
 }
 
 // A versão do app: uma só fonte. Vai para o instalador (packageVersion) e para o código (BuildInfo.VERSION), que usa para saber se há atualização.
-val appVersion = "1.0.4"
+val appVersion = "1.0.5"
 
 val generateBuildInfo = tasks.register("generateBuildInfo") {
     val outDir = layout.buildDirectory.dir("generated/buildinfo")

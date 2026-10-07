@@ -92,6 +92,7 @@ class BrowserLoginTest {
             session.setCookies(
                 listOf(
                     mapOf("name" to "__Secure-3PAPISID", "value" to "apisid-chromium", "domain" to ".youtube.com", "path" to "/", "secure" to "true"),
+                    mapOf("name" to "LOGIN_INFO", "value" to "info-chromium", "domain" to ".youtube.com", "path" to "/", "secure" to "true"),
                     mapOf("name" to "SAPISID", "value" to "sapisid-chromium", "domain" to ".google.com", "path" to "/", "secure" to "true"),
                     mapOf("name" to "auth-token", "value" to "token-chromium", "domain" to ".twitch.tv", "path" to "/", "secure" to "true", "httpOnly" to "true"),
                 ),
@@ -103,6 +104,63 @@ class BrowserLoginTest {
             assertTrue("__Secure-3PAPISID=apisid-chromium" in youtube.credential)
             assertEquals("token-chromium", accounts.accountFromCookies(Platform.Twitch, cookies)?.credential)
             assertNull(accounts.accountFromCookies(Platform.Kick, cookies))
+        }
+    }
+
+    @Test
+    fun limpa_cookies_que_fazem_o_youtube_recusar_o_pedido() {
+        // Como no perfil real: ~100 cookies "ST-…" de 1,5 KB, que sozinhos passam de 100 KB (o YouTube responde 413 acima de ~16 KB).
+        val noise = (1..95).joinToString("; ") { "ST-abc$it=" + "x".repeat(1_500) }
+        val header = "SID=sid-bom; HSID=hsid-bom; __Secure-3PAPISID=apisid-bom; LOGIN_INFO=info-bom; PREF=f6=40000000; $noise; grande=" + "y".repeat(2_000)
+        assertTrue(header.length > 100_000)
+
+        val clean = app.apex.source.CookieHygiene.cleanHeader(header)
+        assertTrue(clean.length < 1_000, "ficou com ${clean.length} bytes")
+        listOf("SID=sid-bom", "HSID=hsid-bom", "__Secure-3PAPISID=apisid-bom", "LOGIN_INFO=info-bom", "PREF=f6=40000000").forEach { assertTrue(it in clean, it) }
+        assertTrue("ST-" !in clean && "grande=" !in clean)
+
+        // Também no teto: mesmo sem "ST-", se passar do limite saem os maiores que não são de login.
+        val many = (1..200).joinToString("; ") { "c$it=" + "z".repeat(300) } + "; SID=sid-bom"
+        val capped = app.apex.source.CookieHygiene.cleanHeader(many, maxBytes = 5_000)
+        assertTrue(capped.length <= 5_000 && "SID=sid-bom" in capped)
+
+        // E o InnerTube já recebe o cabeçalho limpo (contas salvas antes da correção se curam sozinhas).
+        val tube = app.apex.source.InnerTube().also { it.cookieHeader = header }
+        assertTrue(tube.loggedIn || "SAPISID" !in header)
+        assertTrue((tube.cookieHeader?.length ?: 0) < 1_000)
+    }
+
+    /** Usa o Firefox de verdade, sem janela: o perfil isolado recebe o cookie, o Apex lê, e depois o Firefox é fechado e o perfil apagado. */
+    @Test
+    fun login_isolado_no_firefox_le_o_cookie_e_fecha_tudo() = runBlocking {
+        val firefox = Browsers.installed().firstOrNull { it.engine == BrowserEngine.Firefox } ?: return@runBlocking
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { ex ->
+            ex.responseHeaders.add("Set-Cookie", "auth-token=token-isolado; Path=/; Max-Age=3600")
+            val body = "ok".toByteArray()
+            ex.sendResponseHeaders(200, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
+        }
+        server.start()
+        val profile = File(tempDir(), "login-browser/firefox-isolado")
+        try {
+            IsolatedFirefox.open(firefox.exe, profile, "http://127.0.0.1:${server.address.port}/", headless = true).use { ff ->
+                var found = false
+                repeat(80) {
+                    if (!found) {
+                        found = ff.cookies(listOf("127.0.0.1")).any { it.name == "auth-token" && it.value == "token-isolado" }
+                        if (!found) kotlinx.coroutines.delay(500)
+                    }
+                }
+                assertTrue(found, "o cookie não apareceu no perfil isolado")
+                assertTrue(ff.isRunning)
+            }
+            assertTrue(BrowserProcesses.using(profile).isEmpty(), "o Firefox do perfil isolado continuou aberto")
+            val left = profile.walkTopDown().filter { it.isFile }.map { it.relativeTo(profile).path }.take(10).toList()
+            assertTrue(!profile.exists(), "o perfil isolado não foi apagado; sobraram: $left")
+        } finally {
+            BrowserProcesses.closeUsing(profile)
+            server.stop(0)
         }
     }
 }

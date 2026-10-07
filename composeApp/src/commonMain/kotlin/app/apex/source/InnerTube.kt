@@ -16,6 +16,9 @@ class InnerTube(private val http: HttpClient = Http.client) {
 
     /** Cookies da conta Google (cabeçalho `Cookie`), quando logado. */
     var cookieHeader: String? = null
+        set(value) {
+            field = value?.let(CookieHygiene::cleanHeader)
+        }
 
     val loggedIn: Boolean get() = cookieHeader?.contains("SAPISID") == true
 

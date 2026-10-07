@@ -61,8 +61,10 @@ fun BrowserLoginDialog(platform: Platform, onClose: () -> Unit) {
                 app.refreshAccountProfile(platform)
                 val imported = runCatching { app.importFollows(platform) }
                 app.toast(
-                    imported.getOrNull()?.let { "${platform.label} conectado • $it canais importados" }
-                        ?: "${platform.label} conectado",
+                    imported.fold(
+                        onSuccess = { "${platform.label} conectado • ${it.summary}" },
+                        onFailure = { "${platform.label} conectado, mas não consegui importar: ${it.message}" },
+                    ),
                 )
                 app.screens.subs.refreshFeed()
                 onClose()

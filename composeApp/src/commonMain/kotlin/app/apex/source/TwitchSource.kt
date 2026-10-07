@@ -21,16 +21,17 @@ class TwitchSource(private val http: HttpClient = Http.client) {
     /** Token de login (cookie `auth-token`), quando o usuário entrou na conta. */
     var authToken: String? = null
 
+    private fun headers(): Map<String, String> = buildMap {
+        put("Client-ID", CLIENT_ID)
+        authToken?.let { put("Authorization", "OAuth $it") }
+    }
+
     private suspend fun gql(query: String, variables: String? = null): JsonElement? {
         val body = buildJsonObject {
             put("query", query)
             if (variables != null) parseJson(variables)?.let { put("variables", it) }
         }.toString()
-        val headers = buildMap {
-            put("Client-ID", CLIENT_ID)
-            authToken?.let { put("Authorization", "OAuth $it") }
-        }
-        return parseJson(http.postJson("https://gql.twitch.tv/gql", body, headers))["data"]
+        return parseJson(http.postJson(GQL_URL, body, headers()))["data"]
     }
 
     private fun lit(s: String) = JsonPrimitive(s).toString()
@@ -136,14 +137,56 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         return (u["displayName"].str() ?: u["login"].str() ?: return null) to u["profileImageURL"].str()
     }
 
-    /** Canais seguidos pela conta logada (precisa do [authToken]). */
-    suspend fun followedChannels(limit: Int = 100): List<ChannelHit> {
+    /** Canais seguidos. [complete] = `false` quando pode haver mais canais do que a Twitch deixa ler (ver [followedChannels]). */
+    class FollowList(val channels: List<ChannelHit>, val complete: Boolean)
+
+    private class FollowsPage(val items: List<ChannelHit>, val hasNext: Boolean)
+
+    /**
+     * Canais seguidos pela conta logada (precisa do [authToken]). A consulta antiga (`currentUser.follows`) responde "service error";
+     * esta é a "consulta salva" que o próprio site da Twitch usa. Cada página tem no máximo 100 canais e a seguinte (por cursor)
+     * exige uma verificação de integridade que só o navegador da Twitch passa. Então lemos as duas pontas da lista (os 100 mais antigos
+     * e os 100 mais recentes): quem segue até 200 canais recebe tudo.
+     */
+    suspend fun followedChannels(): FollowList {
+        if (authToken == null) return FollowList(emptyList(), true)
+        val first = followsPage("ASC")
+        if (!first.hasNext) return FollowList(first.items, true)
+        val last = followsPage("DESC")
+        val merged = (first.items + last.items).distinctBy { it.channel.id }
+        // Se as duas pontas se sobrepõem, a lista inteira coube nelas.
+        return FollowList(merged, complete = merged.size < first.items.size + last.items.size)
+    }
+
+    private suspend fun followsPage(order: String): FollowsPage {
+        val body = buildJsonObject {
+            put("operationName", "ChannelFollows")
+            put("variables", buildJsonObject {
+                put("limit", PAGE)
+                put("order", order)
+            })
+            put("extensions", buildJsonObject {
+                put("persistedQuery", buildJsonObject {
+                    put("version", 1)
+                    put("sha256Hash", CHANNEL_FOLLOWS_HASH)
+                })
+            })
+        }.toString()
+        val response = parseJson(http.postJson(GQL_URL, body, headers()))
+        val follows = response["data"]["user"]["follows"]
+            ?: error("A Twitch não devolveu a lista de seguidos (${response["errors"].list().firstOrNull()["message"].str() ?: "sem detalhes"}).")
+        val items = follows["edges"].list().mapNotNull { userToHit(it["node"]) }
+        return FollowsPage(items, follows["pageInfo"]["hasNextPage"].str() == "true")
+    }
+
+    /** Canais em que a conta é inscrita (sub pago, Prime ou presente). */
+    suspend fun subscribedChannels(): List<ChannelHit> {
         if (authToken == null) return emptyList()
         val data = gql(
-            """{ currentUser { follows(first: $limit) { edges { node { login displayName profileImageURL(width: 70)
-            followers { totalCount } stream { $streamFields } } } } } }""",
+            """{ currentUser { subscriptionBenefits(criteria: {filter: ALL}) { edges { node {
+            user { login displayName profileImageURL(width: 70) } } } } } }""",
         )
-        return data["currentUser"]["follows"]["edges"].list().mapNotNull { userToHit(it["node"]) }
+        return data["currentUser"]["subscriptionBenefits"]["edges"].list().mapNotNull { userToHit(it["node"]["user"]) }
     }
 
     suspend fun resolve(media: Media): Resolved {
@@ -173,5 +216,10 @@ class TwitchSource(private val http: HttpClient = Http.client) {
 
     companion object {
         const val CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+        private const val GQL_URL = "https://gql.twitch.tv/gql"
+        private const val PAGE = 100
+
+        /** Hash da consulta salva `ChannelFollows` do site da Twitch. Se a Twitch trocar, a importação avisa em vez de falhar calada. */
+        private const val CHANNEL_FOLLOWS_HASH = "eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907"
     }
 }

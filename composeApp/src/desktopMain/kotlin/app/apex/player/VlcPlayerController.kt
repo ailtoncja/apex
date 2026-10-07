@@ -1,0 +1,207 @@
+package app.apex.player
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.skiaCanvas
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import org.jetbrains.skia.ColorAlphaType
+import org.jetbrains.skia.ColorType
+import org.jetbrains.skia.Image
+import org.jetbrains.skia.ImageInfo
+import org.jetbrains.skia.Rect
+import uk.co.caprica.vlcj.factory.MediaPlayerFactory
+import uk.co.caprica.vlcj.player.base.MediaPlayer
+import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
+import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer
+import uk.co.caprica.vlcj.player.embedded.videosurface.CallbackVideoSurface
+import uk.co.caprica.vlcj.player.embedded.videosurface.VideoSurfaceAdapters
+import uk.co.caprica.vlcj.player.embedded.videosurface.callback.BufferFormat
+import uk.co.caprica.vlcj.player.embedded.videosurface.callback.BufferFormatCallbackAdapter
+import uk.co.caprica.vlcj.player.embedded.videosurface.callback.RenderCallback
+import uk.co.caprica.vlcj.player.embedded.videosurface.callback.format.RV32BufferFormat
+import java.nio.ByteBuffer
+import kotlin.math.min
+
+/** Player do Windows: o libVLC decodifica e entrega cada quadro, que o Compose desenha por cima de tudo. */
+class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
+    private val factory = MediaPlayerFactory(
+        "--no-video-title-show", "--no-osd", "--no-snapshot-preview", "--quiet",
+        if (hardwareDecode) "--avcodec-hw=any" else "--avcodec-hw=none",
+    )
+    private val mediaPlayer: EmbeddedMediaPlayer = factory.mediaPlayers().newEmbeddedMediaPlayer()
+
+    private val _state = MutableStateFlow(PlayerState())
+    override val state: StateFlow<PlayerState> = _state.asStateFlow()
+
+    private val frameLock = Any()
+    private var frame: Image? = null
+    private var frameTick by mutableIntStateOf(0)
+    private var imageInfo: ImageInfo? = null
+    private var frameBytes = ByteArray(0)
+
+    init {
+        mediaPlayer.videoSurface().set(
+            CallbackVideoSurface(FormatCallback(), FrameCallback(), true, VideoSurfaceAdapters.getVideoSurfaceAdapter()),
+        )
+        mediaPlayer.events().addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
+            override fun opening(mediaPlayer: MediaPlayer) = _state.update { it.copy(loading = true, ended = false, error = null) }
+            override fun playing(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = true, loading = false, ended = false, error = null) }
+            override fun paused(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
+            override fun stopped(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false, loading = false) }
+            override fun finished(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false, ended = true, loading = false) }
+            override fun error(mediaPlayer: MediaPlayer) =
+                _state.update { it.copy(playing = false, loading = false, error = "Não foi possível reproduzir este vídeo.") }
+            override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) = _state.update { it.copy(loading = newCache < 100f) }
+            override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) = _state.update { it.copy(positionMs = newTime) }
+            override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) = _state.update { it.copy(durationMs = newLength) }
+        })
+    }
+
+    override fun play(source: PlaySource) {
+        _state.update { PlayerState(hasMedia = true, loading = true, volume = it.volume, muted = it.muted, rate = 1f) }
+        val options = buildList {
+            source.audioUrl?.let { add(":input-slave=$it") }
+            source.userAgent?.let { add(":http-user-agent=$it") }
+            if (source.startMs > 1000) add(":start-time=${source.startMs / 1000.0}")
+            add(if (source.live) ":network-caching=3000" else ":network-caching=1500")
+        }
+        mediaPlayer.media().play(source.videoUrl, *options.toTypedArray())
+    }
+
+    override fun togglePause() {
+        if (mediaPlayer.status().isPlaying) mediaPlayer.controls().pause() else resume()
+    }
+
+    override fun pause() {
+        if (mediaPlayer.status().isPlaying) mediaPlayer.controls().pause()
+    }
+
+    override fun resume() {
+        if (_state.value.ended) {
+            mediaPlayer.controls().setPosition(0f)
+            mediaPlayer.controls().play()
+        } else if (!mediaPlayer.status().isPlaying) {
+            mediaPlayer.controls().play()
+        }
+    }
+
+    override fun seekTo(positionMs: Long) {
+        mediaPlayer.controls().setTime(positionMs.coerceAtLeast(0))
+        _state.update { it.copy(positionMs = positionMs.coerceAtLeast(0)) }
+    }
+
+    override fun seekBy(deltaMs: Long) {
+        val s = _state.value
+        val target = (s.positionMs + deltaMs).coerceAtLeast(0).let { if (s.durationMs > 0) it.coerceAtMost(s.durationMs - 500) else it }
+        seekTo(target)
+    }
+
+    override fun setVolume(percent: Int) {
+        val v = percent.coerceIn(0, 100)
+        mediaPlayer.audio().setVolume(v)
+        _state.update { it.copy(volume = v, muted = if (v > 0) false else it.muted) }
+        if (v > 0) mediaPlayer.audio().isMute = false
+    }
+
+    override fun setMuted(muted: Boolean) {
+        mediaPlayer.audio().isMute = muted
+        _state.update { it.copy(muted = muted) }
+    }
+
+    override fun setRate(rate: Float) {
+        mediaPlayer.controls().setRate(rate)
+        _state.update { it.copy(rate = rate) }
+    }
+
+    override fun setSubtitle(url: String?) {
+        if (url == null) mediaPlayer.subpictures().setTrack(-1) else mediaPlayer.subpictures().setSubTitleUri(url)
+    }
+
+    override fun stop() {
+        mediaPlayer.controls().stop()
+        _state.update { PlayerState(volume = it.volume, muted = it.muted) }
+        synchronized(frameLock) {
+            frame?.close()
+            frame = null
+        }
+        frameTick++
+    }
+
+    override fun release() {
+        mediaPlayer.release()
+        factory.release()
+        synchronized(frameLock) {
+            frame?.close()
+            frame = null
+        }
+    }
+
+    @Composable
+    override fun Video(modifier: Modifier) {
+        Canvas(modifier.background(Color.Black)) {
+            frameTick
+            synchronized(frameLock) {
+                val image = frame ?: return@Canvas
+                val scale = min(size.width / image.width, size.height / image.height)
+                val w = image.width * scale
+                val h = image.height * scale
+                drawIntoCanvas { canvas ->
+                    canvas.skiaCanvas.drawImageRect(
+                        image,
+                        Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
+                        Rect.makeXYWH((size.width - w) / 2, (size.height - h) / 2, w, h),
+                    )
+                }
+            }
+        }
+    }
+
+    private inner class FormatCallback : BufferFormatCallbackAdapter() {
+        override fun getBufferFormat(sourceWidth: Int, sourceHeight: Int): BufferFormat {
+            // O RV32 do VLC não usa o canal alfa, por isso OPAQUE (senão o vídeo sairia transparente).
+            imageInfo = ImageInfo(sourceWidth, sourceHeight, ColorType.BGRA_8888, ColorAlphaType.OPAQUE)
+            _state.update { it.copy(videoWidth = sourceWidth, videoHeight = sourceHeight) }
+            return RV32BufferFormat(sourceWidth, sourceHeight)
+        }
+
+        override fun allocatedBuffers(buffers: Array<ByteBuffer>) {
+            frameBytes = ByteArray(buffers[0].remaining())
+        }
+    }
+
+    private inner class FrameCallback : RenderCallback {
+        override fun lock(mediaPlayer: MediaPlayer) {}
+
+        override fun unlock(mediaPlayer: MediaPlayer) {}
+
+        override fun display(
+            mediaPlayer: MediaPlayer,
+            nativeBuffers: Array<ByteBuffer>,
+            bufferFormat: BufferFormat,
+            displayWidth: Int,
+            displayHeight: Int,
+        ) {
+            val info = imageInfo ?: return
+            nativeBuffers[0].rewind()
+            nativeBuffers[0].get(frameBytes)
+            val next = Image.makeRaster(info, frameBytes, info.width * 4)
+            val previous = synchronized(frameLock) {
+                val old = frame
+                frame = next
+                old
+            }
+            previous?.close()
+            frameTick++
+        }
+    }
+}

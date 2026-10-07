@@ -1,0 +1,5 @@
+# Os scripts do Linux precisam de final de linha LF, senão o Docker não consegue rodar o gradlew.
+gradlew text eol=lf
+*.sh text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf

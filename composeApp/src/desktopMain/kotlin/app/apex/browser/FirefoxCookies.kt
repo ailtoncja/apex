@@ -8,7 +8,7 @@ import java.sql.DriverManager
 
 /** Lê os cookies do perfil do Firefox (ficam num SQLite sem cifra), sem precisar fechar o navegador. */
 object FirefoxCookies {
-    private val hosts = listOf("youtube.com", "google.com", "twitch.tv", "kick.com")
+    val DEFAULT_HOSTS = listOf("youtube.com", "google.com", "twitch.tv", "kick.com")
 
     /** Pasta do perfil que o Firefox usou por último, entre as pastas em [profilesRoot]. */
     fun findProfile(browser: InstalledBrowser, profilesRoot: File = defaultRoot()): File? {
@@ -25,7 +25,7 @@ object FirefoxCookies {
         return readProfile(profile)
     }
 
-    fun readProfile(profile: File): List<Cookie> {
+    fun readProfile(profile: File, hosts: List<String> = DEFAULT_HOSTS): List<Cookie> {
         val tmp = Files.createTempDirectory("apex-ff").toFile()
         try {
             // Trabalha numa cópia: o Firefox mantém o banco aberto e as gravações recentes ficam no arquivo -wal.

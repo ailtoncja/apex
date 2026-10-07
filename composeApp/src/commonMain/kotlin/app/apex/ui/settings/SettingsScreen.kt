@@ -256,7 +256,7 @@ private fun AccountRow(platform: Platform, account: Account?) {
                 ActionButton("Importar inscrições", {
                     scope.launch {
                         message = "Importando…"
-                        message = runCatching { "${app.importFollows(platform)} canais importados" }.getOrElse { it.message ?: "Não foi possível importar." }
+                        message = runCatching { app.importFollows(platform).summary }.getOrElse { "Não foi possível importar: ${it.message}" }
                         app.screens.subs.refreshFeed()
                     }
                 }, icon = Icons.Rounded.Download)

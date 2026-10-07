@@ -142,15 +142,29 @@ class AppContainer(
         data.setAccount(null, platform)
     }
 
-    /** Traz para o Apex os canais que a conta segue na plataforma. Devolve quantos vieram. */
-    suspend fun importFollows(platform: Platform): Int {
+    /** Resultado de [importFollows]: quantos canais vieram e, se couber, um aviso. */
+    class ImportResult(val count: Int, val note: String? = null) {
+        val summary: String get() = "$count canais importados" + (note?.let { " ($it)" } ?: "")
+    }
+
+    /** Traz para o Apex os canais que a conta segue (e, na Twitch, em que é inscrita) na plataforma. */
+    suspend fun importFollows(platform: Platform): ImportResult {
+        var note: String? = null
         val channels = when (platform) {
             Platform.YouTube -> youtube.subscribedChannels()
-            Platform.Twitch -> twitch.followedChannels(150).map { it.channel }
+            Platform.Twitch -> {
+                val follows = twitch.followedChannels()
+                if (!follows.complete) {
+                    note = "a Twitch só deixa ler 200 dos canais que você segue; se segue mais, os do meio da lista não vêm"
+                }
+                // Quem você é sub também entra, mesmo sem seguir.
+                val subs = runCatching { twitch.subscribedChannels() }.getOrDefault(emptyList())
+                (follows.channels + subs).map { it.channel }.distinctBy { it.id }
+            }
             Platform.Kick -> kick.followedChannels()
         }
         data.addSubscriptions(channels)
-        return channels.size
+        return ImportResult(channels.size, note)
     }
 
     /** Segue/deixa de seguir no app e, se houver conta do YouTube logada, também na conta. */

@@ -50,6 +50,9 @@ data class SearchFilters(
 
 enum class ChannelTab(val prefix: String) { Videos("UULF"), Lives("UULV") }
 
+/** A conta salva deixou de valer na plataforma (a pessoa precisa entrar de novo). */
+class SessionExpiredException(message: String) : Exception(message)
+
 class YouTubeSource(val tube: InnerTube) {
     private val gate = Semaphore(6)
 
@@ -150,6 +153,8 @@ class YouTubeSource(val tube: InnerTube) {
     /** Canais em que a conta está inscrita. */
     suspend fun subscribedChannels(): List<Channel> {
         val root = tube.call("browse") { put("browseId", "FEchannels") } ?: return emptyList()
+        // Sessão vencida: o YouTube devolve só o cabeçalho, sem conteúdo. Melhor avisar do que importar "0 canais" calado.
+        if (root["contents"] == null) throw SessionExpiredException("Sua sessão do YouTube expirou. Saia da conta e entre de novo.")
         val first = root.collect("channelRenderer", "gridChannelRenderer").mapNotNull { parseChannelRenderer(it.second) }
         val extra = mutableListOf<Channel>()
         var token = root.continuationToken()

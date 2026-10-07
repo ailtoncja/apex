@@ -4,9 +4,11 @@ import app.apex.browser.BrowserEngine
 import app.apex.browser.Browsers
 import app.apex.browser.ChromiumSession
 import app.apex.browser.FirefoxCookies
+import app.apex.browser.IsolatedFirefox
 import app.apex.browser.InstalledBrowser
 import app.apex.data.Account
 import app.apex.model.Platform
+import app.apex.source.CookieHygiene
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -29,11 +31,30 @@ class DesktopAccounts(private val dataDir: File) {
 
     private val browsers: List<InstalledBrowser> by lazy { Browsers.installed() }
 
+    init {
+        runCatching { cleanSavedJar() }
+    }
+
+    /** Logins feitos antes da limpeza guardaram centenas de cookies inúteis também no arquivo do yt-dlp; tira-os. */
+    private fun cleanSavedJar() {
+        val file = youtubeCookieFile.takeIf { it.isFile } ?: return
+        val lines = file.readLines()
+        val kept = lines.filter { l ->
+            if (l.isBlank() || (l.startsWith("#") && !l.startsWith("#HttpOnly_"))) return@filter true
+            val p = l.removePrefix("#HttpOnly_").split('\t')
+            if (p.size < 7) return@filter true
+            val domain = p[0].trimStart('.')
+            val isGoogle = domain == "google.com" || domain.endsWith(".google.com")
+            !CookieHygiene.isNoise(p[5], p[6].length) && (!isGoogle || p[5] in CookieHygiene.AUTH)
+        }
+        if (kept.size < lines.size) file.writeText(kept.joinToString("\n") + "\n")
+    }
+
     fun installedBrowsers(): List<BrowserOption> = browsers.map {
         BrowserOption(
             it.id, it.label,
             when (it.engine) {
-                BrowserEngine.Firefox -> "Usa o seu perfil do ${it.label}. Se você já estiver logado, o Apex importa na hora."
+                BrowserEngine.Firefox -> "Twitch e Kick: usa o seu perfil do ${it.label} e importa na hora se você já estiver logado. YouTube: abre uma janela separada, só do Apex."
                 BrowserEngine.Chromium -> "Abre uma janela separada do ${it.label}, só do Apex. Entre na conta lá e ela fecha sozinha."
             },
         )
@@ -59,6 +80,8 @@ class DesktopAccounts(private val dataDir: File) {
     }
 
     private suspend fun firefoxLogin(platform: Platform, browser: InstalledBrowser, onStatus: (String) -> Unit): Account? {
+        // O login do YouTube não pode vir do perfil do dia a dia: o Firefox aberto gira os cookies e a sessão copiada cai em minutos.
+        if (platform == Platform.YouTube) return firefoxIsolatedLogin(platform, browser, onStatus)
         accountFromCookies(platform, FirefoxCookies.read(browser))?.let {
             onStatus("Encontrei o seu login no ${browser.label}.")
             return it
@@ -68,6 +91,26 @@ class DesktopAccounts(private val dataDir: File) {
         while (coroutineContext.isActive) {
             delay(2_500)
             accountFromCookies(platform, runCatching { FirefoxCookies.read(browser) }.getOrDefault(emptyList()))?.let { return it }
+        }
+        return null
+    }
+
+    /** Abre o Firefox num perfil só do Apex, espera o login, lê os cookies e fecha a janela (e apaga o perfil). */
+    private suspend fun firefoxIsolatedLogin(platform: Platform, browser: InstalledBrowser, onStatus: (String) -> Unit): Account? {
+        onStatus("Abrindo o ${browser.label} numa janela separada, só do Apex…")
+        val profile = File(dataDir, "login-browser/${browser.id}-isolado")
+        IsolatedFirefox.open(browser.exe, profile, loginUrl(platform)).use { firefox ->
+            onStatus("Entre na sua conta na janela que abriu. O Apex detecta sozinho e fecha a janela.")
+            while (coroutineContext.isActive) {
+                delay(2_500)
+                val account = accountFromCookies(platform, firefox.cookies())
+                if (account != null) {
+                    // Deixa o Firefox terminar de gravar os cookies do YouTube e lê de novo.
+                    delay(3_000)
+                    return accountFromCookies(platform, firefox.cookies()) ?: account
+                }
+                if (!firefox.isRunning) return null
+            }
         }
         return null
     }
@@ -91,12 +134,15 @@ class DesktopAccounts(private val dataDir: File) {
         fun host(c: Cookie, vararg hosts: String) = c.domain.trimStart('.').let { d -> hosts.any { d == it || d.endsWith(".$it") } }
         return when (platform) {
             Platform.YouTube -> {
-                val yt = cookies.filter { host(it, "youtube.com") }
-                val google = cookies.filter { host(it, "google.com") }
+                // Só os cookies que autenticam: o perfil do navegador acumula centenas de "ST-…" (100 KB) que fazem o YouTube responder 413.
+                val yt = cookies.filter { host(it, "youtube.com") && !CookieHygiene.isNoise(it.name, it.value.length) }
+                val google = cookies.filter { host(it, "google.com") && it.name in CookieHygiene.AUTH }
                 val hasLogin = (yt + google).any { it.name == "SAPISID" || it.name == "__Secure-3PAPISID" }
-                if (!hasLogin) return null
+                // O navegador já passou pelo youtube.com depois de entrar (senão faltam os cookies do próprio YouTube).
+                val visitedYouTube = yt.any { it.name == "LOGIN_INFO" || it.name == "SID" || it.name == "__Secure-3PSID" }
+                if (!hasLogin || !visitedYouTube) return null
                 // O SAPISID costuma existir só no google.com; junta os dois (os do youtube.com vencem).
-                val header = (google + yt).associate { it.name to it.value }.entries.joinToString("; ") { "${it.key}=${it.value}" }
+                val header = CookieHygiene.cleanHeader((google + yt).associate { it.name to it.value }.entries.joinToString("; ") { "${it.key}=${it.value}" })
                 writeFilteredJar(youtubeCookieFile, (yt + google).map { it.line })
                 Account(Platform.YouTube, "Conta do Google", null, header)
             }

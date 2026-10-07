@@ -1,4 +1,4 @@
-package app.apex
+﻿package app.apex
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +61,12 @@ data class BrowserOption(val id: String, val label: String, val note: String)
 
 class UiState {
     var theater by mutableStateOf(false)
+
+    /** Tela cheia do player: só o vídeo, como o botão de tela cheia da Twitch e do YouTube. */
+    var playerFullscreen by mutableStateOf(false)
+
+    /** F11: a janela sem barra de título e sem a barra de tarefas, com o app inteiro visível. */
+    var windowFullscreen by mutableStateOf(false)
     var miniPlayerHidden by mutableStateOf(false)
     var typing by mutableStateOf(false)
     var chatVisible by mutableStateOf(true)
@@ -138,6 +144,24 @@ class AppContainer(
         ui.miniPlayerHidden = false
         session.open(media, upNext)
         nav.push(Route.Watch)
+    }
+
+    /** Liga/desliga a tela cheia do player. Ao sair, volta ao que era antes (janela normal, ou F11 se estava ligado). */
+    fun setPlayerFullscreen(on: Boolean) {
+        ui.playerFullscreen = on
+        system.setFullscreen(ui.playerFullscreen || ui.windowFullscreen)
+    }
+
+    /** F11. Dentro da tela cheia do player, o F11 sai de tudo. */
+    fun toggleWindowFullscreen() {
+        if (ui.playerFullscreen) {
+            ui.playerFullscreen = false
+            ui.windowFullscreen = false
+        } else {
+            ui.windowFullscreen = !ui.windowFullscreen
+            if (ui.windowFullscreen) toast("Tela cheia: aperte F11 para sair")
+        }
+        system.setFullscreen(ui.playerFullscreen || ui.windowFullscreen)
     }
 
     fun openChannel(channel: Channel) {

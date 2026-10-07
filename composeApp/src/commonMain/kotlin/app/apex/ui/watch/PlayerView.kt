@@ -33,7 +33,6 @@ import androidx.compose.material.icons.rounded.Crop169
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SkipNext
@@ -119,7 +118,7 @@ fun PlayerView(modifier: Modifier = Modifier, fullscreen: Boolean = false) {
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { if (menu != null) menu = null else player.togglePause() },
-                    onDoubleTap = { app.system.setFullscreen(!fullscreen) },
+                    onDoubleTap = { app.setPlayerFullscreen(!fullscreen) },
                 )
             },
     ) {
@@ -165,7 +164,7 @@ fun PlayerView(modifier: Modifier = Modifier, fullscreen: Boolean = false) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        IconBtn(Icons.Rounded.ArrowBack, "Sair da tela cheia", { app.system.setFullscreen(false) }, tint = Color.White)
+                        IconBtn(Icons.Rounded.ArrowBack, "Sair da tela cheia", { app.setPlayerFullscreen(false) }, tint = Color.White)
                         Text(current?.title.orEmpty(), color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                     }
                 }
@@ -232,15 +231,12 @@ private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: Player
                 setMenu(if (menu != null) null else PlayerMenu.Main)
             }
             if (!fullscreen) {
-                PlayerBtn(Icons.Rounded.PictureInPictureAlt, "Mini player") {
-                    if (app.nav.current is Route.Watch) app.nav.back()
-                }
                 PlayerBtn(Icons.Rounded.Crop169, "Modo cinema", tint = if (app.ui.theater) ApexColors.Accent else Color.White) {
                     app.ui.theater = !app.ui.theater
                 }
             }
             PlayerBtn(if (fullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen, if (fullscreen) "Sair da tela cheia" else "Tela cheia") {
-                app.system.setFullscreen(!fullscreen)
+                app.setPlayerFullscreen(!fullscreen)
             }
         }
     }

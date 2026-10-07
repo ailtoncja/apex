@@ -57,11 +57,15 @@ import kotlinx.coroutines.delay
 @Composable
 fun ApexApp() {
     val app = LocalApp.current
-    val fullscreen by app.system.fullscreen.collectAsState()
+    val fullscreen = app.ui.playerFullscreen
     val settings by app.data.settings.collectAsState()
     val route = app.nav.current
     val focus = androidx.compose.runtime.remember { FocusRequester() }
     LaunchedEffect(app.ui.typing, route, fullscreen) { if (!app.ui.typing) runCatching { focus.requestFocus() } }
+    // A tela cheia do player só existe na página do vídeo.
+    LaunchedEffect(route) { if (route !is Route.Watch && app.ui.playerFullscreen) app.setPlayerFullscreen(false) }
+    // Modo cinema: a faixa do player vai de ponta a ponta e toda preta, como no YouTube (sem a barra lateral e com o topo preto).
+    val theaterBand = route is Route.Watch && app.ui.theater
 
     ApexTheme {
         Surface(color = ApexColors.Background, contentColor = ApexColors.OnSurface) {
@@ -70,9 +74,11 @@ fun ApexApp() {
                     WatchScreen(fullscreen = true)
                 } else {
                     Row(Modifier.fillMaxSize()) {
-                        Sidebar(expanded = !settings.sidebarCollapsed)
+                        if (!theaterBand) Sidebar(expanded = !settings.sidebarCollapsed)
                         Column(Modifier.weight(1f)) {
-                            TopBar(onToggleSidebar = { app.data.updateSettings { it.copy(sidebarCollapsed = !it.sidebarCollapsed) } })
+                            Box(if (theaterBand) Modifier.background(Color.Black) else Modifier) {
+                                TopBar(onToggleSidebar = { app.data.updateSettings { it.copy(sidebarCollapsed = !it.sidebarCollapsed) } })
+                            }
                             UpdateBanner()
                             Box(Modifier.weight(1f).fillMaxSize()) { Content(route) }
                         }
@@ -133,13 +139,14 @@ private fun androidx.compose.foundation.layout.BoxScope.ToastHost() {
 /** Atalhos de teclado: valem quando há algo tocando e o usuário não está digitando. */
 private fun handleShortcut(app: AppContainer, event: KeyEvent): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
-    if (event.key == Key.Escape && app.system.fullscreen.value) {
-        app.system.setFullscreen(false)
+    // Esc sai da tela cheia do player (o F11 só sai com o F11, como no navegador).
+    if (event.key == Key.Escape && app.ui.playerFullscreen) {
+        app.setPlayerFullscreen(false)
         return true
     }
-    // F11 como em qualquer programa do Windows: tela cheia de qualquer tela (vale até com o cursor na busca).
+    // F11 como em qualquer programa do Windows: tela cheia da janela de qualquer tela (vale até com o cursor na busca).
     if (event.key == Key.F11) {
-        app.system.setFullscreen(!app.system.fullscreen.value)
+        app.toggleWindowFullscreen()
         return true
     }
     if (app.ui.typing) return false
@@ -152,7 +159,7 @@ private fun handleShortcut(app: AppContainer, event: KeyEvent): Boolean {
     return when (event.key) {
         Key.Spacebar, Key.K -> { player.togglePause(); true }
         Key.M -> { player.setMuted(!state.muted); true }
-        Key.F -> { if (onWatch) { app.system.setFullscreen(!app.system.fullscreen.value); true } else false }
+        Key.F -> { if (onWatch) { app.setPlayerFullscreen(!app.ui.playerFullscreen); true } else false }
         Key.T -> { if (onWatch) { app.ui.theater = !app.ui.theater; true } else false }
         Key.DirectionLeft -> { if (!live) player.seekBy(-5_000); true }
         Key.DirectionRight -> { if (!live) player.seekBy(5_000); true }

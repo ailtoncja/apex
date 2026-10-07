@@ -18,6 +18,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
+import app.apex.source.SearchDate
+import app.apex.source.SearchSort
+import app.apex.state.CategoryTab
+import kotlinx.coroutines.flow.combine
+import app.apex.state.interleave
+import app.apex.state.toggled
+import app.apex.state.describe
+import app.apex.state.allows
+import app.apex.state.youtubeGameCategories
+import app.apex.state.YOUTUBE_TOPIC_CATEGORIES
 import app.apex.ui.components.FilterTextField
 import app.apex.ui.components.ChipMenu
 import app.apex.ui.components.ActionButton
@@ -43,37 +53,38 @@ import app.apex.ui.components.fullSpan
 import app.apex.ui.components.skeletons
 import app.apex.ui.components.videoItems
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LiveScreen(initial: LiveFilter) {
     val app = LocalApp.current
     val live = app.screens.live
-    LaunchedEffect(initial) { live.filter = initial }
-    val filter = live.filter
-    LaunchedEffect(filter) { live.start() }
+    // Só uma plataforma vinda da rota muda o filtro; "Tudo" mantém o que a pessoa já tinha ligado (ao voltar de um vídeo, por exemplo).
+    LaunchedEffect(initial) { if (initial != LiveFilter.All) live.select(initial) }
+    val platforms = live.platforms
+    LaunchedEffect(platforms) { live.start() }
 
     val state = rememberLazyGridState()
     val settings by app.data.settings.collectAsState()
     val blocked = settings.blockedChannels
-    val followed by live.followed.collectAsState()
-    val list = live.current()
-    val items by list.items.collectAsState()
-    val loading by list.loading.collectAsState()
-    val error by list.error.collectAsState()
-    val loaded by list.loaded.collectAsState()
-    OnNearEnd(state) { list.loadMore() }
+    val followedAll by live.followed.collectAsState()
+    // "Seus canais ao vivo" muda junto com as plataformas escolhidas.
+    val followed = followedAll.withoutBlocked(blocked).filter { platforms.allows(it.platform) }
+    val lists = live.lists()
+    val items by remember(lists) { combine(lists.map { it.items }) { parts -> interleave(parts.toList()) } }.collectAsState(emptyList())
+    val loading by remember(lists) { combine(lists.map { it.loading }) { parts -> parts.any { it } } }.collectAsState(false)
+    val loaded by remember(lists) { combine(lists.map { it.loaded }) { parts -> parts.all { it } } }.collectAsState(false)
+    val error by remember(lists) { combine(lists.map { it.error }) { parts -> parts.firstNotNullOfOrNull { it } } }.collectAsState(null)
+    OnNearEnd(state) { lists.forEach { it.loadMore() } }
 
     ApexGrid(state) {
         fullSpan("filters") {
-            LazyRow(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(LiveFilter.entries.toList()) { f ->
-                    val dot = when (f) {
-                        LiveFilter.All -> null
-                        LiveFilter.YouTube -> Platform.YouTube.color()
-                        LiveFilter.Twitch -> Platform.Twitch.color()
-                        LiveFilter.Kick -> Platform.Kick.color()
-                    }
-                    ApexChip(f.label, filter == f, { live.filter = f }, dot = dot)
-                }
+            // Dá para ligar duas plataformas ao mesmo tempo (YouTube + Twitch, por exemplo); "Tudo" desliga os filtros.
+            FlowRow(
+                Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ApexChip("Tudo", platforms.isEmpty(), { live.platforms = emptySet() })
+                Platform.entries.forEach { p -> ApexChip(p.label, p in platforms, { live.platforms = platforms.toggled(p) }, dot = p.color()) }
             }
         }
 
@@ -81,21 +92,21 @@ fun LiveScreen(initial: LiveFilter) {
             fullSpan("followed") {
                 Column {
                     SectionTitle("Seus canais ao vivo", Modifier.padding(bottom = 12.dp), "${followed.size} no ar agora")
-                    MediaRow(followed.withoutBlocked(blocked))
+                    MediaRow(followed)
                 }
             }
         }
 
-        if (filter == LiveFilter.All || filter == LiveFilter.Twitch) {
-            fullSpan("tw-cats") { CategoryRow("Categorias na Twitch", Platform.Twitch) }
-        }
-        if (filter == LiveFilter.All || filter == LiveFilter.Kick) {
-            fullSpan("kick-cats") { CategoryRow("Categorias na Kick", Platform.Kick) }
+        if (platforms.allows(Platform.Twitch)) fullSpan("tw-cats") { CategoryRow("Categorias na Twitch", Platform.Twitch) }
+        if (platforms.allows(Platform.Kick)) fullSpan("kick-cats") { CategoryRow("Categorias na Kick", Platform.Kick) }
+        if (platforms.allows(Platform.YouTube)) {
+            fullSpan("yt-games") { YouTubeCategoryRow("Jogos no YouTube", games = true) }
+            fullSpan("yt-topics") { YouTubeCategoryRow("Assuntos no YouTube", games = false) }
         }
 
         fullSpan("top-title") {
             SectionTitle(
-                if (filter == LiveFilter.All) "Em alta ao vivo" else "Em alta na ${filter.label}",
+                when (platforms.size) { 0 -> "Em alta ao vivo"; 1 -> "Em alta na ${platforms.first().label}"; else -> "Em alta: ${platforms.describe()}" },
                 Modifier.padding(top = 4.dp),
             )
         }
@@ -103,7 +114,7 @@ fun LiveScreen(initial: LiveFilter) {
         when {
             shown.isNotEmpty() -> videoItems(shown)
             !loaded || loading -> skeletons(12)
-            error != null -> fullSpan("err") { ErrorBox(error.orEmpty(), { list.refresh() }) }
+            error != null -> fullSpan("err") { ErrorBox(error.orEmpty(), { lists.forEach { it.refresh() } }) }
             else -> fullSpan("empty") {
                 EmptyState(Icons.Rounded.Sensors, "Ninguém ao vivo", "Nenhuma live encontrada agora. Tente atualizar em instantes.")
             }
@@ -128,29 +139,49 @@ private fun CategoryRow(title: String, platform: Platform) {
     }
 }
 
+/** Categorias do YouTube: os jogos mais assistidos (com a capa que a Twitch tem) e assuntos como Música e Futebol. */
+@Composable
+private fun YouTubeCategoryRow(title: String, games: Boolean) {
+    val app = LocalApp.current
+    val twitchCats by app.screens.live.twitchCategories.value.collectAsState()
+    LaunchedEffect(games) { if (games) app.screens.live.twitchCategories.loadIfNeeded() }
+    val cats = if (games) youtubeGameCategories(twitchCats) else YOUTUBE_TOPIC_CATEGORIES
+    if (cats.isEmpty()) return
+    Column {
+        SectionTitle(title, Modifier.padding(bottom = 12.dp))
+        LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(cats, key = { it.id }) { c -> CategoryCard(c, { app.nav.push(Route.Category(Platform.YouTube, c)) }, Modifier.width(136.dp)) }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CategoryScreen(platform: Platform, category: app.apex.model.LiveCategory) {
     val app = LocalApp.current
     val cat = remember(platform, category.id) { app.screens.category(platform, category) }
-    LaunchedEffect(cat) { cat.streams.loadIfNeeded() }
-    val items by cat.streams.items.collectAsState()
-    val loading by cat.streams.loading.collectAsState()
-    val error by cat.streams.error.collectAsState()
+    val list = cat.current
+    LaunchedEffect(cat, list) { list.loadIfNeeded() }
+    val items by list.items.collectAsState()
+    val loading by list.loading.collectAsState()
+    val loaded by list.loaded.collectAsState()
+    val error by list.error.collectAsState()
     val settings by app.data.settings.collectAsState()
     val state = rememberLazyGridState()
-    OnNearEnd(state) { cat.streams.loadMore() }
+    OnNearEnd(state) { list.loadMore() }
 
+    val videosTab = platform == Platform.YouTube && cat.tab == CategoryTab.Videos
     val shown = cat.visible(items.withoutBlocked(settings.blockedChannels))
     // Com o filtro ligado a primeira página pode render pouco: busca as páginas seguintes (a Kick entrega por páginas).
-    LaunchedEffect(shown.size, items.size, loading) { if (shown.size < 12 && !loading && cat.streams.hasMore) cat.streams.loadMore() }
-    val filtering = cat.query.isNotBlank() || cat.range != ViewerRange.Any
+    LaunchedEffect(shown.size, items.size, loading, list) { if (shown.size < 12 && !loading && list.hasMore) list.loadMore() }
+    val filtering = cat.query.isNotBlank() || (!videosTab && cat.range != ViewerRange.Any)
 
     ApexGrid(state) {
         fullSpan("title") {
             SectionTitle(
                 category.name, Modifier.padding(top = 12.dp, bottom = 6.dp),
-                "${platform.label} • ao vivo" + if (shown.isNotEmpty()) " • ${shown.size} ${if (shown.size == 1) "live" else "lives"}" else "",
+                "${platform.label} • ${if (videosTab) "vídeos" else "ao vivo"}" +
+                    if (shown.isNotEmpty()) " • ${shown.size} ${if (videosTab) (if (shown.size == 1) "vídeo" else "vídeos") else (if (shown.size == 1) "live" else "lives")}" else "",
             )
         }
         fullSpan("filters") {
@@ -158,21 +189,29 @@ fun CategoryScreen(platform: Platform, category: app.apex.model.LiveCategory) {
                 Modifier.fillMaxWidth().padding(bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                ChipMenu("Idioma", CATEGORY_LANGUAGES, cat.language, { it.label }) { cat.selectLanguage(it) }
-                ChipMenu("Ordem", ViewerSort.entries, cat.sort, { it.label }) { cat.selectSort(it) }
-                ChipMenu("Público", ViewerRange.entries, cat.range, { it.label }) { cat.range = it }
+                if (platform == Platform.YouTube) CategoryTab.entries.forEach { t -> ApexChip(t.label, cat.tab == t, { cat.selectTab(t) }) }
+                if (cat.hasLanguage) {
+                    ChipMenu("Idioma", CATEGORY_LANGUAGES, cat.language, { it.label }) { cat.selectLanguage(it) }
+                    ChipMenu("Ordem", ViewerSort.entries, cat.sort, { it.label }) { cat.selectSort(it) }
+                }
+                if (videosTab) {
+                    ChipMenu("Ordenar", listOf(SearchSort.Relevance, SearchSort.UploadDate, SearchSort.Views, SearchSort.Rating), cat.videoSort, { it.label }) { cat.selectVideoSort(it) }
+                    ChipMenu("Data", SearchDate.entries, cat.videoDate, { it.label }) { cat.selectVideoDate(it) }
+                } else {
+                    ChipMenu("Público", ViewerRange.entries, cat.range, { it.label }) { cat.range = it }
+                }
                 FilterTextField(cat.query, { cat.query = it }, "Buscar nesta categoria", Modifier.width(260.dp))
             }
         }
         when {
             shown.isNotEmpty() -> videoItems(shown)
-            loading || !cat.streams.loaded.value -> skeletons(12)
-            error != null -> fullSpan("err") { ErrorBox(error.orEmpty(), { cat.streams.refresh() }) }
+            loading || !loaded -> skeletons(12)
+            error != null -> fullSpan("err") { ErrorBox(error.orEmpty(), { list.refresh() }) }
             else -> fullSpan("empty") {
                 EmptyState(
-                    Icons.Rounded.Sensors, "Sem lives",
-                    if (filtering || cat.language.code != null) "Nenhuma live com esses filtros agora. Tente outro idioma ou outra faixa de público."
-                    else "Nenhuma live nesta categoria agora.",
+                    Icons.Rounded.Sensors, if (videosTab) "Sem vídeos" else "Sem lives",
+                    if (filtering || (cat.hasLanguage && cat.language.code != null)) "Nada com esses filtros agora. Tente outro idioma ou outra faixa de público."
+                    else if (videosTab) "Nenhum vídeo encontrado para este assunto." else "Nenhuma live nesta categoria agora.",
                     action = if (filtering) {
                         { ActionButton("Limpar filtros", { cat.query = ""; cat.range = ViewerRange.Any }) }
                     } else null,

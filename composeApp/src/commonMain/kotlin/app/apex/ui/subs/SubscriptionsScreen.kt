@@ -37,8 +37,10 @@ import app.apex.model.Platform
 import app.apex.nav.Route
 import app.apex.state.matchSubscriptions
 import app.apex.state.matchesWords
-import app.apex.state.channelsOn
-import app.apex.state.mediaOn
+import app.apex.state.channelsIn
+import app.apex.state.describe
+import app.apex.state.mediaIn
+import app.apex.state.toggled
 import app.apex.state.searchWords
 import app.apex.state.withoutBlocked
 import app.apex.theme.ApexColors
@@ -74,7 +76,8 @@ fun SubscriptionsScreen() {
     val liveKeys by subsState.liveChannels.collectAsState()
     val liveNow by subsState.liveNow.collectAsState()
     var requestedTab by remember { mutableStateOf(SubsTab.News) }
-    var platform by remember { mutableStateOf<Platform?>(null) }
+    // Dá para ligar mais de uma plataforma ao mesmo tempo (vazio = todas).
+    var platforms by remember { mutableStateOf<Set<Platform>>(emptySet()) }
     var query by remember { mutableStateOf("") }
     val state = rememberLazyGridState()
     val blocked = settings.blockedChannels
@@ -82,10 +85,10 @@ fun SubscriptionsScreen() {
     val searching = words.isNotEmpty()
 
     // Tudo abaixo respeita a plataforma escolhida e as palavras digitadas.
-    val subsOnPlatform = subs.channelsOn(platform)
+    val subsOnPlatform = subs.channelsIn(platforms)
     val channelsShown = subsOnPlatform.filter { matchesWords(words, it.name, it.handle) }
-    val newsShown = feed.items.withoutBlocked(blocked).mediaOn(platform).filter { matchesWords(words, it.title, it.channel?.name, it.category) }
-    val liveShown = liveNow.withoutBlocked(blocked).mediaOn(platform).filter { matchesWords(words, it.title, it.channel?.name, it.category) }
+    val newsShown = feed.items.withoutBlocked(blocked).mediaIn(platforms).filter { matchesWords(words, it.title, it.channel?.name, it.category) }
+    val liveShown = liveNow.withoutBlocked(blocked).mediaIn(platforms).filter { matchesWords(words, it.title, it.channel?.name, it.category) }
 
     // Canais que a pessoa paga (sub da Twitch, membro do YouTube) ficam separados dos outros.
     val supported = channelsShown.filter { it.support != null }
@@ -109,10 +112,10 @@ fun SubscriptionsScreen() {
                     Modifier.fillMaxWidth().padding(top = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    ApexChip("Todas (${subs.size})", platform == null, { platform = null })
+                    ApexChip("Todas (${subs.size})", platforms.isEmpty(), { platforms = emptySet() })
                     PLATFORMS.forEach { p ->
                         val count = subs.count { it.platform == p }
-                        if (count > 0) ApexChip("${p.label} ($count)", platform == p, { platform = if (platform == p) null else p }, dot = p.color())
+                        if (count > 0) ApexChip("${p.label} ($count)", p in platforms, { platforms = platforms.toggled(p) }, dot = p.color())
                     }
                     FilterTextField(query, { query = it }, "Buscar nas suas inscrições (canal ou palavra-chave)", Modifier.width(380.dp))
                 }
@@ -155,14 +158,14 @@ fun SubscriptionsScreen() {
             tab == SubsTab.News -> {
                 if (newsShown.isNotEmpty()) videoItems(newsShown)
                 else if (feedLoading && !searching) skeletons(12)
-                else fullSpan("nofeed") { NothingFound(searching, query, platform, "Sem vídeos novos", newsHint(subs, platform)) }
+                else fullSpan("nofeed") { NothingFound(searching, query, platforms, "Sem vídeos novos", newsHint(subs, platforms)) }
                 if (feedLoading && newsShown.isNotEmpty()) fullSpan("loading") {
                     Text("Atualizando…", color = ApexColors.Muted, style = MaterialTheme.typography.bodySmall)
                 }
             }
             tab == SubsTab.Live -> {
                 if (liveShown.isNotEmpty()) videoItems(liveShown)
-                else fullSpan("nolive") { NothingFound(searching, query, platform, "Ninguém ao vivo", "Nenhum dos seus canais está transmitindo agora.") }
+                else fullSpan("nolive") { NothingFound(searching, query, platforms, "Ninguém ao vivo", "Nenhum dos seus canais está transmitindo agora.") }
             }
             tab == SubsTab.Supported -> {
                 if (supported.isNotEmpty()) {
@@ -181,10 +184,10 @@ fun SubscriptionsScreen() {
                         fullSpan("supported-news") { SectionTitle("Novidades dos canais apoiados", Modifier.padding(top = 16.dp, bottom = 4.dp)) }
                         videoItems(mine)
                     }
-                } else fullSpan("nosupported") { NothingFound(searching, query, platform, "Nenhum canal apoiado", "Os canais que você paga (sub da Twitch, membro do YouTube) aparecem aqui.") }
+                } else fullSpan("nosupported") { NothingFound(searching, query, platforms, "Nenhum canal apoiado", "Os canais que você paga (sub da Twitch, membro do YouTube) aparecem aqui.") }
             }
             else -> {
-                if (channelsShown.isEmpty()) fullSpan("nochannels") { NothingFound(searching, query, platform, "Nenhum canal", "Nenhum canal para mostrar.") }
+                if (channelsShown.isEmpty()) fullSpan("nochannels") { NothingFound(searching, query, platforms, "Nenhum canal", "Nenhum canal para mostrar.") }
                 // Os canais separados por plataforma (os que a pessoa apoia vêm primeiro em cada grupo).
                 PLATFORMS.forEach { p ->
                     val inGroup = channelsShown.filter { it.platform == p }.sortedByDescending { it.support != null }
@@ -206,19 +209,19 @@ fun SubscriptionsScreen() {
     }
 }
 
-private fun newsHint(subs: List<Channel>, platform: Platform?): String = when {
-    platform == Platform.Twitch || platform == Platform.Kick -> "Vídeos novos existem só para canais do YouTube; Twitch e Kick ficam na aba Ao vivo."
+private fun newsHint(subs: List<Channel>, platforms: Set<Platform>): String = when {
+    platforms.isNotEmpty() && Platform.YouTube !in platforms -> "Vídeos novos existem só para canais do YouTube; Twitch e Kick ficam na aba Ao vivo."
     subs.none { it.platform == Platform.YouTube } -> "Os vídeos novos aparecem aqui para canais do YouTube. Twitch e Kick ficam na aba Ao vivo."
     else -> "Nada novo por enquanto."
 }
 
 @Composable
-private fun NothingFound(searching: Boolean, query: String, platform: Platform?, emptyTitle: String, emptyMessage: String) {
+private fun NothingFound(searching: Boolean, query: String, platforms: Set<Platform>, emptyTitle: String, emptyMessage: String) {
     val app = LocalApp.current
     if (searching) {
         EmptyState(
             Icons.Rounded.Search, "Nada encontrado nas suas inscrições",
-            "Nenhum resultado para “$query”" + (platform?.let { " em ${it.label}" } ?: "") + ". Quer procurar no YouTube, na Twitch e na Kick?",
+            "Nenhum resultado para “$query”" + (if (platforms.isEmpty()) "" else " em ${platforms.describe()}") + ". Quer procurar no YouTube, na Twitch e na Kick?",
             action = { ActionButton("Buscar “$query” em tudo", { app.search(query) }, primary = true) },
         )
     } else EmptyState(Icons.Rounded.Subscriptions, emptyTitle, emptyMessage)

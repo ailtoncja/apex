@@ -81,7 +81,14 @@ enum class ViewerRange(val label: String, val min: Long, val max: Long) {
     Big("Mais de 10 mil", 10_000, Long.MAX_VALUE),
 }
 
-/** Lives de uma categoria com filtro de idioma, ordem e faixa de espectadores e busca pelo nome. */
+/** As duas abas de uma categoria do YouTube (a Twitch e a Kick só têm lives). */
+enum class CategoryTab(val label: String) { Live("Ao vivo"), Videos("Vídeos") }
+
+/**
+ * Lives de uma categoria com filtro de idioma, ordem e faixa de espectadores e busca pelo nome.
+ * No YouTube a categoria é uma busca pronta (ver [youtubeCategoryQueries]): a aba "Ao vivo" lista as lives e a aba "Vídeos" os vídeos,
+ * com ordem e data da pesquisa do YouTube.
+ */
 class CategoryState(private val app: AppContainer, val platform: Platform, val category: LiveCategory) {
     var language by mutableStateOf(CATEGORY_LANGUAGES.first())
         private set
@@ -90,12 +97,50 @@ class CategoryState(private val app: AppContainer, val platform: Platform, val c
     var range by mutableStateOf(ViewerRange.Any)
     var query by mutableStateOf("")
 
+    var tab by mutableStateOf(CategoryTab.Live)
+        private set
+    var videoSort by mutableStateOf(SearchSort.Relevance)
+        private set
+    var videoDate by mutableStateOf(SearchDate.Any)
+        private set
+
     val streams = Paged<Media>(app.scope, { it.key }) { token ->
         when (platform) {
             Platform.Twitch -> Page(app.twitch.streamsByCategory(category.name, 100, language.code?.uppercase(), sort == ViewerSort.Least), null)
             Platform.Kick -> app.kick.lives(language.code, category.id, sort == ViewerSort.Least, token).let { Page(it.items, it.next) }
-            Platform.YouTube -> Page(emptyList(), null)
+            Platform.YouTube -> app.youtube.search(youtubeCategoryQueries(category).first, SearchFilters(liveOnly = true), token)
+                .let { Page(it.videos, it.continuation) }
         }
+    }
+
+    /** Só no YouTube: os vídeos do assunto. */
+    val videos = Paged<Media>(app.scope, { it.key }) { token ->
+        app.youtube.search(youtubeCategoryQueries(category).second, SearchFilters(sort = videoSort, date = videoDate), token)
+            .let { Page(it.videos, it.continuation) }
+    }
+
+    /** A lista que está na tela agora. */
+    val current: Paged<Media> get() = if (platform == Platform.YouTube && tab == CategoryTab.Videos) videos else streams
+
+    /** O idioma e a ordem por público só existem na Twitch e na Kick; o YouTube não filtra a busca por idioma. */
+    val hasLanguage: Boolean get() = platform != Platform.YouTube
+
+    fun selectTab(value: CategoryTab) {
+        if (value == tab) return
+        tab = value
+        current.loadIfNeeded()
+    }
+
+    fun selectVideoSort(value: SearchSort) {
+        if (value == videoSort) return
+        videoSort = value
+        videos.refresh()
+    }
+
+    fun selectVideoDate(value: SearchDate) {
+        if (value == videoDate) return
+        videoDate = value
+        videos.refresh()
     }
 
     fun selectLanguage(value: CategoryLanguage) {
@@ -113,9 +158,12 @@ class CategoryState(private val app: AppContainer, val platform: Platform, val c
     /** O que aparece: a faixa de espectadores e as palavras da busca (no título, no canal e na categoria; sem ligar para acentos). */
     fun visible(items: List<Media>): List<Media> {
         val words = searchWords(query)
+        // A faixa de público vale para lives; na aba de vídeos o número é de visualizações, então não filtra.
+        val byAudience = current === streams
         return items.filter { m ->
             val viewers = m.viewCount ?: 0
-            viewers >= range.min && (viewers < range.max || range.max == Long.MAX_VALUE) && matchesWords(words, m.title, m.channel?.name, m.category)
+            (!byAudience || (viewers >= range.min && (viewers < range.max || range.max == Long.MAX_VALUE))) &&
+                matchesWords(words, m.title, m.channel?.name, m.category)
         }
     }
 }
@@ -168,6 +216,9 @@ class HomeState(private val app: AppContainer) {
         discoverPage(token)
     }
 
+    /** "Em alta": os mais vistos da semana em vários assuntos (sem olhar o que a pessoa assistiu). */
+    val trending = Paged<Media>(app.scope, { it.key }) { trendingPage() }
+
     private val topicLists = HashMap<String, Paged<Media>>()
 
     fun topicList(topic: HomeTopic): Paged<Media> = topicLists.getOrPut(topic.label) {
@@ -190,6 +241,7 @@ class HomeState(private val app: AppContainer) {
     fun refresh() {
         refreshLive()
         if (app.tube.loggedIn) recommendations.refresh() else discover.refresh()
+        if (trending.loaded.value) trending.refresh()
         app.screens.subs.refreshFeed()
         topicLists.values.forEach { it.refresh() }
     }
@@ -226,6 +278,10 @@ class HomeState(private val app: AppContainer) {
                 if (merged.isNotEmpty()) return Page(merged, null)
             }
         }
+        return trendingPage()
+    }
+
+    private suspend fun trendingPage(): Page<Media> {
         val lists = coroutineScope {
             DISCOVER_QUERIES.map { q ->
                 async {
@@ -274,7 +330,8 @@ suspend fun loadFollowedLive(app: AppContainer): List<Media> = coroutineScope {
 // ---------------------------------------------------------------------------------------------
 
 class LiveState(private val app: AppContainer) {
-    var filter by mutableStateOf(LiveFilter.All)
+    /** Plataformas escolhidas (vazio = todas); dá para ligar duas ao mesmo tempo. */
+    var platforms by mutableStateOf<Set<Platform>>(emptySet())
 
     private val _followed = MutableStateFlow<List<Media>>(emptyList())
     val followed: StateFlow<List<Media>> = _followed.asStateFlow()
@@ -305,21 +362,27 @@ class LiveState(private val app: AppContainer) {
         Page(page.videos, page.continuation)
     }
 
-    fun current(): Paged<Media> = when (filter) {
-        LiveFilter.All -> all
-        LiveFilter.YouTube -> youtube
-        LiveFilter.Twitch -> twitch
-        LiveFilter.Kick -> kick
+    /** As listas que formam a tela para as plataformas escolhidas (a mistura das três, ou uma lista por plataforma). */
+    fun lists(): List<Paged<Media>> =
+        if (platforms.isEmpty()) listOf(all)
+        else platforms.map { p -> when (p) { Platform.YouTube -> youtube; Platform.Twitch -> twitch; Platform.Kick -> kick } }
+
+    /** O que vem escolhido da rota (Ao vivo › Twitch…) vira o conjunto de plataformas. */
+    fun select(filter: LiveFilter) {
+        platforms = when (filter) {
+            LiveFilter.All -> emptySet()
+            LiveFilter.YouTube -> setOf(Platform.YouTube)
+            LiveFilter.Twitch -> setOf(Platform.Twitch)
+            LiveFilter.Kick -> setOf(Platform.Kick)
+        }
     }
 
     private var started = false
 
     fun start() {
-        current().loadIfNeeded()
-        if (filter != LiveFilter.YouTube) {
-            twitchCategories.loadIfNeeded()
-            kickCategories.loadIfNeeded()
-        }
+        lists().forEach { it.loadIfNeeded() }
+        if (platforms.allows(Platform.Twitch)) twitchCategories.loadIfNeeded()
+        if (platforms.allows(Platform.Kick)) kickCategories.loadIfNeeded()
         if (!started) {
             started = true
             app.scope.launch { _followed.value = loadFollowedLive(app) }
@@ -328,7 +391,7 @@ class LiveState(private val app: AppContainer) {
 
     fun refresh() {
         app.scope.launch { _followed.value = loadFollowedLive(app) }
-        current().refresh()
+        lists().forEach { it.refresh() }
         twitchCategories.reload()
         kickCategories.reload()
     }
@@ -380,10 +443,12 @@ class SubscriptionsState(private val app: AppContainer) {
 
 // ---------------------------------------------------------------------------------------------
 
-enum class SearchTab(val label: String) { All("Tudo"), YouTube("YouTube"), Twitch("Twitch"), Kick("Kick"), Subs("Inscrições") }
-
 class SearchState(private val app: AppContainer, val query: String, val filters: SearchFilters) {
-    var tab by mutableStateOf(SearchTab.All)
+    /** As plataformas ligadas (vazio = todas); dá para ligar mais de uma, e "Inscrições" combina com elas. */
+    var platforms by mutableStateOf<Set<Platform>>(emptySet())
+
+    /** Só o que vem dos canais que a pessoa segue. */
+    var onlySubs by mutableStateOf(false)
 
     private val _ytChannels = MutableStateFlow<List<Channel>>(emptyList())
     val ytChannels: StateFlow<List<Channel>> = _ytChannels.asStateFlow()

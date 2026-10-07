@@ -162,4 +162,7 @@ data class AppSettings(
     val twitchLanguage: String = "PT",
     val blockedChannels: List<String> = emptyList(),
     val searchHistory: List<String> = emptyList(),
+    /** Filtros da tela inicial (nomes de HomeSource e de Platform); vazio = tudo. Ficam só neste aparelho. */
+    val homeSources: List<String> = emptyList(),
+    val homePlatforms: List<String> = emptyList(),
 )

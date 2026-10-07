@@ -52,7 +52,9 @@ import app.apex.source.SearchFilters
 import app.apex.source.SearchSort
 import app.apex.source.SearchType
 import app.apex.state.SearchState
-import app.apex.state.SearchTab
+import app.apex.state.allows
+import app.apex.state.describe
+import app.apex.state.toggled
 import app.apex.state.interleave
 import app.apex.state.matchSubscriptions
 import app.apex.state.withoutBlocked
@@ -94,32 +96,35 @@ fun SearchScreen(route: Route.Search) {
     val subs by app.data.subscriptions.collectAsState()
     val feed by app.data.feed.collectAsState()
     val liveNow by app.screens.subs.liveNow.collectAsState()
-    val tab = st.tab
+    val platforms = st.platforms
+    val onlySubs = st.onlySubs
+    // Com uma plataforma só, a lista mostra mais resultados dela; com várias (ou todas), um pouco de cada.
+    val single = platforms.size == 1
     val listState = rememberLazyListState()
-    OnNearEnd(listState) { if (tab == SearchTab.All || tab == SearchTab.YouTube) st.youtube.loadMore() }
     var showFilters by remember { mutableStateOf(false) }
 
-    val showYt = tab == SearchTab.All || tab == SearchTab.YouTube
-    val showTw = tab == SearchTab.All || tab == SearchTab.Twitch
-    val showKick = tab == SearchTab.All || tab == SearchTab.Kick
+    val showYt = platforms.allows(Platform.YouTube)
+    val showTw = platforms.allows(Platform.Twitch)
+    val showKick = platforms.allows(Platform.Kick)
+    OnNearEnd(listState) { if (showYt && !onlySubs) st.youtube.loadMore() }
 
     // O que a pessoa já segue e combina com a busca (canais pelo nome; vídeos e lives por título, canal e categoria).
-    val mine = remember(route.query, subs, feed, liveNow) { matchSubscriptions(route.query, subs, liveNow + feed.items) }
+    val mine = remember(route.query, subs, feed, liveNow, platforms) { matchSubscriptions(route.query, subs, liveNow + feed.items, platforms) }
     val mineMedia = mine.media.withoutBlocked(blocked)
 
     val channelLists = listOf(
-        if (showYt) ytChannels.take(if (tab == SearchTab.All) 3 else 8).map { it to false } else emptyList(),
-        if (showTw) twChannels.take(if (tab == SearchTab.All) 3 else 8).map { it.channel to (it.live != null) } else emptyList(),
-        if (showKick) kickChannels.take(if (tab == SearchTab.All) 3 else 8).map { it.channel to (it.live != null) } else emptyList(),
+        if (showYt) ytChannels.take(if (single) 8 else 3).map { it to false } else emptyList(),
+        if (showTw) twChannels.take(if (single) 8 else 3).map { it.channel to (it.live != null) } else emptyList(),
+        if (showKick) kickChannels.take(if (single) 8 else 3).map { it.channel to (it.live != null) } else emptyList(),
     )
     val channels: List<Pair<Channel, Boolean>> =
-        (if (tab == SearchTab.All) interleave(channelLists) else channelLists.flatten()).filter { it.first.key !in blocked }
+        (if (single) channelLists.flatten() else interleave(channelLists)).filter { it.first.key !in blocked }
 
-    val twitchLives = if (showTw) twLives.take(if (tab == SearchTab.All) 12 else 24) else emptyList()
-    val kickLives = if (showKick) kickChannels.mapNotNull { it.live }.take(if (tab == SearchTab.All) 6 else 12) else emptyList()
-    val ytLives = if (showYt) ytVideos.filter { it.isLive }.take(if (tab == SearchTab.All) 6 else 12) else emptyList()
+    val twitchLives = if (showTw) twLives.take(if (single) 24 else 12) else emptyList()
+    val kickLives = if (showKick) kickChannels.mapNotNull { it.live }.take(if (single) 12 else 6) else emptyList()
+    val ytLives = if (showYt) ytVideos.filter { it.isLive }.take(if (single) 12 else 6) else emptyList()
     val lives: List<Media> = interleave(listOf(twitchLives, kickLives, ytLives)).withoutBlocked(blocked)
-    val showLivesAsList = tab == SearchTab.Twitch || tab == SearchTab.Kick
+    val showLivesAsList = single && platforms.first() != Platform.YouTube
 
     Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -131,19 +136,16 @@ fun SearchScreen(route: Route.Search) {
             item("header") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SectionTitle("Resultados para “${route.query}”", Modifier.padding(top = 4.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(SearchTab.entries.filter { it != SearchTab.Subs || subs.isNotEmpty() }) { t ->
-                            val dot = when (t) {
-                                SearchTab.All, SearchTab.Subs -> null
-                                SearchTab.YouTube -> Platform.YouTube.color()
-                                SearchTab.Twitch -> Platform.Twitch.color()
-                                SearchTab.Kick -> Platform.Kick.color()
-                            }
-                            val label = if (t == SearchTab.Subs && !mine.isEmpty) "Inscrições (${mine.channels.size + mineMedia.size})" else t.label
-                            ApexChip(label, tab == t, { st.tab = t }, dot = dot)
+                    // Os filtros combinam: por exemplo "Inscrições" + "Twitch" mostra só o que vem dos canais da Twitch que a pessoa segue.
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ApexChip("Tudo", platforms.isEmpty() && !onlySubs, { st.platforms = emptySet(); st.onlySubs = false })
+                        Platform.entries.forEach { p -> ApexChip(p.label, p in platforms, { st.platforms = platforms.toggled(p) }, dot = p.color()) }
+                        if (subs.isNotEmpty()) {
+                            val label = if (!mine.isEmpty) "Inscrições (${mine.channels.size + mineMedia.size})" else "Inscrições"
+                            ApexChip(label, onlySubs, { st.onlySubs = !onlySubs })
                         }
                     }
-                    if (showYt) {
+                    if (showYt && !onlySubs) {
                         // Filtros no estilo do YouTube: um botão que abre o painel e os que estão ligados aparecem aqui, para tirar com um toque.
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             ApexChip(if (route.filters.activeCount > 0) "Filtros (${route.filters.activeCount})" else "Filtros", false, { showFilters = true })
@@ -156,21 +158,25 @@ fun SearchScreen(route: Route.Search) {
             }
 
             // 1) o que combina entre as inscrições da pessoa
-            if (tab == SearchTab.All && !mine.isEmpty) {
+            if (!onlySubs && !mine.isEmpty) {
                 item("mine") {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         SectionTitle(
                             "Das suas inscrições", subtitle = "${mine.channels.size} canais • ${mineMedia.size} vídeos e lives",
-                            trailing = { ActionButton("Ver tudo", { st.tab = SearchTab.Subs }) },
+                            trailing = { ActionButton("Ver tudo", { st.onlySubs = true }) },
                         )
                         mine.channels.take(3).forEach { ch -> ChannelRow(ch, live = ch.key in liveKeys) }
                         if (mineMedia.isNotEmpty()) MediaRow(mineMedia.take(10))
                     }
                 }
             }
-            if (tab == SearchTab.Subs) {
+            if (onlySubs) {
                 if (mine.isEmpty) item("mine-none") {
-                    EmptyState(Icons.Rounded.Search, "Nada nas suas inscrições", "Nenhum canal, vídeo ou live dos canais que você segue combina com “${route.query}”. Veja a aba Tudo.")
+                    EmptyState(
+                        Icons.Rounded.Search, "Nada nas suas inscrições",
+                        "Nenhum canal, vídeo ou live dos canais que você segue" + (if (platforms.isEmpty()) "" else " em ${platforms.describe()}") +
+                            " combina com “${route.query}”. Tire o filtro Inscrições para ver tudo.",
+                    )
                 } else {
                     if (mine.channels.isNotEmpty()) {
                         item("mine-title-ch") { SectionTitle("Canais", subtitle = "${mine.channels.size} que você segue") }
@@ -184,17 +190,17 @@ fun SearchScreen(route: Route.Search) {
             }
 
             // 2) canais
-            if (tab != SearchTab.Subs && channels.isNotEmpty()) {
+            if (!onlySubs && channels.isNotEmpty()) {
                 item("channels") {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         SectionTitle("Canais", Modifier.padding(bottom = 4.dp))
-                        channels.take(if (tab == SearchTab.All) 6 else 8).forEach { (ch, live) -> ChannelRow(ch, live = live || ch.key in liveKeys) }
+                        channels.take(if (single) 8 else 6).forEach { (ch, live) -> ChannelRow(ch, live = live || ch.key in liveKeys) }
                     }
                 }
             }
 
             // 3) lives
-            if (tab != SearchTab.Subs && lives.isNotEmpty()) {
+            if (!onlySubs && lives.isNotEmpty()) {
                 item("lives-title") { SectionTitle("Ao vivo agora", subtitle = "${lives.size} ${if (lives.size == 1) "transmissão" else "transmissões"}") }
                 if (showLivesAsList) {
                     items(lives, key = { "l-" + it.key }) { VideoRow(it, upNext = lives.filter { m -> m.key != it.key }) }
@@ -204,10 +210,10 @@ fun SearchScreen(route: Route.Search) {
             }
 
             // 4) playlists e 5) vídeos do YouTube
-            if (showYt) {
+            if (showYt && !onlySubs) {
                 if (ytPlaylists.isNotEmpty()) {
                     item("playlists-title") { SectionTitle("Playlists") }
-                    items(ytPlaylists.take(if (tab == SearchTab.All) 3 else 12), key = { "p-" + it.id }) { RemotePlaylistRow(it) }
+                    items(ytPlaylists.take(if (single) 12 else 3), key = { "p-" + it.id }) { RemotePlaylistRow(it) }
                 }
                 val shown = ytVideos.withoutBlocked(blocked)
                 if (shown.isNotEmpty()) {
@@ -221,9 +227,9 @@ fun SearchScreen(route: Route.Search) {
                     item("none") { EmptyState(Icons.Rounded.Search, "Nada encontrado", "Tente outras palavras ou remova os filtros.") }
                 }
                 if (ytLoading && shown.isNotEmpty()) item("more") { SkeletonRow() }
-            } else if (tab != SearchTab.Subs && channels.isEmpty() && lives.isEmpty()) {
+            } else if (!onlySubs && channels.isEmpty() && lives.isEmpty()) {
                 item("none-live") {
-                    EmptyState(Icons.Rounded.Search, "Nada encontrado", "Nenhum canal ou live da ${tab.label} para “${route.query}”. Veja a aba Tudo.")
+                    EmptyState(Icons.Rounded.Search, "Nada encontrado", "Nenhum canal ou live da ${platforms.describe()} para “${route.query}”. Tente outras plataformas.")
                 }
             }
         }

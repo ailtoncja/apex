@@ -24,13 +24,13 @@ depois em *Executar assim mesmo*. Para conferir o arquivo baixado, compare o has
 
 | | |
 |---|---|
-| **YouTube** | início com recomendações, busca com os filtros do YouTube (data, tipo, duração, recursos como 4K e HDR, ordem), canais, comentários, relacionados, curtir/não curtir, inscrições, histórico, assistir depois, playlists locais e da conta, as **playlists de cada canal** (dá para copiá-las para as suas), e os **clipes que você criou** (Biblioteca › Clipes). Nunca mostra Shorts. |
+| **YouTube** | início com recomendações, **categorias** de jogos e de assuntos (Música, Futebol…) com lives e vídeos, busca com os filtros do YouTube (data, tipo, duração, recursos como 4K e HDR, ordem), canais, comentários, relacionados, curtir/não curtir, inscrições, histórico, assistir depois, playlists locais e da conta, as **playlists de cada canal** (dá para copiá-las para as suas), e os **clipes que você criou** (Biblioteca › Clipes). Nunca mostra Shorts. |
 | **Twitch** | lives (por categoria, com filtro de idioma, de público e busca; canais seguidos) com chat ao vivo, mais **VODs** e **clipes** de cada canal (ordenados por mais vistos ou mais recentes) |
 | **Kick** | lives (por categoria, com filtro de idioma, de público e busca; canais seguidos) com chat ao vivo, mais **VODs** e **clipes** de cada canal; esconde conteúdo +18 por padrão |
 | **Links** | cole na busca um link de vídeo, live, VOD ou clipe (inclusive `youtube.com/clip/…`, que o YouTube não lista por canal) e ele abre direto |
 | **Player** | libVLC com qualidade até 4K, velocidade, legendas, capítulos, retomar de onde parou, tela cheia sem borda (como o F11), modo cinema e mini player |
 
-Tem tela de **Início**, **Ao vivo**, **Inscrições** (feed misturando as três plataformas, filtro por plataforma e busca por canal ou palavra-chave; a pesquisa também mostra o que combina com os canais que você segue), **Biblioteca** (histórico, assistir
+Tem tela de **Início** (escolha o que ver: Inscrições, Recomendados, Em alta e Ao vivo, e em quais plataformas; os filtros se combinam e os seus canais ao vivo mudam junto), **Ao vivo** (liga mais de uma plataforma ao mesmo tempo), **Inscrições** (feed misturando as três plataformas, filtro por plataforma e busca por canal ou palavra-chave; a pesquisa também mostra o que combina com os canais que você segue, e "Inscrições" combina com as plataformas, como "Inscrições + Twitch"), **Biblioteca** (histórico, assistir
 depois, curtidos, playlists), **Canal**, **Busca** e **Ajustes**. A barra lateral separa os canais por plataforma. Nos Ajustes, a Twitch mostra se a conta tem **Turbo** (sem anúncios). O chat das lives pode ser ocultado (botão no cabeçalho do chat) e o botão direito em qualquer vídeo abre um menu de opções. Atalhos: `Espaço/K`, `F`/`F11`, `T`, `M`, `←/→`, `J/L`, `↑/↓`, `0–9`, `C`, `Shift+N`, `Esc`.
 
 ## Como funciona por dentro

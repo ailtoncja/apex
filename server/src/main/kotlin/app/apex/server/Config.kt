@@ -22,6 +22,8 @@ data class ServerConfig(
     val mailFrom: String,
     val trustProxy: Boolean,
     val devDataDir: File,
+    /** Quantos proxies de confiança (balanceador, CDN) ficam na frente do servidor; só o que eles acrescentam ao X-Forwarded-For vale. */
+    val trustedProxyHops: Int = 1,
     /** Quem responde pelo serviço; aparece na Política de Privacidade e nos Termos. */
     val contactEmail: String? = null,
     val operatorName: String? = null,
@@ -83,6 +85,7 @@ data class ServerConfig(
                 mailWebhookUrl = env["MAIL_WEBHOOK_URL"]?.trim()?.takeIf { it.startsWith("https://") },
                 mailWebhookSecret = env["MAIL_WEBHOOK_SECRET"]?.takeIf { it.isNotBlank() },
                 trustProxy = env["TRUST_PROXY"] == "true",
+                trustedProxyHops = env["TRUSTED_PROXY_HOPS"]?.toIntOrNull()?.coerceIn(1, 5) ?: 1,
                 devDataDir = dataDir,
                 contactEmail = env["CONTACT_EMAIL"]?.trim()?.takeIf { it.isNotBlank() },
                 operatorName = env["OPERATOR_NAME"]?.trim()?.takeIf { it.isNotBlank() },
@@ -103,8 +106,11 @@ data class ServerConfig(
             } ?: (null to null)
             val port = if (uri.port > 0) ":${uri.port}" else ""
             // O Neon manda `channel_binding=require`, que o driver do Java não conhece; sem ele a conexão funciona igual.
-            val query = uri.rawQuery?.split('&')?.filterNot { it.startsWith("channel_binding=") }?.takeIf { it.isNotEmpty() }
-                ?.joinToString("&", prefix = "?") ?: ""
+            val parts = uri.rawQuery?.split('&')?.filterNot { it.startsWith("channel_binding=") }.orEmpty().filter { it.isNotEmpty() }.toMutableList()
+            // Banco fora da própria máquina: a conexão é sempre criptografada, mesmo que a string de conexão esqueça do sslmode.
+            val local = uri.host in setOf("localhost", "127.0.0.1", "::1", "[::1]")
+            if (!local && parts.none { it.startsWith("sslmode=") }) parts += "sslmode=require"
+            val query = parts.takeIf { it.isNotEmpty() }?.joinToString("&", prefix = "?") ?: ""
             return DbConnection("jdbc:postgresql://${uri.host}$port${uri.rawPath}$query", user, pass)
         }
 

@@ -1,5 +1,6 @@
 package app.apex.ui.subs
 
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -132,7 +133,12 @@ fun SubscriptionsScreen() {
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                Avatar(ch.avatarUrl, ch.name, 56.dp, ring = if (ch.key in liveKeys) ApexColors.Live else if (ch.support != null) ApexColors.Support else null)
+                                // Ao vivo: a foto entra direto na live; o nome abre o canal.
+                                Avatar(
+                                    ch.avatarUrl, ch.name, 56.dp,
+                                    if (ch.key in liveKeys) Modifier.clip(CircleShape).clickable { app.openLive(ch) } else Modifier,
+                                    ring = if (ch.key in liveKeys) ApexColors.Live else if (ch.support != null) ApexColors.Support else null,
+                                )
                                 Text(
                                     ch.name, style = MaterialTheme.typography.bodySmall, maxLines = 1,
                                     overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,

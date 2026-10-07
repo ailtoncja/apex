@@ -1,5 +1,7 @@
 package app.apex.ui.channel
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,7 +96,11 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                     RemoteImage(it, Modifier.fillMaxWidth().aspectRatio(6f).clip(RoundedCornerShape(16.dp)))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(channel.avatarUrl, channel.name, 96.dp, ring = if (liveNow != null) ApexColors.Live else null)
+                    Avatar(
+                        channel.avatarUrl, channel.name, 96.dp,
+                        liveNow?.let { live -> Modifier.clip(CircleShape).clickable { app.openLive(channel, live) } } ?: Modifier,
+                        ring = if (liveNow != null) ApexColors.Live else null,
+                    )
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(channel.name, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)

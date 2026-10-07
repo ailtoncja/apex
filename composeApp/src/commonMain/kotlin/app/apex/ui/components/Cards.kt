@@ -344,14 +344,16 @@ fun SubscribeButton(channel: Channel, modifier: Modifier = Modifier) {
 
 /** Linha de canal (resultado de busca, lista de inscrições). */
 @Composable
-fun ChannelRow(channel: Channel, modifier: Modifier = Modifier, live: Boolean = false, subtitle: String? = null) {
+fun ChannelRow(channel: Channel, modifier: Modifier = Modifier, live: Boolean = false, subtitle: String? = null, liveMedia: Media? = null) {
     val app = LocalApp.current
+    // Com o canal ao vivo, a foto e a etiqueta "AO VIVO" entram direto na live; o resto da linha abre o canal.
+    val openLive = Modifier.clip(CircleShape).clickable { app.openLive(channel, liveMedia) }
     Row(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { app.openChannel(channel) }.padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Avatar(channel.avatarUrl, channel.name, 64.dp, ring = if (live) ApexColors.Live else null)
+        Avatar(channel.avatarUrl, channel.name, 64.dp, if (live) openLive else Modifier, ring = if (live) ApexColors.Live else null)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(channel.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -364,7 +366,7 @@ fun ChannelRow(channel: Channel, modifier: Modifier = Modifier, live: Boolean = 
                 channel.followers?.let { "${formatCount(it)} ${if (channel.platform == Platform.YouTube) "inscritos" else "seguidores"}" },
             ).joinToString(" • ")
             if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, maxLines = 1)
-            if (live) LiveTag(Modifier.padding(top = 4.dp))
+            if (live) LiveTag(Modifier.padding(top = 4.dp).clip(RoundedCornerShape(4.dp)).clickable { app.openLive(channel, liveMedia) })
         }
         SubscribeButton(channel)
     }

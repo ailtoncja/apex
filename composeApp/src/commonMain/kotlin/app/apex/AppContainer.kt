@@ -199,6 +199,33 @@ class AppContainer(
         nav.push(Route.ChannelPage(channel))
     }
 
+    /**
+     * Entra direto na live do canal (a bolinha e a foto "ao vivo" levam para cá em vez de para a página do canal).
+     * Usa a live que já se conhece ([known] ou a dos canais seguidos); sem ela, a Twitch e a Kick abrem pelo canal e o YouTube
+     * procura a live do canal. Se ela já acabou, abre a página do canal.
+     */
+    fun openLive(channel: Channel, known: Media? = null) {
+        val live = known?.takeIf { it.isLive }
+            ?: screens.subs.liveNow.value.firstOrNull { it.channel?.key == channel.key && it.isLive }
+            ?: screens.home.followedLive.value.firstOrNull { it.channel?.key == channel.key && it.isLive }
+        if (live != null) return openMedia(live.copy(channel = live.channel ?: channel))
+        when (channel.platform) {
+            Platform.Twitch -> openMedia(Media(Platform.Twitch, channel.id, channel.name, channel, isLive = true, url = "https://www.twitch.tv/${channel.id}"))
+            Platform.Kick -> openMedia(Media(Platform.Kick, channel.id, channel.name, channel, isLive = true, url = "https://kick.com/${channel.id}"))
+            Platform.YouTube -> {
+                toast("Abrindo a live…")
+                scope.launch {
+                    val found = runCatching { youtube.channelLive(channel.id) }.getOrNull()
+                    if (found != null) openMedia(found.copy(channel = found.channel ?: channel))
+                    else {
+                        toast("Esta live já acabou.")
+                        openChannel(channel)
+                    }
+                }
+            }
+        }
+    }
+
     /** Se [text] é um link de vídeo, live, VOD ou clipe, abre direto e devolve `true`. */
     fun openLink(text: String): Boolean {
         when (val target = app.apex.source.parseLink(text) ?: return false) {

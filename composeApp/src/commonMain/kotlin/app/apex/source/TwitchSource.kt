@@ -65,12 +65,28 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         )
     }
 
+    /**
+     * As lives mais vistas. A consulta de "streams" da Twitch só aceita até 30 por vez (e a próxima página exige a verificação do
+     * navegador); para passar disso, a mesma consulta traz também as lives das categorias mais vistas, e tudo é reunido por público.
+     */
     suspend fun topStreams(limit: Int = 30, language: String? = null): List<Media> {
-        suspend fun query(opts: String) =
-            gql("{ streams(first: $limit, options: { sort: VIEWER_COUNT$opts }) { edges { node { $streamFields } } } }")
-        val data = (if (language != null) query(", broadcasterLanguages: [$language]") else null)
-            ?: query("")
-        return data["streams"]["edges"].list().mapNotNull { streamToMedia(it["node"]) }
+        val data = (if (language != null) gql(topStreamsQuery(limit, ", broadcasterLanguages: [$language]")) else null)
+            ?: gql(topStreamsQuery(limit, ""))
+        return parseTopStreams(data, limit)
+    }
+
+    internal fun topStreamsQuery(limit: Int, opts: String): String {
+        val streams = "streams(first: ${limit.coerceIn(1, TOP_STREAMS_PAGE)}, options: { sort: VIEWER_COUNT$opts }) { edges { node { $streamFields } } }"
+        if (limit <= TOP_STREAMS_PAGE) return "{ $streams }"
+        val games = ((limit - TOP_STREAMS_PAGE + 14) / 15 + 2).coerceAtMost(12)
+        return "{ $streams games(first: $games, options: { sort: VIEWER_COUNT }) { edges { node { " +
+            "streams(first: 20, options: { sort: VIEWER_COUNT$opts }) { edges { node { $streamFields } } } } } } }"
+    }
+
+    internal fun parseTopStreams(data: JsonElement?, limit: Int): List<Media> {
+        val top = data["streams"]["edges"].list().mapNotNull { streamToMedia(it["node"]) }
+        val more = data["games"]["edges"].list().flatMap { g -> g["node"]["streams"]["edges"].list().mapNotNull { streamToMedia(it["node"]) } }
+        return (top + more).distinctBy { it.id }.sortedByDescending { it.viewCount ?: 0 }.take(limit)
     }
 
     /**
@@ -362,6 +378,8 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         const val CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
         private const val GQL_URL = "https://gql.twitch.tv/gql"
         private const val PAGE = 100
+        /** O máximo que a consulta de "streams" da Twitch aceita em `first`. */
+        private const val TOP_STREAMS_PAGE = 30
 
         private const val VOD_FIELDS = """id title lengthSeconds createdAt viewCount previewThumbnailURL(width: 440, height: 248) game { displayName }
             owner { login displayName profileImageURL(width: 70) }"""

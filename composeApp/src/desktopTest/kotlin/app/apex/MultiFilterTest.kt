@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import app.apex.model.Channel
+import app.apex.model.HistoryEntry
 import app.apex.model.LiveCategory
 import app.apex.model.Media
 import app.apex.model.Platform
@@ -19,13 +20,19 @@ import app.apex.state.YOUTUBE_TOPIC_CATEGORIES
 import app.apex.state.allows
 import app.apex.state.channelsIn
 import app.apex.state.describe
+import app.apex.state.inCategories
+import app.apex.state.watchedCategories
 import app.apex.state.mediaIn
 import app.apex.state.matchSubscriptions
 import app.apex.state.toEnumSet
 import app.apex.state.toggled
 import app.apex.state.youtubeCategoryQueries
 import app.apex.state.youtubeGameCategories
+import app.apex.nav.Route
+import app.apex.source.SearchDate
+import app.apex.source.SearchType
 import app.apex.ui.home.HomeScreen
+import app.apex.ui.search.SearchScreen
 import app.apex.ui.subs.SubscriptionsScreen
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -216,5 +223,41 @@ class MultiFilterTest {
         waitForIdle()
         assertFalse(has("Canal da Twitch"))
         assertTrue(has("Canal da Kick"))
+    }
+
+    // ------------------------------------------------------------------ recomendadas (Twitch e Kick)
+
+    @Test
+    fun lives_recomendadas_vem_das_categorias_que_a_pessoa_mais_assistiu() {
+        fun seen(p: Platform, id: String, category: String?) =
+            HistoryEntry(Media(p, id, "visto $id", channel(p, id), isLive = true, category = category, url = "https://x/$id"), watchedAt = 1)
+        val history = listOf(
+            seen(Platform.Twitch, "h1", "Just Chatting"), seen(Platform.Kick, "h2", "just chatting"), seen(Platform.Twitch, "h3", "Grand Theft Auto V"),
+            seen(Platform.Twitch, "h4", null), seen(Platform.Twitch, "h5", "  "),
+        )
+        assertEquals(listOf("just chatting", "grand theft auto v"), watchedCategories(history), "a mais vista primeiro; sem categoria não conta")
+        assertEquals(emptyList(), watchedCategories(emptyList()))
+
+        fun live(id: String, category: String) = media(Platform.Twitch, id, live = true).copy(category = category)
+        val lives = listOf(live("a", "Grand Theft Auto V"), live("b", "Just Chatting"), live("c", "Minecraft"), live("d", "JUST chatting"))
+        assertEquals(listOf("b", "d", "a"), lives.inCategories(watchedCategories(history)).map { it.id }, "só das categorias vistas, a mais vista primeiro")
+        assertEquals(emptyList(), lives.inCategories(emptyList()), "sem histórico não há o que recomendar por categoria")
+    }
+
+    // ------------------------------------------------------------------ pesquisa: mudar um filtro do YouTube não solta os outros
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun pesquisa_mantem_plataformas_e_inscricoes_ao_mudar_um_filtro_do_youtube() = runComposeUiTest {
+        val (container, _) = newTestApp()
+        val base = SearchFilters(type = SearchType.Any)
+        container.screens.search("gaules", base).also { it.platforms = setOf(Platform.YouTube, Platform.Twitch); it.onlySubs = false }
+        setContent { CompositionLocalProvider(LocalApp provides container) { SearchScreen(Route.Search("gaules", base)) } }
+        onAllNodesWithText("Filtros").onFirst().performClick()
+        waitForIdle()
+        onAllNodesWithText("Hoje").onFirst().performClick()
+        waitForIdle()
+        val next = container.screens.search("gaules", base.copy(date = SearchDate.Today))
+        assertEquals(setOf(Platform.YouTube, Platform.Twitch), next.platforms, "as plataformas ligadas continuam depois do filtro")
     }
 }

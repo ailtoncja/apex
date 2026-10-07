@@ -23,18 +23,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
+import app.apex.model.Media
 import app.apex.model.Platform
 import app.apex.nav.LiveFilter
 import app.apex.nav.Route
 import app.apex.state.HomeSource
 import app.apex.state.allows
 import app.apex.state.describe
+import app.apex.state.inCategories
+import app.apex.state.interleave
 import app.apex.state.toEnumSet
 import app.apex.state.toggled
+import app.apex.state.watchedCategories
 import app.apex.state.withoutBlocked
 import app.apex.theme.ApexColors
 import app.apex.theme.color
@@ -50,6 +55,11 @@ import app.apex.ui.components.SectionTitle
 import app.apex.ui.components.fullSpan
 import app.apex.ui.components.skeletons
 import app.apex.ui.components.videoItems
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+
+/** Quantas lives de Twitch/Kick entram nas seções "Recomendados" e "Em alta" quando o YouTube não é a única plataforma. */
+private const val SIDE_LIVES = 24
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -69,6 +79,7 @@ fun HomeScreen() {
     val liveLoading by home.liveLoading.collectAsState()
     val feed by app.data.feed.collectAsState()
     val subs by app.data.subscriptions.collectAsState()
+    val history by app.data.history.collectAsState()
     val feedLoading by app.screens.subs.feedLoading.collectAsState()
 
     // Os filtros da tela inicial combinam: por exemplo "Inscrições" + "Twitch". Nenhum ligado = tudo, como sempre foi.
@@ -86,6 +97,33 @@ fun HomeScreen() {
     val recsList = if (loggedIn) home.recommendations else home.discover
     val trendingShown = !everything && on(HomeSource.Trending) && youtubeOk
     val recsShown = on(HomeSource.Recs) && youtubeOk
+
+    // Twitch e Kick não têm "recomendados" nem "em alta" como o YouTube: lá valem as lives mais vistas e as das categorias que a pessoa assiste.
+    val liveSides = listOf(Platform.Twitch, Platform.Kick).filter { platforms.allows(it) }
+    val sideLists = remember(liveSides) { liveSides.mapNotNull { home.topLives(it) } }
+    val recLivesShown = selected == 0 && !everything && liveSides.isNotEmpty() && on(HomeSource.Recs)
+    val trendLivesShown = selected == 0 && !everything && liveSides.isNotEmpty() && on(HomeSource.Trending)
+    val sideItems by remember(sideLists) { combine(sideLists.map { it.items }) { parts -> interleave(parts.toList()) } }.collectAsState(emptyList())
+    val sideLoaded by remember(sideLists) { combine(sideLists.map { it.loaded }) { parts -> parts.all { it } } }.collectAsState(false)
+    val sideAll = sideItems.withoutBlocked(blocked).filter { platforms.allows(it.platform) }
+    val watched = remember(history) { watchedCategories(history) }
+    val recLives = sideAll.inCategories(watched).take(SIDE_LIVES)
+    val recFallback = recLivesShown && recLives.isEmpty()
+    val recLivesOut = if (recFallback) sideAll.take(SIDE_LIVES / 2) else recLives
+    val trendLives = (if (recLivesShown && !recFallback) sideAll.filter { m -> recLivesOut.none { it.key == m.key } } else sideAll).take(SIDE_LIVES)
+    // Uma seção de lives só aparece se tem o que mostrar (ou se ainda está carregando).
+    val recLivesBlock = recLivesShown && (recLivesOut.isNotEmpty() || !sideLoaded)
+    val trendLivesBlock = trendLivesShown && (trendLives.isNotEmpty() || !sideLoaded)
+
+    // Um assunto (Jogos, Música…) com Twitch ou Kick ligados: lives dessas plataformas sobre o assunto.
+    val noLives = remember { MutableStateFlow(emptyList<Media>()) }
+    val notLoading = remember { MutableStateFlow(false) }
+    val topicLiveOn = selected > 0 && platforms.any { it != Platform.YouTube }
+    val topicLoadable = if (topicLiveOn) home.topicLives(topic) else null
+    val topicLivesAll by (topicLoadable?.value ?: noLives).collectAsState()
+    val topicLivesLoading by (topicLoadable?.loading ?: notLoading).collectAsState()
+    val topicLives = topicLivesAll.withoutBlocked(blocked).filter { platforms.allows(it.platform) }
+
     val list = when {
         selected > 0 -> home.topicList(topic)
         trendingShown -> home.trending
@@ -98,14 +136,19 @@ fun HomeScreen() {
     val recsItems by recsList.items.collectAsState()
     val recsLoading by recsList.loading.collectAsState()
     val recsLoaded by recsList.loaded.collectAsState()
+    // Só pede à rede o que vai aparecer.
+    val mainShown = if (selected > 0) youtubeOk else recsShown || trendingShown
     LaunchedEffect(selected, loggedIn, sources, platforms) {
-        if (selected > 0) list.loadIfNeeded()
-        else {
+        if (selected > 0) {
+            if (youtubeOk) list.loadIfNeeded()
+        } else {
             if (recsShown) recsList.loadIfNeeded()
             if (trendingShown) home.trending.loadIfNeeded()
         }
+        if (recLivesShown || trendLivesShown) sideLists.forEach { it.loadIfNeeded() }
+        topicLoadable?.loadIfNeeded()
     }
-    OnNearEnd(state) { list.loadMore() }
+    OnNearEnd(state) { if (mainShown) list.loadMore() }
 
     ApexGrid(state) {
         fullSpan("filters") {
@@ -191,14 +234,14 @@ fun HomeScreen() {
                 }
             }
 
-            // Recomendados (e, se escolhido, Em alta): vêm do YouTube.
-            if (recsShown && !trendingShown) {
+            // Recomendados: do YouTube (a conta ou o que a pessoa viu) e, com Twitch/Kick ligados, as lives das categorias que ela assiste.
+            val recsTitle = if (loggedIn) "Recomendados para você" else if (history.isNotEmpty()) "Com base no que você assistiu" else "Em alta esta semana"
+            if ((recsShown && !trendingShown) || (recLivesBlock && !recsShown)) {
                 anyShown = true
                 fullSpan("rec-title") {
                     SectionTitle(
-                        if (loggedIn) "Recomendados para você"
-                        else if (app.data.history.value.isNotEmpty()) "Com base no que você assistiu" else "Em alta esta semana",
-                        Modifier.padding(top = 4.dp),
+                        if (recsShown) recsTitle else "Recomendados para você", Modifier.padding(top = 4.dp),
+                        if (recLivesBlock && !recsShown) "Lives de ${platforms.describe()}" + (if (recFallback) " • ainda sem histórico, as mais vistas" else "") else null,
                     )
                 }
             }
@@ -207,23 +250,48 @@ fun HomeScreen() {
                 val recs = recsItems.withoutBlocked(blocked).take(12)
                 if (recs.isNotEmpty()) {
                     anyShown = true
-                    fullSpan("rec-title") { SectionTitle(if (loggedIn) "Recomendados para você" else "Com base no que você assistiu", Modifier.padding(top = 4.dp)) }
+                    fullSpan("rec-title-yt") { SectionTitle(recsTitle, Modifier.padding(top = 4.dp)) }
                     videoItems(recs, section = "rec:")
                 } else if (recsLoading || !recsLoaded) skeletons(4)
             }
-            if (trendingShown) {
-                anyShown = true
-                fullSpan("trend-title") { SectionTitle("Em alta esta semana", Modifier.padding(top = 4.dp)) }
+            if (recLivesBlock) {
+                if (recLivesOut.isNotEmpty()) {
+                    anyShown = true
+                    if (recsShown) fullSpan("rec-title-live") {
+                        SectionTitle(
+                            "Lives recomendadas", Modifier.padding(top = 8.dp),
+                            platforms.describe() + (if (recFallback) " • ainda sem histórico, as mais vistas" else " • das categorias que você assiste"),
+                        )
+                    }
+                    videoItems(recLivesOut, section = "rec-live:")
+                } else if (!sideLoaded) skeletons(4)
             }
-            if (!youtubeOk && (on(HomeSource.Recs) || on(HomeSource.Trending) || on(HomeSource.Subs)) && !everything) {
+
+            // Em alta: os vídeos mais vistos da semana (YouTube) e as lives mais vistas (Twitch/Kick).
+            if (trendingShown || trendLivesBlock) {
+                anyShown = true
+                fullSpan("trend-title") {
+                    SectionTitle(
+                        "Em alta" + if (trendingShown) " esta semana" else "", Modifier.padding(top = 4.dp),
+                        if (trendLivesBlock && !trendingShown) "Lives de ${platforms.describe()}" else null,
+                    )
+                }
+                if (trendLivesBlock) {
+                    if (trendLives.isNotEmpty()) {
+                        if (trendingShown) fullSpan("trend-title-live") { SectionTitle("Lives em alta", subtitle = platforms.describe()) }
+                        videoItems(trendLives, section = "trend-live:")
+                    } else if (!sideLoaded) skeletons(4)
+                }
+            }
+            if (on(HomeSource.Subs) && !youtubeOk && !everything) {
                 fullSpan("yt-only") {
                     Text(
-                        "Recomendados, Em alta e as novidades das inscrições vêm do YouTube; com ${platforms.describe()} só aparecem as lives.",
+                        "As novidades em vídeo das inscrições vêm do YouTube; com ${platforms.describe()} aparecem só as lives.",
                         style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, modifier = Modifier.padding(top = 4.dp),
                     )
                 }
             }
-            if (!anyShown && !liveLoading && !recsShown && !trendingShown) {
+            if (!anyShown && !liveLoading && !recsShown && !trendingShown && (!(recLivesShown || trendLivesShown) || sideLoaded)) {
                 fullSpan("nothing") {
                     EmptyState(
                         Icons.Rounded.Subscriptions, "Nada para mostrar com esses filtros",
@@ -232,15 +300,31 @@ fun HomeScreen() {
                     )
                 }
             }
+        } else if (topicLiveOn) {
+            // Assunto + Twitch/Kick: as lives dessas plataformas vêm primeiro; os vídeos do YouTube só se ele estiver ligado.
+            if (topicLives.isNotEmpty()) {
+                fullSpan("topic-live-title") {
+                    SectionTitle("Ao vivo: ${topic.label}", Modifier.padding(top = 4.dp), platforms.filter { it != Platform.YouTube }.toSet().describe())
+                }
+                videoItems(topicLives, section = "topic-live:")
+            } else if (topicLivesLoading) skeletons(4)
+            else if (!youtubeOk) fullSpan("topic-none") {
+                EmptyState(
+                    Icons.Rounded.Subscriptions, "Nada ao vivo sobre ${topic.label}",
+                    "Nenhuma live de ${platforms.describe()} sobre esse assunto agora. Ligue o YouTube ou tire o filtro para ver vídeos.",
+                    action = { ActionButton("Limpar filtros", { setFilters(sources, emptySet()) }, primary = true) },
+                )
+            }
+            if (youtubeOk && topicLives.isNotEmpty()) fullSpan("topic-yt-title") { SectionTitle("Vídeos: ${topic.label}", Modifier.padding(top = 8.dp)) }
         }
 
-        val shown = if (selected == 0 && !(recsShown || trendingShown)) emptyList() else items.withoutBlocked(blocked)
+        val shown = if (!mainShown) emptyList() else items.withoutBlocked(blocked)
         when {
+            !mainShown -> {}
             shown.isNotEmpty() -> videoItems(shown, section = "main:")
-            selected == 0 && !(recsShown || trendingShown) -> {}
             !loaded || loading -> skeletons(12)
             error != null -> fullSpan("error") { ErrorBox(error.orEmpty(), { list.refresh() }) }
         }
-        if (loading && shown.isNotEmpty()) skeletons(4)
+        if (mainShown && loading && shown.isNotEmpty()) skeletons(4)
     }
 }

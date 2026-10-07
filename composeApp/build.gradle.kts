@@ -50,6 +50,8 @@ kotlin {
                 implementation(libs.ktor.server.core)
                 implementation(libs.kotlinx.coroutines.test)
                 implementation(libs.logback)
+                @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+                implementation(compose.uiTest)
             }
         }
         val desktopMain by getting {

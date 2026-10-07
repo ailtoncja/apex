@@ -43,6 +43,10 @@ fun LazyGridScope.videoItems(list: List<Media>, upNext: List<Media>? = null) {
     gridItems(list, key = { it.key }) { VideoCard(it, upNext = upNext ?: list.filter { m -> m.key != it.key }) }
 }
 
+fun LazyGridScope.playlistItems(list: List<app.apex.source.RemotePlaylist>) {
+    gridItems(list, key = { "pl-" + it.id }) { RemotePlaylistCard(it) }
+}
+
 fun LazyGridScope.skeletons(count: Int = 8) {
     items(count, key = { "sk$it" }) { SkeletonCard() }
 }

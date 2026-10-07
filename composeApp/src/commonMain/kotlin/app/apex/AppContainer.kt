@@ -1,4 +1,4 @@
-﻿package app.apex
+package app.apex
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -144,6 +144,22 @@ class AppContainer(
         ui.miniPlayerHidden = false
         session.open(media, upNext)
         nav.push(Route.Watch)
+    }
+
+    /** Copia uma playlist do YouTube (todos os vídeos) para as playlists do app. */
+    fun copyRemotePlaylist(id: String, title: String) {
+        toast("Copiando a playlist…")
+        scope.launch {
+            val items = runCatching { youtube.playlistAll(id) }.getOrNull()
+            when {
+                items == null -> toast("Não foi possível copiar a playlist.")
+                items.isEmpty() -> toast("Esta playlist está vazia.")
+                else -> {
+                    val ids = data.importPlaylist(title, items)
+                    toast(if (ids.size == 1) "Playlist copiada: ${items.size} vídeos" else "Playlist copiada em ${ids.size} partes (${items.size} vídeos)")
+                }
+            }
+        }
     }
 
     /** Liga/desliga a tela cheia do player. Ao sair, volta ao que era antes (janela normal, ou F11 se estava ligado). */

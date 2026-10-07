@@ -27,6 +27,9 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.PlaylistAdd
+import androidx.compose.material.icons.rounded.OpenInBrowser
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -72,6 +75,7 @@ import app.apex.ui.components.EmptyState
 import app.apex.ui.components.IconBtn
 import app.apex.ui.components.RemoteImage
 import app.apex.ui.components.SectionTitle
+import app.apex.ui.components.RemotePlaylistRow
 import app.apex.ui.components.VideoRow
 
 @Composable
@@ -242,18 +246,7 @@ fun LibraryScreen(tab: LibraryTab) {
                         if (ytPlaylists.isEmpty()) item("yt-empty") {
                             Text("Nenhuma playlist encontrada na sua conta.", color = ApexColors.Muted, style = MaterialTheme.typography.bodyMedium)
                         }
-                        items(ytPlaylists, key = { "yt-" + it.id }) { pl ->
-                            Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { app.nav.push(Route.RemotePlaylist(pl.id, pl.title)) },
-                                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            ) {
-                                RemoteImage(pl.thumbnailUrl, Modifier.width(176.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)))
-                                Column(Modifier.weight(1f).padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(pl.title, style = MaterialTheme.typography.titleMedium, maxLines = 2)
-                                    pl.countText?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted) }
-                                }
-                            }
-                        }
+                        items(ytPlaylists, key = { "yt-" + it.id }) { pl -> RemotePlaylistRow(pl) }
                     }
                 }
             }
@@ -462,7 +455,12 @@ fun RemotePlaylistScreen(id: String, title: String) {
             item("title") {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SectionTitle(title, Modifier.padding(top = 8.dp), "Playlist do YouTube")
-                    if (items.isNotEmpty()) ActionButton("Reproduzir tudo", { app.openMedia(items.first(), items.drop(1)) }, icon = Icons.Rounded.PlayArrow, primary = true)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (items.isNotEmpty()) ActionButton("Reproduzir tudo", { app.openMedia(items.first(), items.drop(1)) }, icon = Icons.Rounded.PlayArrow, primary = true)
+                        ActionButton("Copiar para minhas playlists", { app.copyRemotePlaylist(id, title) }, icon = Icons.Rounded.PlaylistAdd)
+                        ActionButton("Copiar link", { app.system.copyText("https://www.youtube.com/playlist?list=$id"); app.toast("Link copiado") }, icon = Icons.Rounded.ContentCopy)
+                        ActionButton("Abrir no navegador", { app.system.openUrl("https://www.youtube.com/playlist?list=$id") }, icon = Icons.Rounded.OpenInBrowser)
+                    }
                 }
             }
             if (items.isEmpty() && !loading) item("empty") {

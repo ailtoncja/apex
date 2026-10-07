@@ -3,6 +3,9 @@
 App para **assistir** vídeos e lives de **YouTube**, **Twitch** e **Kick**, tudo num lugar só. Sem Shorts e sem downloads.
 Windows primeiro; o código compartilhado já está organizado para o Android entrar depois.
 
+> **Aviso: projeto feito com inteligência artificial.** O código, os testes e a documentação do Apex foram escritos com a ajuda de IA
+> ([Claude](https://www.anthropic.com/claude), da Anthropic), sob a direção do autor. Pode ter erros; use por sua conta e risco, como diz a licença GPL-3.0.
+
 ## Baixar
 
 Para Windows 10/11 (64 bits). Instale antes o **[VLC](https://www.videolan.org/vlc/) de 64 bits** (é o player; o Java já vem dentro do app).

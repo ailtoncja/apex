@@ -211,16 +211,21 @@ private fun runApp() = application {
     val requested = boot.getOrNull()?.system?.fullscreen?.collectAsState()?.value ?: false
     val fullscreenController = remember { FullscreenController(windowState) }
 
-    // Atalho para testes: `APEX_FULLSCREEN=1` abre já em tela cheia; `cycle` entra e, depois de alguns segundos, sai.
+    // Atalho para testes: `APEX_FULLSCREEN=1` abre já em tela cheia (F11), `player` na tela cheia do player; `cycle` entra e, depois de alguns segundos, sai.
     LaunchedEffect(Unit) {
         val app = boot.getOrNull() ?: return@LaunchedEffect
         when (System.getenv("APEX_FULLSCREEN")) {
-            "1" -> app.system.setFullscreen(true)
+            "1" -> app.toggleWindowFullscreen()
+            "player" -> {
+                // Espera a primeira tela (a navegação do APEX_START) assentar; a tela cheia do player só vale na página do vídeo.
+                kotlinx.coroutines.delay(1_500)
+                app.setPlayerFullscreen(true)
+            }
             "cycle" -> {
                 kotlinx.coroutines.delay(2_000)
-                app.system.setFullscreen(true)
+                app.toggleWindowFullscreen()
                 kotlinx.coroutines.delay(6_000)
-                app.system.setFullscreen(false)
+                app.toggleWindowFullscreen()
             }
         }
     }

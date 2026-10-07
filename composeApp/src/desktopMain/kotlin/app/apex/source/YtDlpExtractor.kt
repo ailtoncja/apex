@@ -220,7 +220,9 @@ class YtDlpExtractor(
             .groupBy { it["height"].int() ?: 0 }
             .forEach { (h, list) ->
                 val best = list.sortedWith(
-                    compareBy<JsonElement> { codecRank(it["vcodec"].str().orEmpty(), h) }
+                    // O formato "Premium" (só para contas Premium) tem bitrate bem maior no mesmo tamanho: vence qualquer outro.
+                    compareBy<JsonElement> { it["format_note"].str()?.contains("Premium", ignoreCase = true) == true }
+                        .thenBy { codecRank(it["vcodec"].str().orEmpty(), h) }
                         .thenBy { it["fps"].int() ?: 0 }
                         .thenBy { it["tbr"].double() ?: 0.0 },
                 ).last()

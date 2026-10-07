@@ -6,6 +6,7 @@ import app.apex.shared.AuthResponse
 import app.apex.shared.DeleteAccountRequest
 import app.apex.shared.ErrorResponse
 import app.apex.shared.ForgotRequest
+import app.apex.shared.InfoResponse
 import app.apex.shared.LoginRequest
 import app.apex.shared.RefreshRequest
 import app.apex.shared.RegisterRequest
@@ -95,6 +96,13 @@ class CloudClient(
         val response = raw("$url/v1/auth/login", AppJson.encodeToString(LoginRequest(email, password, "Apex Windows")), null)
         if (!response.status.isSuccess()) failure(response)
         return AppJson.decodeFromString<AuthResponse>(response.bodyAsText()).toSession(url).also(data::setCloudSession)
+    }
+
+    /** O que o servidor consegue fazer hoje (por exemplo, se envia e-mails). */
+    suspend fun info(): InfoResponse {
+        val response = raw("${base()}/v1/info", null, null, HttpMethod.Get)
+        if (!response.status.isSuccess()) failure(response)
+        return AppJson.decodeFromString(response.bodyAsText())
     }
 
     suspend fun forgot(email: String) {

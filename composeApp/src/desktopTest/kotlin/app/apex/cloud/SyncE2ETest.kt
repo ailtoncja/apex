@@ -240,5 +240,9 @@ class SyncE2ETest {
         assertTrue(export.contains("UCexport"), export)
         assertTrue(export.contains("termsVersion"), export)
         assertTrue(a.account.pageUrl("/privacy").endsWith("/privacy"))
+
+        // O servidor de teste só escreve e-mails no log: o app não pode prometer que enviou.
+        val forgot = a.account.forgot(email)
+        assertTrue(forgot.contains("não envia e-mails"), forgot)
     }
 }

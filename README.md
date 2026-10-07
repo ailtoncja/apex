@@ -11,8 +11,8 @@ Windows primeiro; o código compartilhado já está organizado para o Android en
 Para Windows 10/11 (64 bits). Instale antes o **[VLC](https://www.videolan.org/vlc/) de 64 bits** (é o player; o Java já vem dentro do app).
 Na página de [Releases](https://github.com/ailtoncja/apex/releases/latest) escolha:
 
-- **`Apex-1.0.0.msi`** (ou `Apex-1.0.0.exe`): instalador, com atalho no menu Iniciar e na área de trabalho; não pede administrador.
-- **`Apex-1.0.0-windows-x64.zip`**: versão portátil, é só extrair e abrir `Apex.exe`.
+- **`Apex-1.0.2.msi`** (ou `Apex-1.0.2.exe`): instalador, com atalho no menu Iniciar e na área de trabalho; não pede administrador.
+- **`Apex-1.0.2-windows-x64.zip`**: versão portátil, é só extrair e abrir `Apex.exe`.
 
 Depois de instalado, o Apex **se atualiza sozinho**: confere se saiu versão nova ao abrir (e a cada 6 horas), baixa em segundo plano, confere a
 assinatura e pergunta quando reiniciar. Dá para desligar em Ajustes › Atualizações do Apex.
@@ -54,13 +54,13 @@ depois, curtidos, playlists), **Canal**, **Busca** e **Ajustes**. O chat das liv
 ## Rodar
 
 Requisitos: **VLC 3.x de 64 bits** instalado (o app avisa e leva ao download se faltar) e um **JDK 21+** (o do Android Studio serve).
-Quem só quer usar o app baixa o pacote `Apex-1.0.0-windows-x64.zip` (traz o Java dentro; veja `Empacotar.cmd`) e precisa apenas do VLC.
+Quem só quer usar o app baixa o pacote `Apex-1.0.2-windows-x64.zip` (traz o Java dentro; veja `Empacotar.cmd`) e precisa apenas do VLC.
 
 ```
 gradlew.bat :composeApp:run                              # modo desenvolvimento
 gradlew.bat :composeApp:packageUberJarForCurrentOS       # gera o app em um único .jar
 Apex.cmd                                                 # abre o app gerado
-Empacotar.cmd                                            # gera dist\Apex-1.0.0-windows-x64.zip (Java embutido, para distribuir)
+Empacotar.cmd                                            # gera dist\Apex-1.0.2-windows-x64.zip (Java embutido, para distribuir)
 Servidor.cmd                                             # sobe o servidor de contas no seu PC (para a sincronização)
 ```
 

@@ -4,6 +4,7 @@ import app.apex.shared.DeleteAccountRequest
 import app.apex.shared.ErrorBody
 import app.apex.shared.ErrorResponse
 import app.apex.shared.ForgotRequest
+import app.apex.shared.InfoResponse
 import app.apex.shared.LoginRequest
 import app.apex.shared.RefreshRequest
 import app.apex.shared.RegisterRequest
@@ -153,6 +154,8 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
         get("/robots.txt") { call.respondText("User-agent: *\nDisallow: /reset\nDisallow: /verify\nDisallow: /account\nDisallow: /v1\n") }
 
         route("/v1") {
+            get("/info") { call.respond(InfoResponse(mailer !is LogMailer, Legal.VERSION, config.contactEmail)) }
+
             rateLimit(AUTH_LIMIT) {
                 rateLimit(REGISTER_LIMIT) {
                     post("/auth/register") {

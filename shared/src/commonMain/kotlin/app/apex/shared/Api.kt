@@ -29,6 +29,15 @@ data class ResetRequest(val token: String, val newPassword: String)
 @Serializable
 data class VerifyRequest(val token: String)
 
+/** O que o servidor consegue fazer hoje (o app usa para não prometer o que não funciona). */
+@Serializable
+data class InfoResponse(
+    /** `false` quando o servidor ainda não tem provedor de e-mail: recuperar senha e confirmar e-mail não funcionam. */
+    val mailEnabled: Boolean,
+    val termsVersion: String,
+    val contactEmail: String? = null,
+)
+
 @Serializable
 data class DeleteAccountRequest(val password: String)
 

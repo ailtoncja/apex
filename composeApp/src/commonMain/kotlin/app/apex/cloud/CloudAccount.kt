@@ -93,7 +93,16 @@ class CloudAccount(
         data.updateSyncState { SyncState() }
     }
 
-    suspend fun forgot(email: String) = client.forgot(email.trim())
+    /** Pede o link para trocar a senha e devolve o que dizer ao usuário (sem prometer e-mail se o servidor não envia). */
+    suspend fun forgot(email: String): String {
+        val info = runCatching { client.info() }.getOrNull()
+        if (info != null && !info.mailEnabled) {
+            return "Este servidor ainda não envia e-mails, então não dá para recuperar a senha por aqui." +
+                (info.contactEmail?.let { " Escreva para $it e peça ajuda." } ?: "")
+        }
+        client.forgot(email.trim())
+        return "Se existir uma conta com esse e-mail, enviamos o link para trocar a senha."
+    }
 
     /** Os dados da conta no servidor, já legíveis (para o usuário guardar uma cópia). */
     suspend fun exportData(): String {

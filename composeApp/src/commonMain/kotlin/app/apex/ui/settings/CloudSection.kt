@@ -136,7 +136,6 @@ fun CloudSection() {
                     else scope.launch {
                         message = try {
                             cloud.forgot(email)
-                            "Se existir uma conta com esse e-mail, enviamos o link para trocar a senha."
                         } catch (e: CloudException) {
                             e.message
                         }

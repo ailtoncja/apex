@@ -145,6 +145,15 @@ class PublicReleaseTest {
     }
 
     @Test
+    fun informa_o_que_o_servidor_consegue_fazer() = run { client ->
+        val info = client.get("/v1/info").body<app.apex.shared.InfoResponse>()
+        // Nos testes o e-mail só vai para o log, então o servidor diz que NÃO envia de verdade.
+        assertFalse(info.mailEnabled)
+        assertEquals(Legal.VERSION, info.termsVersion)
+        assertEquals("contato@apex.test", info.contactEmail)
+    }
+
+    @Test
     fun sem_contato_a_pagina_avisa() = run(base.copy(contactEmail = null, operatorName = null)) { client ->
         val privacy = client.get("/privacy").bodyAsText()
         assertTrue(privacy.contains("ainda não foi configurado"))

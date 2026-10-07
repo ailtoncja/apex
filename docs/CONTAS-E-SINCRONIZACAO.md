@@ -31,8 +31,9 @@ e-mail em desenvolvimento). Para testar dois aparelhos no mesmo PC, abra o app c
    Defina as variáveis de [`server/.env.example`](../server/.env.example): `DATABASE_URL`, `JWT_SECRET`, `PUBLIC_URL`,
    `TRUST_PROXY=true` e, para e-mails de verdade, `RESEND_API_KEY` e `MAIL_FROM` (conta grátis no [Resend](https://resend.com)).
    As tabelas são criadas sozinhas na primeira subida (Flyway).
-3. **App:** troque `DEFAULT_SERVER_URL` em `composeApp/src/commonMain/kotlin/app/apex/cloud/CloudClient.kt` pelo endereço
-   público (HTTPS) e gere o app de novo. Quem quiser pode mudar o servidor em *Conta do Apex › Servidor*.
+3. **App:** o servidor padrão (`DEFAULT_SERVER_URL` em `composeApp/src/commonMain/kotlin/app/apex/cloud/CloudClient.kt`) já aponta
+   para o servidor público no Render (`https://apex-server-mg5l.onrender.com`). Para testar com o servidor do seu PC, mude em
+   *Conta do Apex › Servidor* para `http://localhost:8080`.
 
 O `Dockerfile` ainda não foi testado (não há Docker neste PC); o servidor em si foi testado rodando direto na JVM.
 

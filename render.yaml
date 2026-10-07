@@ -7,6 +7,16 @@ services:
     plan: free
     region: ohio
     healthCheckPath: /health
+    # Só refaz o deploy quando algo do servidor muda (assim, mexer no app não reinicia o servidor).
+    buildFilter:
+      paths:
+        - server/**
+        - shared/**
+        - gradle/**
+        - build.gradle.kts
+        - settings.gradle.kts
+        - gradle.properties
+        - Dockerfile
     envVars:
       # Endereço do Neon (Connect > desligue "Connection pooling"). Preencha no painel; nunca no arquivo.
       - key: DATABASE_URL

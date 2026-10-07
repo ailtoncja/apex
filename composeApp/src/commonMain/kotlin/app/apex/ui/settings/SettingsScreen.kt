@@ -42,6 +42,7 @@ import app.apex.model.Platform
 import app.apex.model.AppSettings
 import app.apex.source.ExtractorState
 import app.apex.theme.ApexColors
+import app.apex.update.UpdateState
 import app.apex.theme.color
 import app.apex.ui.components.ActionButton
 import app.apex.ui.components.ApexChip
@@ -138,6 +139,37 @@ fun SettingsScreen() {
                         Text(key.substringAfter(':'), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                         PlatformTag(runCatching { Platform.valueOf(key.substringBefore(':')) }.getOrDefault(Platform.YouTube))
                         ActionButton("Mostrar de novo", { app.data.unblockChannel(key) })
+                    }
+                }
+            }
+
+            Section("Atualizações do Apex", "O Apex confere se saiu versão nova ao abrir e a cada 6 horas. Nada é instalado sem a assinatura do projeto bater.") {
+                val updater = app.system.updater
+                val update by updater.state.collectAsState()
+                val line = when (val u = update) {
+                    UpdateState.Idle -> "Versão ${updater.currentVersion}"
+                    UpdateState.Checking -> "Versão ${updater.currentVersion} • procurando atualização…"
+                    UpdateState.UpToDate -> "Versão ${updater.currentVersion} • você está com a versão mais nova"
+                    is UpdateState.Available -> "Versão ${updater.currentVersion} • a ${u.info.version} está disponível"
+                    is UpdateState.Downloading -> "Baixando a versão ${u.info.version}… ${u.percent}%"
+                    is UpdateState.Ready -> "A versão ${u.info.version} está pronta para instalar"
+                    is UpdateState.Failed -> u.message
+                }
+                Text(line, style = MaterialTheme.typography.bodyMedium, color = if (update is UpdateState.Failed) ApexColors.Accent else ApexColors.Muted)
+                (update as? UpdateState.Available)?.info?.notes?.takeIf { it.isNotBlank() }?.let {
+                    Text(it.lines().filter { l -> l.isNotBlank() }.take(8).joinToString("\n"), style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted)
+                }
+                Setting("Baixar atualizações sozinho", "Baixa e confere a versão nova em segundo plano; você escolhe quando reiniciar") {
+                    Toggle(settings.autoUpdate) { v -> app.data.updateSettings { it.copy(autoUpdate = v) } }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ActionButton("Verificar agora", { updater.check(manual = true) }, icon = Icons.Rounded.Refresh)
+                    when (val u = update) {
+                        is UpdateState.Available ->
+                            if (updater.canInstall) ActionButton("Baixar versão ${u.info.version}", { updater.download() }, icon = Icons.Rounded.Download, primary = true)
+                            else ActionButton("Abrir a página da versão", { app.system.openUrl(u.info.pageUrl) }, icon = Icons.Rounded.Download)
+                        is UpdateState.Ready -> ActionButton("Reiniciar e atualizar", { updater.installAndRestart() }, icon = Icons.Rounded.Refresh, primary = true)
+                        else -> {}
                     }
                 }
             }

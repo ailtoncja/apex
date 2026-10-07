@@ -318,6 +318,7 @@ fun ChannelRow(channel: Channel, modifier: Modifier = Modifier, live: Boolean = 
                 Text(channel.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (channel.verified) VerifiedMark()
                 PlatformTag(channel.platform)
+                channel.support?.let { SupportBadge(it) }
             }
             val line = subtitle ?: listOfNotNull(
                 channel.handle,

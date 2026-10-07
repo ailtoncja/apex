@@ -7,10 +7,28 @@ plugins {
     alias(libs.plugins.compose)
 }
 
+// A versão do app: uma só fonte. Vai para o instalador (packageVersion) e para o código (BuildInfo.VERSION), que usa para saber se há atualização.
+val appVersion = "1.0.1"
+
+val generateBuildInfo = tasks.register("generateBuildInfo") {
+    val outDir = layout.buildDirectory.dir("generated/buildinfo")
+    val version = appVersion
+    inputs.property("version", version)
+    outputs.dir(outDir)
+    doLast {
+        val file = outDir.get().asFile.resolve("app/apex/BuildInfo.kt")
+        file.parentFile.mkdirs()
+        file.writeText("package app.apex\n\n/** Gerado pelo Gradle a partir de appVersion em composeApp/build.gradle.kts. */\nobject BuildInfo {\n    const val VERSION = \"$version\"\n}\n")
+    }
+}
+
 kotlin {
     jvm("desktop")
 
     sourceSets {
+        commonMain {
+            kotlin.srcDir(generateBuildInfo)
+        }
         commonMain.dependencies {
             implementation(project(":shared"))
             implementation(compose.runtime)
@@ -59,7 +77,7 @@ compose.desktop {
             // .msi e .exe precisam do WiX Toolset instalado; sem ele, use :composeApp:createDistributable (pasta pronta para zipar).
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Apex"
-            packageVersion = "1.0.0"
+            packageVersion = appVersion
             description = "Vídeos e lives do YouTube, Twitch e Kick num lugar só"
             vendor = "Apex"
             licenseFile.set(rootProject.file("LICENSE"))

@@ -2,7 +2,7 @@ package app.apex.server
 
 /** Versão dos Termos de Uso e da Política de Privacidade. Mude quando o texto mudar (o servidor registra qual versão cada pessoa aceitou). */
 object Legal {
-    const val VERSION = "2026-10-07"
+    const val VERSION = "2026-10-07.2"
 }
 
 /** As páginas do site: início, termos, privacidade, exclusão de conta e os links dos e-mails. */
@@ -142,6 +142,8 @@ class WebPages(private val config: ServerConfig) {
         <p>O Apex se conecta direto ao YouTube, à Twitch e à Kick a partir do seu computador. Essas plataformas veem o seu endereço IP e, se você entrou numa conta delas, as
            ações dessa conta (por exemplo curtir ou se inscrever); valem as políticas de privacidade delas. O servidor do Apex não participa dessa comunicação e não vê o que você assiste,
            exceto o histórico que você escolher sincronizar.</p>
+        <p>O app também consulta o <b>GitHub</b> para saber se saiu uma versão nova e baixa a atualização de lá; o GitHub vê o seu endereço IP, como em qualquer download.
+           As atualizações só são instaladas se estiverem assinadas digitalmente pelo projeto.</p>
         <h2>Com quem os dados passam</h2>
         <p>Usamos serviços de terceiros para operar o Apex, que tratam os dados apenas para isso:</p>
         <ul>

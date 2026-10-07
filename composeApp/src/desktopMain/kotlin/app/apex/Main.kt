@@ -41,6 +41,7 @@ import app.apex.player.VlcPlayerController
 import app.apex.source.Binaries
 import app.apex.source.Http
 import app.apex.source.YtDlpExtractor
+import app.apex.update.DesktopUpdater
 import app.apex.theme.ApexColors
 import app.apex.theme.ApexTheme
 import coil3.ImageLoader
@@ -100,7 +101,14 @@ private fun StartupProblem(error: Throwable) {
  * `APEX_SELFTEST=1`: confere, sem abrir janela, o que o app empacotado precisa para funcionar (pasta temporária, rede e o VLC)
  * e escreve o resultado em `selftest.txt` na pasta de dados. Serve para validar o pacote antes de distribuir.
  */
-private fun selfTest(): Nothing {
+/**
+ * Endereços da atualização. As variáveis `APEX_UPDATE_FEED` e `APEX_UPDATE_PREFIX` só servem para ensaiar uma atualização contra um servidor
+ * de teste: quem as mudar não consegue instalar nada, porque a assinatura continua tendo de bater com a chave do projeto.
+ */
+private fun updateFeed() = System.getenv("APEX_UPDATE_FEED")?.takeIf { it.isNotBlank() } ?: DesktopUpdater.FEED_URL
+private fun updatePrefix() = System.getenv("APEX_UPDATE_PREFIX")?.takeIf { it.isNotBlank() } ?: DesktopUpdater.TRUSTED_PREFIX
+
+private fun selfTest(updateRehearsal: Boolean = false): Nothing {
     val dir = FileStore.defaultDir().also { it.mkdirs() }
     val out = StringBuilder()
     fun step(name: String, block: () -> String) {
@@ -108,6 +116,7 @@ private fun selfTest(): Nothing {
     }
     step("java") { "${System.getProperty("java.version")} (${System.getProperty("java.vendor")})" }
     step("tmpdir") { System.getProperty("java.io.tmpdir") }
+    step("atualização") { "versão ${app.apex.BuildInfo.VERSION}; modo ${app.apex.update.InstallMode.detect()}; exe ${app.apex.update.InstallMode.currentExe()?.name}" }
     step("rede") {
         kotlinx.coroutines.runBlocking {
             val status = Http.client.get("https://apex-server-mg5l.onrender.com/health") { timeout { requestTimeoutMillis = 90_000 } }
@@ -115,6 +124,18 @@ private fun selfTest(): Nothing {
         }
     }
     step("vlc") { VlcPlayerController(hardwareDecode = false).also { it.release() }.let { "libVLC carregou" } }
+    if (updateRehearsal) {
+        // Ensaio da atualização de ponta a ponta: confere, baixa, verifica a assinatura e reinicia como o app faria.
+        val updater = DesktopUpdater(
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()), File(dir, "updates"), { true },
+            feedUrl = updateFeed(), trustedPrefix = updatePrefix(),
+        )
+        kotlinx.coroutines.runBlocking { updater.checkNow(manual = true) }
+        out.appendLine("ensaio da atualização: ${updater.state.value}")
+        File(dir, "selftest.txt").writeText(out.toString())
+        if (updater.state.value is app.apex.update.UpdateState.Ready) updater.installAndRestart()
+        kotlin.system.exitProcess(if (updater.state.value is app.apex.update.UpdateState.Ready) 0 else 1)
+    }
     File(dir, "selftest.txt").writeText(out.toString())
     kotlin.system.exitProcess(if ("FALHOU" in out) 1 else 0)
 }
@@ -128,7 +149,20 @@ fun main(args: Array<String>) {
         System.setProperty("java.io.tmpdir", it.absolutePath)
     }
     runCatching { app.apex.source.CookieJar.deleteStale() }
-    if (System.getenv("APEX_SELFTEST") == "1") selfTest()
+    when (System.getenv("APEX_SELFTEST")) {
+        "1" -> selfTest()
+        "update" -> selfTest(updateRehearsal = true)
+    }
+    // As listas mandam baixar as imagens antes de aparecerem (vão para o cache em disco, que as telas usam depois).
+    app.apex.util.ImagePrefetch.enqueue = { urls ->
+        val loader = coil3.SingletonImageLoader.get(coil3.PlatformContext.INSTANCE)
+        urls.forEach { url ->
+            loader.enqueue(
+                coil3.request.ImageRequest.Builder(coil3.PlatformContext.INSTANCE).data(url)
+                    .memoryCachePolicy(coil3.request.CachePolicy.DISABLED).size(coil3.size.Size(480, 270)).build(),
+            )
+        }
+    }
     runApp()
 }
 
@@ -138,7 +172,11 @@ private fun runApp() = application {
     val windowState = rememberWindowState(size = DpSize(1360.dp, 820.dp), position = WindowPosition.Aligned(Alignment.Center))
 
     setSingletonImageLoaderFactory { context ->
+        // Baixa várias imagens ao mesmo tempo (o padrão é 8) e guarda mais no disco: a primeira entrega do Kick e da Twitch demora quase 1 s.
+        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+        val downloads = Dispatchers.IO.limitedParallelism(24)
         ImageLoader.Builder(context)
+            .fetcherCoroutineContext(downloads)
             .components { add(KtorNetworkFetcherFactory(Http.client)) }
             .memoryCache { MemoryCache.Builder().maxSizePercent(context, 0.25).build() }
             .diskCache { DiskCache.Builder().directory(File(dataDir, "images").toOkioPath()).maxSizeBytes(400L * 1024 * 1024).build() }
@@ -150,15 +188,26 @@ private fun runApp() = application {
             val data = UserData(FileStore(dataDir), scope)
             val bins = Binaries(File(dataDir, "bin"))
             val accounts = DesktopAccounts(dataDir)
-            val system = DesktopSystem(windowState, accounts)
+            val updater = DesktopUpdater(
+                scope, File(dataDir, "updates"), autoDownload = { data.settings.value.autoUpdate },
+                feedUrl = updateFeed(), trustedPrefix = updatePrefix(),
+            )
+            val system = DesktopSystem(windowState, accounts, updater)
             val extractor = YtDlpExtractor(bins, cookieHeader = { data.account(Platform.YouTube)?.credential })
             val player = VlcPlayerController(hardwareDecode = data.settings.value.preferHardwareDecode)
+            // Ao instalar uma versão nova o app fecha: grava o que estava esperando e solta o player antes.
+            updater.beforeExit = {
+                data.flush()
+                player.release()
+            }
             AppContainer(scope, system, data, extractor, player).also { navigateFromEnv(it) }
         }
     }
 
     Window(
         onCloseRequest = {
+            // Grava o que ainda estava esperando (as mudanças dos últimos instantes).
+            boot.getOrNull()?.data?.flush()
             boot.getOrNull()?.player?.release()
             exitApplication()
         },

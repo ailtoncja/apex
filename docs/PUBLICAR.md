@@ -62,8 +62,14 @@ a cada 5 minutos. Se crescer, o plano pago do Render (US$ 7/mês) acaba com isso
   usuário atual, sem administrador) e o `SHA256SUMS.txt`. Todos trazem o Java 21; quem receber só precisa do **VLC 64 bits**.
 - Ele usa duas ferramentas que ficam **fora do projeto**, em `%USERPROFILE%\.apex\`: o JDK Temurin 21 (`jdk\`) e o WiX Toolset 3.14 (`wix\`). Em outro PC, baixe
   o zip do Temurin 21 (adoptium.net) e o `wix314-binaries.zip` (github.com/wixtoolset/wix3) e extraia nessas pastas.
-- **Nova versão:** mude `packageVersion` em `composeApp/build.gradle.kts` e `VERSION` em `Empacotar.cmd`, rode `Empacotar.cmd`, crie uma tag e uma Release:
-  `gh release create v1.0.1 dist/Apex-1.0.1* dist/SHA256SUMS.txt --title "Apex 1.0.1" --notes "..."`.
+- **Nova versão:** mude `appVersion` em `composeApp/build.gradle.kts` (é a única fonte: vai para o instalador e para o app) e rode `Empacotar.cmd`.
+  Ele gera os instaladores, o zip, o `SHA256SUMS.txt` **e a assinatura** `SHA256SUMS.txt.sig`. Depois crie a Release com todos eles:
+  `gh release create v1.0.2 dist/Apex-1.0.2* dist/SHA256SUMS.txt dist/SHA256SUMS.txt.sig --title "Apex 1.0.2" --notes "..."`.
+  Quem já tem o Apex 1.0.1 ou mais novo recebe a atualização sozinho (confere ao abrir e a cada 6 horas). Quem tem a 1.0.0 atualiza uma vez à mão.
+- **A chave que assina as atualizações** fica em `%USERPROFILE%\.apex\signing\apex-update.key` (fora do repositório; o `.gitignore` bloqueia `*.key`).
+  **Faça uma cópia segura dela** (gerenciador de senhas, pen drive): sem ela não dá para publicar atualizações que os apps aceitem (só mandando um instalador novo
+  à mão), e quem a roubar consegue assinar uma atualização falsa. Para trocar a chave: gere outra com `java tools/GenKey.java`, cole a pública em
+  `UpdateKeys.kt` e publique uma versão nova assinada com a **antiga** (que os apps ainda aceitam) contendo a chave nova.
 - O servidor mostra o link da página de Releases na página inicial (mude com `DOWNLOAD_URL` no Render se hospedar em outro lugar).
 - Sem assinatura de código, o Windows (SmartScreen) mostra um aviso na primeira abertura (o `LEIA-ME` e o README explicam o que clicar). A assinatura é paga
   por ano; deixe para quando houver público.

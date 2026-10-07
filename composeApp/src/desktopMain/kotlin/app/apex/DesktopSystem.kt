@@ -18,6 +18,7 @@ import java.net.URI
 class DesktopSystem(
     private val windowState: WindowState,
     private val accounts: DesktopAccounts,
+    override val updater: app.apex.update.Updater,
 ) : SystemServices {
     private val _fullscreen = MutableStateFlow(false)
     override val fullscreen: StateFlow<Boolean> = _fullscreen.asStateFlow()

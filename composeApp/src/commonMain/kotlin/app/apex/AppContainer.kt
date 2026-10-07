@@ -10,6 +10,7 @@ import app.apex.data.UserData
 import app.apex.model.Channel
 import app.apex.model.Media
 import app.apex.model.Platform
+import app.apex.model.SupportKind
 import app.apex.nav.Navigator
 import app.apex.nav.Route
 import app.apex.state.ScreenStates
@@ -27,6 +28,9 @@ import kotlinx.coroutines.launch
 
 /** Tudo que depende do sistema operacional. No Windows: abrir links, tela cheia, copiar, login embutido. */
 interface SystemServices {
+    /** Atualização do próprio app. */
+    val updater: app.apex.update.Updater
+
     val fullscreen: StateFlow<Boolean>
     fun setFullscreen(on: Boolean)
     fun openUrl(url: String)
@@ -93,6 +97,22 @@ class AppContainer(
             }
         }
         scope.launch { data.settings.collect { kick.hideMature = it.hideMature } }
+        // Confere se saiu versão nova: depois de alguns segundos da abertura e a cada 6 horas.
+        scope.launch {
+            kotlinx.coroutines.delay(20_000)
+            while (true) {
+                runCatching { system.updater.check() }
+                kotlinx.coroutines.delay(6 * 3_600_000L)
+            }
+        }
+        // Subs e memberships mudam pouco: confere uma vez ao abrir e de tempos em tempos.
+        scope.launch {
+            kotlinx.coroutines.delay(15_000)
+            while (true) {
+                for (platform in listOf(Platform.Twitch, Platform.YouTube)) runCatching { refreshSupport(platform) }
+                kotlinx.coroutines.delay(6 * 3_600_000L)
+            }
+        }
         // O navegador troca os cookies do YouTube de tempos em tempos; relemos o perfil dele para a sessão não cair.
         scope.launch {
             while (true) {
@@ -191,7 +211,31 @@ class AppContainer(
             Platform.Kick -> kick.followedChannels()
         }
         data.addSubscriptions(channels)
+        // Quem a pessoa paga (sub ou membro) fica separado dos demais canais.
+        runCatching { refreshSupport(platform) }
         return ImportResult(channels.size, note)
+    }
+
+    /**
+     * Atualiza quais canais a pessoa apoia pagando: subs da Twitch e memberships do YouTube (a Kick não informa).
+     * Se a consulta falhar, o que já estava marcado continua como estava. Devolve quantos canais apoiados há depois.
+     */
+    suspend fun refreshSupport(platform: Platform): Int {
+        when (platform) {
+            Platform.Twitch -> {
+                if (data.account(Platform.Twitch) == null) return 0
+                val subs = twitch.subscribedChannels()
+                data.setSupport(Platform.Twitch, subs.map { it.channel to SupportKind.Sub })
+            }
+            Platform.YouTube -> {
+                if (!tube.loggedIn) return 0
+                val known = data.subscriptions.value.filter { it.platform == Platform.YouTube }
+                val members = youtube.activeMemberships(known)
+                data.setSupport(Platform.YouTube, members.map { it to SupportKind.Member })
+            }
+            Platform.Kick -> return 0
+        }
+        return data.subscriptions.value.count { it.platform == platform && it.support != null }
     }
 
     /** Segue/deixa de seguir no app e, se houver conta do YouTube logada, também na conta. */

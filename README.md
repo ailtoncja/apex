@@ -14,6 +14,9 @@ Na página de [Releases](https://github.com/ailtoncja/apex/releases/latest) esco
 - **`Apex-1.0.0.msi`** (ou `Apex-1.0.0.exe`): instalador, com atalho no menu Iniciar e na área de trabalho; não pede administrador.
 - **`Apex-1.0.0-windows-x64.zip`**: versão portátil, é só extrair e abrir `Apex.exe`.
 
+Depois de instalado, o Apex **se atualiza sozinho**: confere se saiu versão nova ao abrir (e a cada 6 horas), baixa em segundo plano, confere a
+assinatura e pergunta quando reiniciar. Dá para desligar em Ajustes › Atualizações do Apex.
+
 O Windows pode mostrar "O Windows protegeu o computador", porque o programa ainda não tem assinatura digital: clique em *Mais informações* e
 depois em *Executar assim mesmo*. Para conferir o arquivo baixado, compare o hash com o do `SHA256SUMS.txt` da release.
 

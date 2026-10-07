@@ -6,6 +6,7 @@ import app.apex.model.HistoryEntry
 import app.apex.model.LocalPlaylist
 import app.apex.model.Media
 import app.apex.model.Platform
+import app.apex.model.SupportKind
 import app.apex.source.AppJson
 import app.apex.shared.SyncCollections
 import app.apex.shared.UserDto
@@ -23,8 +24,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -89,12 +88,24 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
     private inline fun <reified T> load(name: String, default: T): T =
         store.read(name)?.let { runCatching { AppJson.decodeFromString<T>(it) }.getOrNull() } ?: default
 
+    /** Uma coleção que vai para o disco; [written] é o que já foi gravado (começa com o que foi lido na abertura). */
+    private class Persisted(val name: String, val current: () -> Any?, val encode: () -> String, var written: Any?)
+
+    private val persisted = mutableListOf<Persisted>()
+
     private inline fun <reified T> persist(name: String, flow: StateFlow<T>) {
-        scope.launch {
-            flow.drop(1).collectLatest {
-                delay(300)
-                runCatching { store.write(name, AppJson.encodeToString(it)) }
-            }
+        persisted += Persisted(name, { flow.value }, { AppJson.encodeToString(flow.value) }, flow.value)
+    }
+
+    /**
+     * Grava no disco o que mudou desde a última gravação. Roda sozinho a cada meio segundo e ao fechar o app.
+     * (Comparar o estado atual com o gravado não perde mudanças feitas logo na abertura, como acontecia ao "escutar" cada coleção.)
+     */
+    fun flush() = synchronized(persisted) {
+        for (p in persisted) {
+            val value = p.current()
+            if (value == p.written) continue
+            if (runCatching { store.write(p.name, p.encode()) }.isSuccess) p.written = value
         }
     }
 
@@ -144,6 +155,12 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
         persist("accounts", _accounts)
         persist("cloud", _cloud)
         persist("sync_state", _syncState)
+        scope.launch {
+            while (true) {
+                delay(500)
+                flush()
+            }
+        }
     }
 
     // ---------- ajustes ----------
@@ -169,6 +186,17 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
 
     fun toggleSubscription(channel: Channel) = _subscriptions.update { list ->
         if (list.any { it.key == channel.key }) list.filterNot { it.key == channel.key } else list + channel
+    }
+
+    /**
+     * Marca quais canais a pessoa apoia pagando (sub ou membro) numa plataforma. Quem não está na lista deixa de ser "apoiado";
+     * apoiar um canal que ainda não estava nas inscrições também o inscreve.
+     */
+    fun setSupport(platform: Platform, supported: List<Pair<Channel, SupportKind>>) = _subscriptions.update { list ->
+        val byKey = supported.associate { it.first.key to it }
+        val updated = list.map { ch -> if (ch.platform != platform) ch else ch.copy(support = byKey[ch.key]?.second) }
+        val known = updated.map { it.key }.toSet()
+        updated + supported.filter { it.first.key !in known }.map { (c, kind) -> c.copy(support = kind) }
     }
 
     fun addSubscriptions(channels: List<Channel>) = _subscriptions.update { list ->

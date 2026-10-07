@@ -31,6 +31,9 @@ Só a versão mais recente da [página de Releases](https://github.com/ailtoncja
 - Links só abrem se forem `http(s)`; endereços de vídeo vindos de dados sincronizados nunca viram opção do yt-dlp.
 - O yt-dlp e o Deno baixados só são instalados se o hash SHA-256 bater com o publicado junto na release oficial.
 - O perfil temporário do navegador usado no login é apagado assim que o login é lido.
+- **Atualização automática:** o app só instala uma versão nova se a lista de hashes (`SHA256SUMS.txt`) estiver assinada com a chave privada do projeto
+  (Ed25519; a chave pública vai dentro do app) e o instalador tiver exatamente o hash dessa lista. Os arquivos só são baixados de
+  `github.com/ailtoncja/apex/releases`. Quem invadir a conta do GitHub, sem a chave de assinatura, não consegue empurrar uma atualização falsa.
 
 ## O que o Apex **não** faz
 

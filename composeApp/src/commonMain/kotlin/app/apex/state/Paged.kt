@@ -57,6 +57,7 @@ class Paged<T>(
         job = scope.launch {
             try {
                 val page = fetch(token)
+                app.apex.util.ImagePrefetch.request(page.items)
                 _items.update { (it + page.items).distinctBy(keyOf) }
                 token = page.next
                 exhausted = page.next == null

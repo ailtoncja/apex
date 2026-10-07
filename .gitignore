@@ -10,3 +10,7 @@ server/.env
 
 # Pacote para distribuir (gerado por Empacotar.cmd)
 dist/
+
+# Chave privada que assina as atualizações: NUNCA no repositório
+*.key
+signing/

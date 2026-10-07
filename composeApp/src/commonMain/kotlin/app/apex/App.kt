@@ -49,6 +49,7 @@ import app.apex.ui.settings.SettingsScreen
 import app.apex.ui.shell.MiniPlayer
 import app.apex.ui.shell.Sidebar
 import app.apex.ui.shell.TopBar
+import app.apex.ui.shell.UpdateBanner
 import app.apex.ui.subs.SubscriptionsScreen
 import app.apex.ui.watch.WatchScreen
 import kotlinx.coroutines.delay
@@ -72,6 +73,7 @@ fun ApexApp() {
                         Sidebar(expanded = !settings.sidebarCollapsed)
                         Column(Modifier.weight(1f)) {
                             TopBar(onToggleSidebar = { app.data.updateSettings { it.copy(sidebarCollapsed = !it.sidebarCollapsed) } })
+                            UpdateBanner()
                             Box(Modifier.weight(1f).fillMaxSize()) { Content(route) }
                         }
                     }

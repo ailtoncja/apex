@@ -2,6 +2,9 @@ package app.apex.ui.search
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +15,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -41,8 +47,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.apex.LocalApp
-import app.apex.model.Channel
-import app.apex.model.Media
 import app.apex.model.Platform
 import app.apex.nav.Route
 import app.apex.source.SearchDate
@@ -51,13 +55,19 @@ import app.apex.source.SearchFeature
 import app.apex.source.SearchFilters
 import app.apex.source.SearchSort
 import app.apex.source.SearchType
-import app.apex.state.SearchState
+import app.apex.state.ChannelEntry
+import app.apex.state.MediaEntry
+import app.apex.state.PlaylistEntry
+import app.apex.state.SearchKind
+import app.apex.state.SearchSources
 import app.apex.state.allows
+import app.apex.state.buildSearchEntries
 import app.apex.state.describe
-import app.apex.state.toggled
-import app.apex.state.interleave
+import app.apex.state.extraCount
+import app.apex.state.kind
 import app.apex.state.matchSubscriptions
-import app.apex.state.withoutBlocked
+import app.apex.state.toggled
+import app.apex.state.withKind
 import app.apex.theme.ApexColors
 import app.apex.theme.color
 import app.apex.ui.components.ActionButton
@@ -65,13 +75,12 @@ import app.apex.ui.components.ApexChip
 import app.apex.ui.components.ChannelRow
 import app.apex.ui.components.EmptyState
 import app.apex.ui.components.ErrorBox
-import app.apex.ui.components.MediaRow
 import app.apex.ui.components.OnNearEnd
 import app.apex.ui.components.RemotePlaylistRow
-import app.apex.ui.components.SectionTitle
-import app.apex.ui.components.SkeletonCard
 import app.apex.ui.components.VideoRow
+import app.apex.ui.components.shimmer
 
+/** A tela de resultados como a do YouTube: abas de tipo no topo, o botão de filtros e uma lista só. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(route: Route.Search) {
@@ -92,22 +101,30 @@ fun SearchScreen(route: Route.Search) {
     val twLives by st.twitchLives.value.collectAsState()
     val twChannels by st.twitchChannels.value.collectAsState()
     val kickChannels by st.kickChannels.value.collectAsState()
+    val twLivesLoaded by st.twitchLives.loaded.collectAsState()
+    val twChannelsLoaded by st.twitchChannels.loaded.collectAsState()
+    val kickLoaded by st.kickChannels.loaded.collectAsState()
     val liveKeys by app.screens.subs.liveChannels.collectAsState()
     val subs by app.data.subscriptions.collectAsState()
     val feed by app.data.feed.collectAsState()
     val liveNow by app.screens.subs.liveNow.collectAsState()
     val platforms = st.platforms
     val onlySubs = st.onlySubs
+    val kind = route.filters.kind()
+
     // Cada combinação de consulta e filtros do YouTube tem o seu estado: ao mudar um filtro, leva junto as plataformas e "Inscrições" ligadas.
     fun changeFilters(filters: SearchFilters) {
         app.screens.search(route.query, filters).also { it.platforms = st.platforms; it.onlySubs = st.onlySubs }
         app.nav.replaceTop(route.copy(filters = filters))
     }
-    // Com uma plataforma só, a lista mostra mais resultados dela; com várias (ou todas), um pouco de cada.
-    val single = platforms.size == 1
+    fun clearAll() {
+        val clean = SearchFilters(type = SearchType.Any)
+        app.screens.search(route.query, clean).also { it.platforms = emptySet(); it.onlySubs = false }
+        app.nav.replaceTop(route.copy(filters = clean))
+    }
+
     val listState = rememberLazyListState()
     var showFilters by remember { mutableStateOf(false) }
-
     val showYt = platforms.allows(Platform.YouTube)
     val showTw = platforms.allows(Platform.Twitch)
     val showKick = platforms.allows(Platform.Kick)
@@ -115,159 +132,150 @@ fun SearchScreen(route: Route.Search) {
 
     // O que a pessoa já segue e combina com a busca (canais pelo nome; vídeos e lives por título, canal e categoria).
     val mine = remember(route.query, subs, feed, liveNow, platforms) { matchSubscriptions(route.query, subs, liveNow + feed.items, platforms) }
-    val mineMedia = mine.media.withoutBlocked(blocked)
+    val followed = remember(subs) { subs.map { it.key }.toSet() }
+    val entries = remember(kind, platforms, onlySubs, ytVideos, ytChannels, ytPlaylists, twLives, twChannels, kickChannels, mine, followed, blocked) {
+        buildSearchEntries(
+            kind, platforms, onlySubs,
+            SearchSources(ytVideos, ytChannels, ytPlaylists, twLives, twChannels, kickChannels, mine, followed), blocked,
+        )
+    }
+    val playable = remember(entries) { entries.filterIsInstance<MediaEntry>().map { it.media } }
 
-    val channelLists = listOf(
-        if (showYt) ytChannels.take(if (single) 8 else 3).map { it to false } else emptyList(),
-        if (showTw) twChannels.take(if (single) 8 else 3).map { it.channel to (it.live != null) } else emptyList(),
-        if (showKick) kickChannels.take(if (single) 8 else 3).map { it.channel to (it.live != null) } else emptyList(),
-    )
-    val channels: List<Pair<Channel, Boolean>> =
-        (if (single) channelLists.flatten() else interleave(channelLists)).filter { it.first.key !in blocked }
-
-    val twitchLives = if (showTw) twLives.take(if (single) 24 else 12) else emptyList()
-    val kickLives = if (showKick) kickChannels.mapNotNull { it.live }.take(if (single) 12 else 6) else emptyList()
-    val ytLives = if (showYt) ytVideos.filter { it.isLive }.take(if (single) 12 else 6) else emptyList()
-    val lives: List<Media> = interleave(listOf(twitchLives, kickLives, ytLives)).withoutBlocked(blocked)
-    val showLivesAsList = single && platforms.first() != Platform.YouTube
+    val waiting = !onlySubs && ((showYt && !ytLoaded) || (showTw && (!twLivesLoaded || !twChannelsLoaded)) || (showKick && !kickLoaded))
+    val activeCount = route.filters.extraCount + platforms.size + (if (onlySubs) 1 else 0)
 
     Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
-            Modifier.widthIn(max = 1120.dp).fillMaxWidth(),
+            Modifier.widthIn(max = 1280.dp).fillMaxWidth(),
             state = listState,
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item("header") {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SectionTitle("Resultados para “${route.query}”", Modifier.padding(top = 4.dp))
-                    // Os filtros combinam: por exemplo "Inscrições" + "Twitch" mostra só o que vem dos canais da Twitch que a pessoa segue.
+            // Abas de tipo (como as do YouTube) e o botão de filtros.
+            item("tabs") {
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(SearchKind.entries) { k -> ApexChip(k.label, kind == k, { if (k != kind) changeFilters(route.filters.withKind(k)) }) }
+                    }
+                    FiltersButton(activeCount) { showFilters = true }
+                }
+            }
+            // Os filtros ligados aparecem aqui, para tirar com um toque.
+            if (activeCount > 0) {
+                item("active") {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ApexChip("Tudo", platforms.isEmpty() && !onlySubs, { st.platforms = emptySet(); st.onlySubs = false })
-                        Platform.entries.forEach { p -> ApexChip(p.label, p in platforms, { st.platforms = platforms.toggled(p) }, dot = p.color()) }
-                        if (subs.isNotEmpty()) {
-                            val label = if (!mine.isEmpty) "Inscrições (${mine.channels.size + mineMedia.size})" else "Inscrições"
-                            ApexChip(label, onlySubs, { st.onlySubs = !onlySubs })
-                        }
-                    }
-                    if (showYt && !onlySubs) {
-                        // Filtros no estilo do YouTube: um botão que abre o painel e os que estão ligados aparecem aqui, para tirar com um toque.
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ApexChip(if (route.filters.activeCount > 0) "Filtros (${route.filters.activeCount})" else "Filtros", false, { showFilters = true })
-                            activeFilters(route.filters).forEach { (label, without) ->
-                                ApexChip("$label  ✕", true, { changeFilters(without) })
-                            }
-                        }
+                        activeFilters(route.filters).forEach { (label, without) -> ApexChip("$label  ✕", true, { changeFilters(without) }) }
+                        platforms.forEach { p -> ApexChip("${p.label}  ✕", true, { st.platforms = platforms - p }, dot = p.color()) }
+                        if (onlySubs) ApexChip("Só inscrições  ✕", true, { st.onlySubs = false })
                     }
                 }
             }
 
-            // 1) o que combina entre as inscrições da pessoa
-            if (!onlySubs && !mine.isEmpty) {
-                item("mine") {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        SectionTitle(
-                            "Das suas inscrições", subtitle = "${mine.channels.size} canais • ${mineMedia.size} vídeos e lives",
-                            trailing = { ActionButton("Ver tudo", { st.onlySubs = true }) },
-                        )
-                        mine.channels.take(3).forEach { ch -> ChannelRow(ch, live = ch.key in liveKeys) }
-                        if (mineMedia.isNotEmpty()) MediaRow(mineMedia.take(10))
-                    }
+            items(entries, key = { it.key }) { e ->
+                when (e) {
+                    is ChannelEntry -> ChannelRow(e.channel, live = e.live != null || e.channel.key in liveKeys, liveMedia = e.live)
+                    is MediaEntry -> VideoRow(e.media, thumbWidth = 300.dp, upNext = playable.filter { it.key != e.media.key })
+                    is PlaylistEntry -> RemotePlaylistRow(e.playlist)
                 }
             }
-            if (onlySubs) {
-                if (mine.isEmpty) item("mine-none") {
+
+            when {
+                entries.isEmpty() && waiting -> items(5, key = { "sk$it" }) { SkeletonResultRow() }
+                entries.isEmpty() && ytError != null && showYt && !onlySubs -> item("err") { ErrorBox(ytError.orEmpty(), { st.youtube.refresh() }) }
+                entries.isEmpty() -> item("none") {
                     EmptyState(
-                        Icons.Rounded.Search, "Nada nas suas inscrições",
-                        "Nenhum canal, vídeo ou live dos canais que você segue" + (if (platforms.isEmpty()) "" else " em ${platforms.describe()}") +
-                            " combina com “${route.query}”. Tire o filtro Inscrições para ver tudo.",
+                        Icons.Rounded.Search, "Nada encontrado",
+                        emptyMessage(route.query, kind, platforms, onlySubs),
+                        action = if (activeCount > 0 || kind != SearchKind.All) {
+                            { ActionButton("Limpar filtros", { clearAll() }, primary = true) }
+                        } else null,
                     )
-                } else {
-                    if (mine.channels.isNotEmpty()) {
-                        item("mine-title-ch") { SectionTitle("Canais", subtitle = "${mine.channels.size} que você segue") }
-                        items(mine.channels, key = { "mc-" + it.key }) { ch -> ChannelRow(ch, live = ch.key in liveKeys) }
-                    }
-                    if (mineMedia.isNotEmpty()) {
-                        item("mine-title-v") { SectionTitle("Vídeos e lives", subtitle = "${mineMedia.size} dos seus canais") }
-                        items(mineMedia, key = { "mv-" + it.key }) { VideoRow(it, upNext = mineMedia.filter { m -> m.key != it.key }) }
-                    }
                 }
-            }
-
-            // 2) canais
-            if (!onlySubs && channels.isNotEmpty()) {
-                item("channels") {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        SectionTitle("Canais", Modifier.padding(bottom = 4.dp))
-                        channels.take(if (single) 8 else 6).forEach { (ch, live) -> ChannelRow(ch, live = live || ch.key in liveKeys) }
-                    }
-                }
-            }
-
-            // 3) lives
-            if (!onlySubs && lives.isNotEmpty()) {
-                item("lives-title") { SectionTitle("Ao vivo agora", subtitle = "${lives.size} ${if (lives.size == 1) "transmissão" else "transmissões"}") }
-                if (showLivesAsList) {
-                    items(lives, key = { "l-" + it.key }) { VideoRow(it, upNext = lives.filter { m -> m.key != it.key }) }
-                } else {
-                    item("lives") { MediaRow(lives) }
-                }
-            }
-
-            // 4) playlists e 5) vídeos do YouTube
-            if (showYt && !onlySubs) {
-                if (ytPlaylists.isNotEmpty()) {
-                    item("playlists-title") { SectionTitle("Playlists") }
-                    items(ytPlaylists.take(if (single) 12 else 3), key = { "p-" + it.id }) { RemotePlaylistRow(it) }
-                }
-                val shown = ytVideos.withoutBlocked(blocked)
-                if (shown.isNotEmpty()) {
-                    item("videos-title") { SectionTitle("Vídeos do YouTube") }
-                    items(shown.distinctBy { it.key }, key = { "v-" + it.key }) { VideoRow(it, upNext = shown.filter { m -> m.key != it.key }) }
-                } else if (!ytLoaded || ytLoading) {
-                    items(5, key = { "sk$it" }) { SkeletonRow() }
-                } else if (ytError != null) {
-                    item("err") { ErrorBox(ytError.orEmpty(), { st.youtube.refresh() }) }
-                } else if (channels.isEmpty() && lives.isEmpty() && ytPlaylists.isEmpty()) {
-                    item("none") { EmptyState(Icons.Rounded.Search, "Nada encontrado", "Tente outras palavras ou remova os filtros.") }
-                }
-                if (ytLoading && shown.isNotEmpty()) item("more") { SkeletonRow() }
-            } else if (!onlySubs && channels.isEmpty() && lives.isEmpty()) {
-                item("none-live") {
-                    EmptyState(Icons.Rounded.Search, "Nada encontrado", "Nenhum canal ou live da ${platforms.describe()} para “${route.query}”. Tente outras plataformas.")
-                }
+                ytLoading && showYt && !onlySubs -> item("more") { SkeletonResultRow() }
             }
         }
     }
 
     if (showFilters) {
-        FiltersDialog(route.filters, onChange = { changeFilters(it) }, onClose = { showFilters = false })
+        FiltersDialog(
+            route.filters, onChange = { changeFilters(it) }, onClose = { showFilters = false },
+            platforms = platforms, onPlatforms = { st.platforms = it },
+            onlySubs = onlySubs, onOnlySubs = { st.onlySubs = it },
+            onClear = { clearAll() },
+        )
     }
 }
 
-/** Os filtros ligados, cada um com o filtro como ficaria sem ele (para tirar com um toque). */
+/** O que dizer quando não há resultado (cada aba e cada filtro têm o seu motivo). */
+internal fun emptyMessage(query: String, kind: SearchKind, platforms: Set<Platform>, onlySubs: Boolean): String = when {
+    onlySubs -> "Nenhum canal, vídeo ou live dos canais que você segue" + (if (platforms.isEmpty()) "" else " em ${platforms.describe()}") +
+        " combina com “$query”. Tire o filtro de inscrições para ver tudo."
+    (kind == SearchKind.Videos || kind == SearchKind.Playlists) && platforms.isNotEmpty() && Platform.YouTube !in platforms ->
+        "${kind.label} só existem no YouTube. Ligue o YouTube nos filtros ou tire a plataforma."
+    kind == SearchKind.Lives -> "Nenhuma live de “$query” agora" + (if (platforms.isEmpty()) "." else " em ${platforms.describe()}.")
+    platforms.isNotEmpty() -> "Nada de “$query” em ${platforms.describe()}. Tente outras plataformas ou outras palavras."
+    else -> "Nada para “$query”. Tente outras palavras ou tire algum filtro."
+}
+
+/** O botão "Filtros" do canto direito, como o do YouTube. */
+@Composable
+private fun FiltersButton(count: Int, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).hoverable(source)
+            .background(if (hovered) ApexColors.SurfaceHighest else ApexColors.SurfaceHigh)
+            .clickable(interactionSource = source, indication = null, onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(Icons.Rounded.Tune, null, Modifier.size(18.dp), tint = ApexColors.OnSurface)
+        Text(if (count > 0) "Filtros ($count)" else "Filtros", style = MaterialTheme.typography.labelLarge, color = ApexColors.OnSurface)
+    }
+}
+
+/** Os filtros do YouTube ligados (a aba de tipo não entra: ela já aparece no topo), cada um como ficaria sem ele. */
 private fun activeFilters(f: SearchFilters): List<Pair<String, SearchFilters>> = buildList {
     if (f.sort != SearchSort.Relevance) add("Ordem: ${f.sort.label}" to f.copy(sort = SearchSort.Relevance))
     if (f.date != SearchDate.Any) add(f.date.label to f.copy(date = SearchDate.Any))
-    if (f.type != SearchType.Any) add("Tipo: ${f.type.label}" to f.copy(type = SearchType.Any))
     if (f.duration != SearchDuration.Any) add(f.duration.label to f.copy(duration = SearchDuration.Any))
-    if (f.liveOnly) add("Ao vivo" to f.copy(liveOnly = false))
     f.features.forEach { add(it.label to f.copy(features = f.features - it)) }
 }
 
 /** O painel de filtros, como o do YouTube: uma coluna para cada grupo. */
 @Composable
-internal fun FiltersDialog(filters: SearchFilters, onChange: (SearchFilters) -> Unit, onClose: () -> Unit) {
+internal fun FiltersDialog(
+    filters: SearchFilters, onChange: (SearchFilters) -> Unit, onClose: () -> Unit,
+    // "Onde procurar": só aparece quando a tela passa as plataformas (a pesquisa passa; os testes do painel sozinho não precisam).
+    platforms: Set<Platform> = emptySet(), onPlatforms: ((Set<Platform>) -> Unit)? = null,
+    onlySubs: Boolean = false, onOnlySubs: ((Boolean) -> Unit)? = null,
+    onClear: (() -> Unit)? = null,
+) {
+    val anyActive = filters.activeCount > 0 || platforms.isNotEmpty() || onlySubs
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(shape = RoundedCornerShape(18.dp), color = ApexColors.SurfaceHigh, modifier = Modifier.widthIn(max = 940.dp).padding(24.dp)) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Filtros de pesquisa", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                    if (filters.activeCount > 0) {
-                        ActionButton("Limpar tudo", { onChange(SearchFilters(type = SearchType.Any)) })
+                    if (anyActive) {
+                        ActionButton("Limpar tudo", { onClear?.invoke() ?: onChange(SearchFilters(type = SearchType.Any)) })
                         Box(Modifier.width(8.dp))
                     }
                     ActionButton("Concluído", onClose, primary = true)
+                }
+                if (onPlatforms != null && onOnlySubs != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                        FilterColumn("Onde procurar", Modifier.weight(1f)) {
+                            FilterOption("Todas as plataformas", platforms.isEmpty()) { onPlatforms(emptySet()) }
+                            Platform.entries.forEach { p -> FilterOption(p.label, p in platforms) { onPlatforms(platforms.toggled(p)) } }
+                        }
+                        FilterColumn("De quem", Modifier.weight(1f)) {
+                            FilterOption("De todos", !onlySubs) { onOnlySubs(false) }
+                            FilterOption("Só dos canais que sigo", onlySubs) { onOnlySubs(true) }
+                        }
+                        Box(Modifier.weight(3.2f))
+                    }
+                    Text("FILTROS DO YOUTUBE", style = MaterialTheme.typography.labelMedium, color = ApexColors.Muted)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                     FilterColumn("Data de envio", Modifier.weight(1f)) {
@@ -316,9 +324,15 @@ private fun FilterOption(label: String, selected: Boolean, onClick: () -> Unit) 
     }
 }
 
+/** Uma linha de resultado carregando: miniatura à esquerda e duas linhas de texto. */
 @Composable
-private fun SkeletonRow() {
+private fun SkeletonResultRow() {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        SkeletonCard(Modifier.width(246.dp))
+        Box(Modifier.width(300.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).shimmer())
+        Column(Modifier.weight(1f).padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.fillMaxWidth(0.7f).height(16.dp).shimmer())
+            Box(Modifier.fillMaxWidth(0.4f).height(12.dp).shimmer())
+            Box(Modifier.fillMaxWidth(0.25f).height(12.dp).shimmer())
+        }
     }
 }

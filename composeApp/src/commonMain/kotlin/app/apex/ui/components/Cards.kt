@@ -76,6 +76,15 @@ fun MediaThumbnail(
         if (showPlatform && media.platform != Platform.YouTube) {
             PlatformTag(media.platform, Modifier.align(Alignment.TopStart).padding(8.dp))
         }
+        if (media.isClip || media.isVod) {
+            Text(
+                if (media.isClip) "CLIPE" else "VOD",
+                Modifier.align(Alignment.BottomStart).padding(8.dp).background(Color(0xCC000000), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
         if (media.isLive) {
             LiveTag(Modifier.align(Alignment.BottomStart).padding(8.dp))
             media.viewCount?.let {

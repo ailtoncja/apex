@@ -14,6 +14,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,6 +32,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -192,7 +199,7 @@ private fun runApp() = application {
                 scope, File(dataDir, "updates"), autoDownload = { data.settings.value.autoUpdate },
                 feedUrl = updateFeed(), trustedPrefix = updatePrefix(),
             )
-            val system = DesktopSystem(windowState, accounts, updater)
+            val system = DesktopSystem(accounts, updater)
             val extractor = YtDlpExtractor(bins, cookieHeader = { data.account(Platform.YouTube)?.credential })
             val player = VlcPlayerController(hardwareDecode = data.settings.value.preferHardwareDecode)
             // Ao instalar uma versão nova o app fecha: grava o que estava esperando e solta o player antes.
@@ -204,27 +211,75 @@ private fun runApp() = application {
         }
     }
 
-    Window(
-        onCloseRequest = {
-            // Grava o que ainda estava esperando (as mudanças dos últimos instantes).
-            boot.getOrNull()?.data?.flush()
-            boot.getOrNull()?.player?.release()
-            exitApplication()
-        },
-        title = "Apex",
-        icon = AppIcon,
-        state = windowState,
-    ) {
-        boot.fold(
-            onSuccess = { app ->
-                CompositionLocalProvider(LocalApp provides app) { ApexApp() }
+    // Tela cheia como o F11: sem barra de título nem bordas, cobrindo o monitor inteiro (e a barra de tarefas).
+    // O Compose não deixa trocar `undecorated` com a janela aberta (dá IllegalComponentStateException), então a janela é recriada já
+    // nos limites certos. Nada se perde: a navegação, o player e os dados ficam fora dela.
+    val requested = boot.getOrNull()?.system?.fullscreen?.collectAsState()?.value ?: false
+    var applied by remember { mutableStateOf(false) }
+    var before by remember { mutableStateOf<WindowBeforeFullscreen?>(null) }
+
+    // Atalho para testes: `APEX_FULLSCREEN=1` abre já em tela cheia; `cycle` entra e, depois de alguns segundos, sai.
+    // Fica fora da janela, que é recriada ao trocar de modo.
+    LaunchedEffect(Unit) {
+        val app = boot.getOrNull() ?: return@LaunchedEffect
+        when (System.getenv("APEX_FULLSCREEN")) {
+            "1" -> app.system.setFullscreen(true)
+            "cycle" -> {
+                kotlinx.coroutines.delay(2_000)
+                app.system.setFullscreen(true)
+                kotlinx.coroutines.delay(6_000)
+                app.system.setFullscreen(false)
+            }
+        }
+    }
+
+    key(applied) {
+        Window(
+            onCloseRequest = {
+                // Grava o que ainda estava esperando (as mudanças dos últimos instantes).
+                boot.getOrNull()?.data?.flush()
+                boot.getOrNull()?.player?.release()
+                exitApplication()
             },
-            onFailure = { StartupProblem(it) },
-        )
+            title = "Apex",
+            icon = AppIcon,
+            state = windowState,
+            undecorated = applied,
+        ) {
+            LaunchedEffect(requested) {
+                if (requested == applied) return@LaunchedEffect
+                if (requested) {
+                    before = WindowBeforeFullscreen(windowState.placement, windowState.position, windowState.size)
+                    val screen = window.graphicsConfiguration?.bounds
+                        ?: java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration.bounds
+                    windowState.placement = WindowPlacement.Floating
+                    windowState.position = WindowPosition(screen.x.dp, screen.y.dp)
+                    windowState.size = DpSize(screen.width.dp, screen.height.dp)
+                } else {
+                    before?.let {
+                        windowState.placement = it.placement
+                        if (it.placement == WindowPlacement.Floating) {
+                            windowState.position = it.position
+                            windowState.size = it.size
+                        }
+                    }
+                    before = null
+                }
+                applied = requested
+            }
+            boot.fold(
+                onSuccess = { app ->
+                    CompositionLocalProvider(LocalApp provides app) { ApexApp() }
+                },
+                onFailure = { StartupProblem(it) },
+            )
+        }
     }
 }
 
-/** Atalho para testes: `APEX_START=search:rally`, `watch:ID`, `live`, `channel:UC…`, `library`, `settings`. */
+private class WindowBeforeFullscreen(val placement: WindowPlacement, val position: WindowPosition, val size: DpSize)
+
+/** Atalho para testes: `APEX_START=search:rally`, `watch:ID`, `link:URL`, `live`, `channel:UC…`, `library`, `settings`. */
 private fun navigateFromEnv(app: AppContainer) {
     val start = System.getenv("APEX_START")?.takeIf { it.isNotBlank() } ?: return
     val kind = start.substringBefore(':')
@@ -237,7 +292,15 @@ private fun navigateFromEnv(app: AppContainer) {
         "live" -> app.nav.goRoot(Route.Live(LiveFilter.All))
         "channel" -> app.openChannel(Channel(Platform.YouTube, arg, arg))
         "library" -> app.nav.goRoot(Route.Library(LibraryTab.History))
+        "clips" -> app.nav.goRoot(Route.Library(LibraryTab.Clips))
+        // `tchannel:gaules:2` abre o canal da Twitch na aba 2 (Clipes); `kchannel:` é o da Kick.
+        "tchannel", "kchannel" -> {
+            val platform = if (kind == "tchannel") Platform.Twitch else Platform.Kick
+            val login = arg.substringBefore(':')
+            app.nav.push(Route.ChannelPage(Channel(platform, login, login), arg.substringAfter(':', "0").toIntOrNull() ?: 0))
+        }
         "settings" -> app.nav.goRoot(Route.Settings)
         "subs" -> app.nav.goRoot(Route.Subscriptions)
+        "link" -> app.openLink(arg)
     }
 }

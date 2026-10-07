@@ -216,6 +216,15 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
         }
     }
 
+    /** Abriu o vídeo: sobe para o topo do histórico sem perder o ponto em que a pessoa tinha parado. */
+    fun touchHistory(media: Media) {
+        if (media.isLive) return recordHistory(media, 0, 0)
+        _history.update { list ->
+            val old = list.firstOrNull { it.media.key == media.key }
+            (listOf(HistoryEntry(media, currentTimeMillis(), old?.positionMs ?: 0, old?.durationMs ?: 0)) + list.filterNot { it.media.key == media.key }).take(500)
+        }
+    }
+
     fun resumePosition(media: Media): Long {
         val e = _history.value.firstOrNull { it.media.key == media.key } ?: return 0
         if (e.durationMs <= 0) return 0

@@ -1,7 +1,5 @@
 package app.apex
 
-import androidx.compose.ui.window.WindowPlacement
-import androidx.compose.ui.window.WindowState
 import app.apex.data.Account
 import app.apex.model.Platform
 import kotlinx.coroutines.Dispatchers
@@ -16,23 +14,17 @@ import java.awt.datatransfer.StringSelection
 import java.net.URI
 
 class DesktopSystem(
-    private val windowState: WindowState,
     private val accounts: DesktopAccounts,
     override val updater: app.apex.update.Updater,
 ) : SystemServices {
     private val _fullscreen = MutableStateFlow(false)
     override val fullscreen: StateFlow<Boolean> = _fullscreen.asStateFlow()
 
-    private var placementBeforeFullscreen = WindowPlacement.Floating
-
+    /**
+     * Tela cheia como o F11: o que muda a janela (tirar a barra de título e as bordas, cobrir o monitor inteiro com a barra de tarefas)
+     * é feito pela janela em Main.kt, que observa este valor.
+     */
     override fun setFullscreen(on: Boolean) {
-        if (on == _fullscreen.value) return
-        if (on) {
-            placementBeforeFullscreen = windowState.placement.takeIf { it != WindowPlacement.Fullscreen } ?: WindowPlacement.Floating
-            windowState.placement = WindowPlacement.Fullscreen
-        } else {
-            windowState.placement = placementBeforeFullscreen
-        }
         _fullscreen.value = on
     }
 

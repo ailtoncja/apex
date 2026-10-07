@@ -22,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -105,6 +106,8 @@ fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
             Box(Modifier.size(8.dp).background(if (status == "Chat ao vivo") ApexColors.Live else ApexColors.Faint, CircleShape))
             Text("Chat da live", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
             Text(status, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, maxLines = 1)
+            // Oculta o chat inteiro (e para de ler as mensagens); "Mostrar chat" volta pela coluna ao lado do vídeo.
+            IconBtn(Icons.Rounded.VisibilityOff, "Ocultar o chat", { app.data.updateSettings { it.copy(showChat = false) } }, size = 28.dp, iconSize = 18.dp)
         }
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),

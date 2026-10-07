@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Sensors
@@ -81,6 +82,9 @@ fun Sidebar(expanded: Boolean) {
             }
             NavItem(Icons.Rounded.ThumbUp, "Curtidos", route is Route.Library && route.tab == LibraryTab.Liked, true) {
                 app.nav.goRoot(Route.Library(LibraryTab.Liked))
+            }
+            NavItem(Icons.Rounded.ContentCut, "Clipes", route is Route.Library && route.tab == LibraryTab.Clips, true) {
+                app.nav.goRoot(Route.Library(LibraryTab.Clips))
             }
             NavItem(Icons.Rounded.PlaylistPlay, "Playlists", route is Route.Library && route.tab == LibraryTab.Playlists || route is Route.PlaylistPage, true) {
                 app.nav.goRoot(Route.Library(LibraryTab.Playlists))

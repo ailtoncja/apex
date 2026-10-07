@@ -140,10 +140,30 @@ class AppContainer(
         nav.push(Route.Watch)
     }
 
-    fun openChannel(channel: Channel) = nav.push(Route.ChannelPage(channel))
+    fun openChannel(channel: Channel) {
+        // Os clipes da conta do YouTube vêm sem o endereço do canal; ele aparece quando o clipe é aberto.
+        if (channel.id.isBlank()) return toast("Abra o clipe para ir ao canal.")
+        nav.push(Route.ChannelPage(channel))
+    }
+
+    /** Se [text] é um link de vídeo, live, VOD ou clipe, abre direto e devolve `true`. */
+    fun openLink(text: String): Boolean {
+        when (val target = app.apex.source.parseLink(text) ?: return false) {
+            is app.apex.source.LinkTarget.Play -> openMedia(target.media)
+            is app.apex.source.LinkTarget.YouTubeClip -> {
+                toast("Abrindo o clipe…")
+                scope.launch {
+                    val clip = runCatching { youtube.clip(target.clipId) }.getOrNull()
+                    if (clip == null) toast("Não consegui abrir este clipe (apagado ou privado).") else openMedia(clip)
+                }
+            }
+        }
+        return true
+    }
 
     fun search(query: String, filters: SearchFilters = SearchFilters()) {
         if (query.isBlank()) return
+        if (openLink(query)) return
         data.addSearchHistory(query)
         nav.push(Route.Search(query.trim(), filters))
     }
@@ -250,8 +270,9 @@ class AppContainer(
     /** Curtir (1), não curtir (-1) ou limpar (0). Também envia ao YouTube quando logado. */
     fun react(media: Media, value: Int) {
         data.setReaction(media, value)
-        if (media.platform == Platform.YouTube && tube.loggedIn) {
-            scope.launch { runCatching { youtube.rate(media.id, value) } }
+        // Curtir um clipe não deve curtir o vídeo inteiro de onde ele saiu: fica só no app.
+        if (media.platform == Platform.YouTube && tube.loggedIn && !media.isClip) {
+            scope.launch { runCatching { youtube.rate(media.videoId, value) } }
         }
     }
 }

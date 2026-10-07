@@ -49,30 +49,52 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     private var imageInfo: ImageInfo? = null
     private var frameBytes = ByteArray(0)
 
+    /** A velocidade pedida: o libVLC só aceita mudar depois que o vídeo começa, por isso é reaplicada no evento "tocando". */
+    @Volatile private var desiredRate = 1f
+    private var lastSource: PlaySource? = null
+
+    /** Clipe: o libVLC conta o tempo do arquivo inteiro; aqui ele é convertido para o do trecho. */
+    @Volatile private var sectionStartMs = 0L
+    @Volatile private var sectionEndMs: Long? = null
+
     init {
         mediaPlayer.videoSurface().set(
             CallbackVideoSurface(FormatCallback(), FrameCallback(), true, VideoSurfaceAdapters.getVideoSurfaceAdapter()),
         )
         mediaPlayer.events().addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
             override fun opening(mediaPlayer: MediaPlayer) = _state.update { it.copy(loading = true, ended = false, error = null) }
-            override fun playing(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = true, loading = false, ended = false, error = null) }
+            override fun playing(mediaPlayer: MediaPlayer) {
+                if (desiredRate != 1f) mediaPlayer.controls().setRate(desiredRate)
+                _state.update { it.copy(playing = true, loading = false, ended = false, error = null) }
+            }
             override fun paused(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
             override fun stopped(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false, loading = false) }
             override fun finished(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false, ended = true, loading = false) }
             override fun error(mediaPlayer: MediaPlayer) =
                 _state.update { it.copy(playing = false, loading = false, error = "Não foi possível reproduzir este vídeo.") }
             override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) = _state.update { it.copy(loading = newCache < 100f) }
-            override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) = _state.update { it.copy(positionMs = newTime) }
-            override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) = _state.update { it.copy(durationMs = newLength) }
+            override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) =
+                _state.update { it.copy(positionMs = (newTime - sectionStartMs).coerceAtLeast(0)) }
+            override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) =
+                _state.update { it.copy(durationMs = sectionEndMs?.let { end -> end - sectionStartMs } ?: newLength) }
         })
     }
 
     override fun play(source: PlaySource) {
-        _state.update { PlayerState(hasMedia = true, loading = true, volume = it.volume, muted = it.muted, rate = 1f) }
+        lastSource = source
+        sectionStartMs = if (source.endMs != null) source.startMs else 0
+        sectionEndMs = source.endMs
+        _state.update {
+            PlayerState(
+                hasMedia = true, loading = true, volume = it.volume, muted = it.muted, rate = desiredRate,
+                durationMs = source.endMs?.let { end -> end - source.startMs } ?: 0,
+            )
+        }
         val options = buildList {
             source.audioUrl?.let { add(":input-slave=$it") }
             source.userAgent?.let { add(":http-user-agent=$it") }
             if (source.startMs > 1000) add(":start-time=${source.startMs / 1000.0}")
+            source.endMs?.let { add(":stop-time=${it / 1000.0}") }
             add(if (source.live) ":network-caching=3000" else ":network-caching=1500")
         }
         mediaPlayer.media().play(source.videoUrl, *options.toTypedArray())
@@ -87,17 +109,19 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     }
 
     override fun resume() {
-        if (_state.value.ended) {
-            mediaPlayer.controls().setPosition(0f)
-            mediaPlayer.controls().play()
+        val again = lastSource
+        if (_state.value.ended && again != null) {
+            // Tocar de novo recomeça do começo (do trecho, no clipe), não de onde o vídeo foi retomado da primeira vez.
+            play(again.copy(startMs = if (again.endMs != null) again.startMs else 0))
         } else if (!mediaPlayer.status().isPlaying) {
             mediaPlayer.controls().play()
         }
     }
 
     override fun seekTo(positionMs: Long) {
-        mediaPlayer.controls().setTime(positionMs.coerceAtLeast(0))
-        _state.update { it.copy(positionMs = positionMs.coerceAtLeast(0)) }
+        val target = positionMs.coerceAtLeast(0)
+        mediaPlayer.controls().setTime(target + sectionStartMs)
+        _state.update { it.copy(positionMs = target) }
     }
 
     override fun seekBy(deltaMs: Long) {
@@ -119,6 +143,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     }
 
     override fun setRate(rate: Float) {
+        desiredRate = rate
         mediaPlayer.controls().setRate(rate)
         _state.update { it.copy(rate = rate) }
     }
@@ -129,6 +154,9 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
 
     override fun stop() {
         mediaPlayer.controls().stop()
+        lastSource = null
+        sectionStartMs = 0
+        sectionEndMs = null
         _state.update { PlayerState(volume = it.volume, muted = it.muted) }
         synchronized(frameLock) {
             frame?.close()

@@ -92,14 +92,17 @@ class PlaybackSession(
                     Platform.Twitch -> twitch.resolve(media)
                     Platform.Kick -> kick.resolve(media)
                 }
+                if (resolved.qualities.isEmpty()) error("Nenhuma qualidade de vídeo disponível para este endereço.")
                 _current.value = resolved.media
                 _load.value = LoadState.Ready(resolved)
-                data.recordHistory(resolved.media, 0, 0)
                 val settings = data.settings.value
-                val start = if (resolved.isLive || !settings.rememberPosition) 0 else data.resumePosition(resolved.media)
+                // A posição salva tem de ser lida ANTES de registrar a abertura no histórico, senão ela já viria zerada.
+                val start = startPosition(resolved, settings.rememberPosition)
+                data.touchHistory(resolved.media)
                 val chosen = pickDefault(resolved.qualities, settings.defaultQuality, resolved.isLive)
                 startPlayback(resolved, chosen, start)
-                player.setRate(settings.defaultRate)
+                // Velocidade só faz sentido em vídeo gravado; numa live ela atrasaria ou adiantaria o tempo real.
+                player.setRate(if (resolved.isLive) 1f else settings.defaultRate)
                 if (settings.subtitlesOnByDefault) {
                     resolved.subtitles.firstOrNull { it.lang.startsWith(settings.subtitleLang) && !it.auto }
                         ?.let { setSubtitleTrack(it) }
@@ -110,6 +113,14 @@ class PlaybackSession(
                 _load.value = LoadState.Error(e.message ?: "Não foi possível abrir este vídeo.")
             }
         }
+    }
+
+    /** Onde começar: clipe do YouTube no início do trecho, clipe da Twitch/Kick do começo, vídeo e VOD de onde a pessoa parou. */
+    private fun startPosition(resolved: Resolved, rememberPosition: Boolean): Long = when {
+        resolved.isLive -> 0
+        resolved.media.clipStartMs != null -> resolved.media.clipStartMs
+        resolved.media.isClip || !rememberPosition -> 0
+        else -> data.resumePosition(resolved.media)
     }
 
     private fun pickDefault(list: List<Quality>, cap: Int, live: Boolean): Quality {
@@ -128,13 +139,15 @@ class PlaybackSession(
                 userAgent = resolved.userAgent,
                 startMs = startMs,
                 live = resolved.isLive,
+                endMs = resolved.media.clipEndMs,
             ),
         )
     }
 
     fun setQuality(q: Quality) {
         val resolved = (_load.value as? LoadState.Ready)?.resolved ?: return
-        val position = if (resolved.isLive) 0 else player.state.value.positionMs
+        // No clipe do YouTube a posição do player é a do trecho; o arquivo conta desde o início do vídeo.
+        val position = if (resolved.isLive) 0 else player.state.value.positionMs + (resolved.media.clipStartMs ?: 0)
         val rate = player.state.value.rate
         startPlayback(resolved, q, position)
         player.setRate(rate)

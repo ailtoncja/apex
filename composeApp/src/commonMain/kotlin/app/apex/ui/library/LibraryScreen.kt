@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
@@ -98,6 +99,14 @@ fun LibraryScreen(tab: LibraryTab) {
         } else null
     }
     val emptyList = remember { Paged<Media>(app.scope) { Page(emptyList(), null) } }
+    // Clipes que a conta do YouTube criou (a Twitch e a Kick têm os clipes na página de cada canal).
+    val myClips = remember(hasYouTube) {
+        if (hasYouTube) Paged<Media>(app.scope, { it.key }) { Page(app.youtube.myClips(), null) } else null
+    }
+    val clipItems by (myClips ?: emptyList).items.collectAsState()
+    val clipsLoading by (myClips ?: emptyList).loading.collectAsState()
+    val clipsError by (myClips ?: emptyList).error.collectAsState()
+    LaunchedEffect(tab, myClips) { if (tab == LibraryTab.Clips) myClips?.loadIfNeeded() }
     val remoteItems by (remoteList ?: emptyList).items.collectAsState()
     val remoteLoading by (remoteList ?: emptyList).loading.collectAsState()
     val remoteError by (remoteList ?: emptyList).error.collectAsState()
@@ -193,6 +202,27 @@ fun LibraryScreen(tab: LibraryTab) {
                             m, upNext = liked.filter { it.key != m.key },
                             trailing = { IconBtn(Icons.Rounded.Close, "Descurtir", { app.data.setReaction(m, 0) }, size = 32.dp, iconSize = 18.dp) },
                         )
+                    }
+                }
+                LibraryTab.Clips -> {
+                    item("c-title") {
+                        SectionTitle(
+                            "Clipes", subtitle = if (hasYouTube) "${clipItems.size} clipes que você criou no YouTube" else null,
+                            trailing = {
+                                if (clipItems.isNotEmpty()) ActionButton("Reproduzir tudo", { app.openMedia(clipItems.first(), clipItems.drop(1)) }, icon = Icons.Rounded.PlayArrow, primary = true)
+                            },
+                        )
+                    }
+                    when {
+                        !hasYouTube -> item("c-login") {
+                            EmptyState(Icons.Rounded.ContentCut, "Entre no YouTube", "Os clipes que você criou aparecem aqui. Entre na sua conta em Ajustes › Contas.")
+                        }
+                        clipItems.isNotEmpty() -> items(clipItems, key = { "c-" + it.key }) { VideoRow(it, upNext = clipItems.filter { m -> m.key != it.key }) }
+                        clipsLoading -> item("c-loading") { Text("Carregando…", color = ApexColors.Muted) }
+                        clipsError != null -> item("c-error") { ErrorBox(clipsError.orEmpty(), { myClips?.refresh() }) }
+                        else -> item("c-empty") {
+                            EmptyState(Icons.Rounded.ContentCut, "Nenhum clipe", "Crie clipes no YouTube (botão Clipe, abaixo do vídeo) e eles aparecem aqui. Para ver clipes da Twitch e da Kick, abra a aba Clipes do canal.")
+                        }
                     }
                 }
                 LibraryTab.Playlists -> {
@@ -334,7 +364,7 @@ fun AddToPlaylistDialog(media: Media, onDismiss: () -> Unit) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val playlists by app.data.playlists.collectAsState()
     val accounts by app.data.accounts.collectAsState()
-    val ytLogged = accounts.containsKey(Platform.YouTube.name) && media.platform == Platform.YouTube
+    val ytLogged = accounts.containsKey(Platform.YouTube.name) && media.platform == Platform.YouTube && !media.isClip
     var creating by remember { mutableStateOf(false) }
     var creatingRemote by remember { mutableStateOf(false) }
     var remote by remember { mutableStateOf<List<app.apex.source.PlaylistOption>?>(null) }

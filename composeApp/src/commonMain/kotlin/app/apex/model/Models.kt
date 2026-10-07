@@ -30,6 +30,12 @@ data class Channel(
     val key: String get() = "${platform.name}:$id"
 }
 
+/** Prefixo do id dos VODs (transmissões passadas) da Twitch e da Kick, para não se confundirem com o login/slug de um canal ao vivo. */
+const val VOD_PREFIX = "vod-"
+
+/** Prefixo do id dos clipes (os três sites): um clipe nunca se confunde com o vídeo, a live ou o VOD de onde saiu. */
+const val CLIP_PREFIX = "clip-"
+
 @Serializable
 data class Media(
     val platform: Platform,
@@ -45,9 +51,24 @@ data class Media(
     val isLive: Boolean = false,
     val category: String? = null,
     val url: String,
+    /** Só nos clipes do YouTube: o trecho do vídeo original (em ms) que o clipe mostra. Na Twitch e na Kick o clipe já é um arquivo próprio. */
+    val clipStartMs: Long? = null,
+    val clipEndMs: Long? = null,
 ) {
     val key: String get() = "${platform.name}:$id"
+
+    /** VOD da Twitch ou da Kick (o YouTube não precisa: para ele ao vivo e gravado têm o mesmo tipo de id). */
+    val isVod: Boolean get() = platform != Platform.YouTube && id.startsWith(VOD_PREFIX)
+
+    val isClip: Boolean get() = id.startsWith(CLIP_PREFIX)
+
+    /** Id do vídeo do YouTube de verdade: num clipe é o do vídeo original (que fica no endereço), não o do clipe. */
+    val videoId: String
+        get() = if (platform == Platform.YouTube && isClip) url.substringAfter("v=", "").substringBefore('&').ifEmpty { id } else id
 }
+
+/** Como ordenar os clipes de um canal. */
+enum class ClipSort(val label: String) { Popular("Mais vistos"), Recent("Mais recentes") }
 
 data class ChannelDetails(
     val channel: Channel,

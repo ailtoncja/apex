@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import app.apex.AppContainer
 import app.apex.model.Channel
 import app.apex.model.ChannelDetails
+import app.apex.model.ClipSort
 import app.apex.model.Comment
 import app.apex.model.LiveCategory
 import app.apex.model.Media
@@ -162,7 +163,7 @@ class HomeState(private val app: AppContainer) {
 
     private suspend fun discoverPage(token: String?): Page<Media> {
         if (token == null || token == "related") {
-            val seeds = app.data.history.value.map { it.media }.filter { it.platform == Platform.YouTube && !it.isLive }.take(3)
+            val seeds = app.data.history.value.map { it.media }.filter { it.platform == Platform.YouTube && !it.isLive && !it.isClip }.take(3)
             if (seeds.isNotEmpty()) {
                 val watched = app.data.history.value.map { it.media.key }.toSet()
                 val items = coroutineScope { seeds.map { s -> async { runCatching { app.youtube.related(s.id) }.getOrDefault(emptyList()) } }.awaitAll() }
@@ -379,6 +380,33 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
         else app.youtube.channelVideos(seed.id, ChannelTab.Lives, token).let { Page(it.items, it.continuation) }
     }
 
+    /** VODs (transmissões passadas) da Twitch e da Kick; só carrega quando a pessoa abre a aba. */
+    val vods = Paged<Media>(app.scope, { it.key }) {
+        when (seed.platform) {
+            Platform.Twitch -> Page(app.twitch.vods(seed.id), null)
+            Platform.Kick -> Page(app.kick.vods(seed), null)
+            Platform.YouTube -> Page(emptyList(), null)
+        }
+    }
+
+    /** Como os clipes ficam ordenados na aba "Clipes". */
+    val clipSort = MutableStateFlow(ClipSort.Popular)
+
+    /** Clipes da Twitch e da Kick. (No YouTube não existe lista de clipes por canal.) */
+    val clips = Paged<Media>(app.scope, { it.key }) { token ->
+        when (seed.platform) {
+            Platform.Twitch -> Page(app.twitch.clips(seed.id, clipSort.value), null)
+            Platform.Kick -> app.kick.clips(seed, clipSort.value, token).let { Page(it.items, it.next) }
+            Platform.YouTube -> Page(emptyList(), null)
+        }
+    }
+
+    fun setClipSort(sort: ClipSort) {
+        if (clipSort.value == sort) return
+        clipSort.value = sort
+        clips.refresh()
+    }
+
     fun start() {
         details.loadIfNeeded()
         live.loadIfNeeded()
@@ -418,9 +446,18 @@ class WatchState(private val app: AppContainer) {
         app.scope.launch {
             try {
                 val list = when (media.platform) {
-                    Platform.YouTube -> app.youtube.related(media.id)
-                    Platform.Twitch -> app.twitch.topStreams(20, app.data.settings.value.twitchLanguage).filter { it.id != media.id }
-                    Platform.Kick -> app.kick.liveStreams(app.data.settings.value.kickLanguage, pages = 1).filter { it.id != media.id }
+                    Platform.YouTube -> app.youtube.related(media.videoId)
+                    // Num VOD ou clipe, "a seguir" são os outros do mesmo canal; numa live, outras lives.
+                    Platform.Twitch -> when {
+                        media.isClip -> media.channel?.let { app.twitch.clips(it.id, ClipSort.Popular, 30) }.orEmpty()
+                        media.isVod -> media.channel?.let { app.twitch.vods(it.id, 30) }.orEmpty()
+                        else -> app.twitch.topStreams(20, app.data.settings.value.twitchLanguage)
+                    }.filter { it.id != media.id }
+                    Platform.Kick -> when {
+                        media.isClip -> media.channel?.let { app.kick.clips(it).items }.orEmpty()
+                        media.isVod -> media.channel?.let { app.kick.vods(it) }.orEmpty()
+                        else -> app.kick.liveStreams(app.data.settings.value.kickLanguage, pages = 1)
+                    }.filter { it.id != media.id }
                 }
                 if (forKey == media.key) {
                     _related.value = list.withoutBlocked(app.data.settings.value.blockedChannels)

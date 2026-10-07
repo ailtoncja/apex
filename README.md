@@ -35,11 +35,13 @@ depois, curtidos, playlists), **Canal**, **Busca** e **Ajustes**. Atalhos: `Espa
 ## Rodar
 
 Requisitos: **VLC 3.x de 64 bits** instalado (o app avisa e leva ao download se faltar) e um **JDK 21+** (o do Android Studio serve).
+Quem só quer usar o app baixa o pacote `Apex-1.0.0-windows-x64.zip` (traz o Java dentro; veja `Empacotar.cmd`) e precisa apenas do VLC.
 
 ```
 gradlew.bat :composeApp:run                              # modo desenvolvimento
 gradlew.bat :composeApp:packageUberJarForCurrentOS       # gera o app em um único .jar
 Apex.cmd                                                 # abre o app gerado
+Empacotar.cmd                                            # gera dist\Apex-1.0.0-windows-x64.zip (Java embutido, para distribuir)
 Servidor.cmd                                             # sobe o servidor de contas no seu PC (para a sincronização)
 ```
 
@@ -69,5 +71,6 @@ Enviar mensagem no chat da Kick e do YouTube ainda não existe.
 - [ ] Ligar YouTube, Twitch e Kick por OAuth oficial (sincronização automática com as plataformas)
 - [ ] Android (mesmo código compartilhado, player Media3 ou libVLC)
 - [x] Servidor pronto para o público: termos e privacidade, limites de uso, exportar e apagar dados, limpeza automática
-- [ ] Instalador `.msi` (precisa de um JDK com `jpackage`)
+- [x] Pacote para distribuir com o Java embutido (zip; testado fora da pasta do projeto)
+- [ ] Instalador `.msi`/`.exe` (precisa do WiX Toolset instalado)
 - [ ] Enviar mensagens no chat da Kick e do YouTube

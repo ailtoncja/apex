@@ -32,6 +32,9 @@ interface SystemServices {
     fun openUrl(url: String)
     fun copyText(text: String)
 
+    /** Guarda um texto como arquivo na pasta Downloads e devolve o caminho (ou `null` se não deu). */
+    fun saveDownload(fileName: String, text: String): String?
+
     /** Navegadores instalados que o Apex sabe usar para entrar nas contas. */
     val installedBrowsers: List<BrowserOption>
 

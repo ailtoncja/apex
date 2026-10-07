@@ -22,6 +22,7 @@ dependencies {
     implementation(libs.ktor.server.rate.limit)
     implementation(libs.ktor.server.forwarded.header)
     implementation(libs.ktor.server.call.logging)
+    implementation(libs.ktor.server.body.limit)
     implementation(libs.ktor.serialization.json)
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.cio)

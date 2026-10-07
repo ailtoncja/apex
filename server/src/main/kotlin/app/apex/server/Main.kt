@@ -19,6 +19,9 @@ fun main() {
     val db = Database.open(config)
     val mailer: Mailer = config.resendApiKey?.let { ResendMailer(it, config.mailFrom) } ?: LogMailer()
 
+    if (config.isProduction && config.contactEmail == null) {
+        log.warn("CONTACT_EMAIL não está definido: a Política de Privacidade e os Termos ficam sem e-mail de contato. Defina antes de abrir ao público.")
+    }
     if (!config.isProduction) {
         log.warn("Modo desenvolvimento: PostgreSQL embutido em {} e e-mails só no log. Defina DATABASE_URL para usar um banco de verdade.", config.devDataDir)
     }

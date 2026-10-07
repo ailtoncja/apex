@@ -47,7 +47,7 @@ class SyncE2ETest {
         private val config = ServerConfig(
             port = 0, database = null, jwtSecret = "segredo-do-teste-de-ponta-a-ponta-123456", publicUrl = "http://apex.test",
             resendApiKey = null, mailFrom = "Apex <t@apex.test>", trustProxy = false,
-            devDataDir = Files.createTempDirectory("apex-e2e").toFile(),
+            devDataDir = Files.createTempDirectory("apex-e2e").toFile(), registerLimitPerHour = 10_000, mailLimitPerHour = 10_000,
         )
         private val db = Database.open(config)
         private val server = startServer(config, db, LogMailer(), "127.0.0.1", 0, syncOverlapSeconds = 0).also { it.start(wait = false) }
@@ -78,7 +78,7 @@ class SyncE2ETest {
         a.data.recordHistory(video("v4"), 12_000, 100_000)
         a.data.updateSettings { it.copy(defaultQuality = 720, hideMature = false) }
 
-        a.account.signUp(email, password, "Apex E2E")
+        a.account.signUp(email, password, "Apex E2E", true)
         a.sync()
 
         b.account.signIn(email, password)
@@ -109,7 +109,7 @@ class SyncE2ETest {
         val a = Device(url)
         val b = Device(url)
         val email = email()
-        a.account.signUp(email, password, null)
+        a.account.signUp(email, password, null, true)
         a.sync()
         b.account.signIn(email, password)
         b.sync()
@@ -130,7 +130,7 @@ class SyncE2ETest {
     @Test
     fun sessao_vencida_e_renovada_sozinha() = runBlocking {
         val a = Device(url)
-        a.account.signUp(email(), password, null)
+        a.account.signUp(email(), password, null, true)
         a.sync()
         val session = assertNotNull(a.data.cloudSession.value)
         a.data.setCloudSession(session.copy(accessToken = "token.invalido.aqui"))
@@ -152,7 +152,7 @@ class SyncE2ETest {
     fun sem_internet_guarda_e_envia_depois() = runBlocking {
         val a = Device(url)
         val email = email()
-        a.account.signUp(email, password, null)
+        a.account.signUp(email, password, null, true)
         a.sync()
 
         a.data.updateSettings { it.copy(serverUrl = "http://127.0.0.1:9") }
@@ -181,11 +181,11 @@ class SyncE2ETest {
         val second = email()
 
         device.data.toggleSubscription(channel("UCprimeira"))
-        device.account.signUp(first, password, null)
+        device.account.signUp(first, password, null, true)
         device.sync()
 
         val other = Device(url)
-        other.account.signUp(second, password, null)
+        other.account.signUp(second, password, null, true)
         other.sync()
 
         // Sai da primeira conta mantendo os dados e entra na segunda: o app precisa perguntar.
@@ -204,7 +204,7 @@ class SyncE2ETest {
     fun sair_apagando_limpa_o_aparelho() = runBlocking {
         val a = Device(url)
         a.data.toggleSubscription(channel("UCx"))
-        a.account.signUp(email(), password, null)
+        a.account.signUp(email(), password, null, true)
         a.sync()
         a.account.signOut(wipeLocal = true)
         assertTrue(a.data.subscriptions.value.isEmpty())
@@ -215,11 +215,30 @@ class SyncE2ETest {
     fun senha_errada_nao_entra() = runBlocking {
         val a = Device(url)
         val email = email()
-        a.account.signUp(email, password, null)
+        a.account.signUp(email, password, null, true)
         val other = Device(url)
         val error = runCatching { other.account.signIn(email, "senha-errada-999") }.exceptionOrNull()
         assertIs<CloudException>(error)
         assertEquals("invalid_credentials", error.code)
         assertNull(other.data.cloudSession.value)
+    }
+
+    @Test
+    fun cadastro_sem_aceitar_os_termos_e_baixar_os_dados() = runBlocking {
+        val a = Device(url)
+        val email = email()
+        val refused = runCatching { a.account.signUp(email, password, null, false) }.exceptionOrNull()
+        assertIs<CloudException>(refused)
+        assertEquals("terms_required", refused.code)
+        assertNull(a.data.cloudSession.value)
+
+        a.data.toggleSubscription(channel("UCexport"))
+        a.account.signUp(email, password, "Quem Exporta", true)
+        a.sync()
+        val export = a.account.exportData()
+        assertTrue(export.contains(email), export)
+        assertTrue(export.contains("UCexport"), export)
+        assertTrue(export.contains("termsVersion"), export)
+        assertTrue(a.account.pageUrl("/privacy").endsWith("/privacy"))
     }
 }

@@ -2,6 +2,7 @@ package app.apex.server
 
 import java.sql.Connection
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.UUID
 
 data class UserRow(
@@ -11,21 +12,27 @@ data class UserRow(
     val passwordHash: String?,
     val displayName: String?,
     val avatarUrl: String?,
+    val createdAt: Instant,
+    val termsAcceptedAt: Instant?,
+    val termsVersion: String?,
 )
 
 object UserRepo {
-    private const val COLUMNS = "id, email, email_verified, password_hash, display_name, avatar_url"
+    private const val COLUMNS = "id, email, email_verified, password_hash, display_name, avatar_url, created_at, terms_accepted_at, terms_version"
 
     private fun map(rs: java.sql.ResultSet) = UserRow(
         rs.uuid("id"), rs.getString("email"), rs.getBoolean("email_verified"),
         rs.getString("password_hash"), rs.getString("display_name"), rs.getString("avatar_url"),
+        rs.instant("created_at"), rs.getObject("terms_accepted_at", OffsetDateTime::class.java)?.toInstant(), rs.getString("terms_version"),
     )
 
-    fun create(c: Connection, email: String, passwordHash: String, displayName: String?): UserRow =
+    fun create(c: Connection, email: String, passwordHash: String, displayName: String?, termsVersion: String): UserRow =
         c.queryOne(
-            "insert into users (email, password_hash, display_name) values (?, ?, ?) returning $COLUMNS",
-            email, passwordHash, displayName, map = ::map,
+            "insert into users (email, password_hash, display_name, terms_accepted_at, terms_version) values (?, ?, ?, now(), ?) returning $COLUMNS",
+            email, passwordHash, displayName, termsVersion, map = ::map,
         )!!
+
+    fun count(c: Connection): Long = c.queryOne("select count(*) as n from users") { it.getLong("n") } ?: 0
 
     fun findByEmail(c: Connection, email: String): UserRow? =
         c.queryOne("select $COLUMNS from users where lower(email) = lower(?)", email, map = ::map)
@@ -93,6 +100,12 @@ object TokenRepo {
         c.execute("update refresh_tokens set revoked_at = now() where user_id = ? and revoked_at is null", userId)
     }
 
+    /** Aparelhos com sessão aberta (não revogada e não vencida). */
+    fun activeSessions(c: Connection, userId: UUID): Int =
+        c.queryOne(
+            "select count(*) as n from refresh_tokens where user_id = ? and revoked_at is null and expires_at > now()", userId,
+        ) { it.getInt("n") } ?: 0
+
     // ---- links de e-mail (confirmar e redefinir senha)
 
     fun createEmailToken(c: Connection, userId: UUID, purpose: String, ttlSeconds: Long): String {
@@ -134,6 +147,12 @@ object SyncRepo {
     /** Grava uma mudança. Devolve `false` se o servidor já tinha uma versão mais nova. */
     fun upsert(c: Connection, userId: UUID, collection: String, key: String, data: String?, modifiedAt: Long, deleted: Boolean): Boolean =
         c.execute(UPSERT, userId, collection, key, data?.let { Json(it) }, modifiedAt, deleted, deleted) > 0
+
+    /** Quantas linhas (inclusive as de itens apagados) e quantos bytes de dados a pessoa já tem guardados. */
+    fun usage(c: Connection, userId: UUID): Pair<Long, Long> =
+        c.queryOne(
+            "select count(*) as n, coalesce(sum(pg_column_size(data)), 0) as bytes from sync_items where user_id = ?", userId,
+        ) { it.getLong("n") to it.getLong("bytes") } ?: (0L to 0L)
 
     fun now(c: Connection): Instant =
         c.queryOne("select clock_timestamp() as t") { it.instant("t") }!!

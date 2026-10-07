@@ -7,10 +7,12 @@ plataformas na fase 2. O Supabase foi descartado porque o plano grátis limita a
 
 | Parte | Estado |
 |---|---|
-| Servidor: cadastro, login, renovação de sessão, sair, esqueci a senha, confirmar e-mail, apagar conta | pronto, 16 testes contra um PostgreSQL de verdade |
-| Segurança: senhas Argon2id, tokens de sessão girados a cada uso com detecção de roubo, limite de tentativas por IP e por e-mail, respostas que não revelam quem tem conta | pronto |
+| Servidor: cadastro (com aceite dos termos), login, renovação de sessão, sair, esqueci a senha, confirmar e-mail, apagar conta (no app e pelo site) | pronto, 30 testes contra um PostgreSQL de verdade |
+| Segurança: senhas Argon2id, tokens de sessão girados a cada uso com detecção de roubo, limite de tentativas por IP e por e-mail, respostas que não revelam quem tem conta, cabeçalhos de segurança, tamanho máximo de pedido, logs sem os tokens dos links | pronto |
+| Proteção do banco grátis: teto de contas, limite de contas novas e de pedidos de senha por IP, cota de dados por conta, limpeza automática de sessões vencidas e itens apagados antigos | pronto |
+| LGPD: Termos de Uso e Política de Privacidade (`/terms`, `/privacy`), baixar todos os dados (`GET /v1/me/export`), apagar a conta (app e `/account/delete`) | pronto |
 | API de sincronização (`POST /v1/sync`): só o que mudou, funciona offline, conflito vence a edição mais recente, apagar chega aos outros aparelhos | pronto |
-| App: tela "Conta do Apex" (entrar, criar, sair, apagar, esqueci a senha, sincronizar agora) e motor de sincronização automática | pronto, 7 testes de ponta a ponta com dois aparelhos simulados |
+| App: tela "Conta do Apex" (entrar, criar com aceite dos termos, sair, apagar, baixar meus dados, esqueci a senha, sincronizar agora) e motor de sincronização automática | pronto, 8 testes de ponta a ponta com dois aparelhos simulados |
 | Ligar YouTube, Twitch e Kick por OAuth oficial e sincronizar com elas | **fase 2, ainda não começou** |
 | "Entrar com Google/Twitch" como login do Apex | fase 2 |
 
@@ -64,14 +66,17 @@ O `Dockerfile` ainda não foi testado (não há Docker neste PC); o servidor em 
 
 ## Antes de abrir para o público (checklist)
 
-1. **Licença.** O player usa a biblioteca vlcj, que é **GPL-3.0**; distribuir o Apex obriga a publicar o código sob GPL-3.0
-   (como o NewPipe). Para manter o código fechado, é preciso trocar o vlcj por uma ligação direta com o libVLC (LGPL).
+O passo a passo do que falta fazer está em [PUBLICAR.md](PUBLICAR.md). Resumo das decisões:
+
+1. **Licença (decidido: GPL-3.0).** O player usa a biblioteca vlcj, que é **GPL-3.0**; por isso o Apex inteiro é GPL-3.0 (como o NewPipe)
+   e quem receber o programa tem direito ao código. Ver [LICENSE](../LICENSE) e [NOTICE.md](../NOTICE.md). Para voltar a ter código fechado,
+   seria preciso trocar o vlcj por uma ligação direta com o libVLC (LGPL).
 2. **Termos do YouTube.** O Apex toca vídeos com yt-dlp e a API interna do YouTube, que o YouTube não autoriza. Distribuir
    publicamente aumenta o risco de notificação ou bloqueio. A ligação de contas deve ser sempre opcional.
 3. **Google/YouTube OAuth.** O escopo do YouTube é sensível: exige verificação do app (vídeo, política de privacidade, domínio)
    e, até lá, limita a 100 usuários de teste. A cota padrão da API é de 10.000 unidades por dia para o projeto todo.
-4. **Política de privacidade e termos de uso** (LGPD): o servidor guarda e-mail, nome, senha em hash e os dados sincronizados;
-   a pessoa pode apagar tudo pelo app.
+4. **Política de privacidade e termos de uso** (LGPD): **feitos** e publicados pelo servidor em `/privacy` e `/terms`. São textos em
+   linguagem simples, escritos sem revisão de advogado; vale revisar quando o app crescer. Defina `CONTACT_EMAIL` e `OPERATOR_NAME` no servidor.
 5. **Instalador e atualização.** Hoje o app é um `.jar` que exige Java e VLC instalados; falta um pacote com o Java dentro
    (precisa de um JDK com `jpackage`) e assinatura de código para o Windows não alertar.
 6. **Operação:** backups do banco (o Neon faz), monitoramento e um canal de suporte.

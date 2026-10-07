@@ -48,6 +48,7 @@ class ApiTest {
             port = 0, database = null, jwtSecret = "segredo-de-teste-com-mais-de-trinta-e-dois-caracteres",
             publicUrl = "http://apex.test", resendApiKey = null, mailFrom = "Apex <teste@apex.test>",
             trustProxy = false, devDataDir = Files.createTempDirectory("apex-test").toFile(),
+            contactEmail = "contato@apex.test", operatorName = "Equipe de Teste", registerLimitPerHour = 10_000, mailLimitPerHour = 10_000,
         )
         val db: Database by lazy { Database.open(config).also { d -> Runtime.getRuntime().addShutdownHook(Thread { d.close() }) } }
         val mailer = LogMailer()
@@ -62,7 +63,7 @@ class ApiTest {
     private fun email() = "teste-${UUID.randomUUID()}@apex.test"
 
     private suspend fun HttpClient.register(email: String, password: String = "senha-forte-123"): AuthResponse {
-        val response = post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody(RegisterRequest(email, password, "Fulano")) }
+        val response = post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody(RegisterRequest(email, password, "Fulano", acceptTerms = true)) }
         assertEquals(HttpStatusCode.Created, response.status)
         return response.body()
     }
@@ -105,17 +106,17 @@ class ApiTest {
         val unknown = client.post("/v1/auth/login") { contentType(ContentType.Application.Json); setBody(LoginRequest(email(), "qualquer-coisa-1")) }
         assertEquals("invalid_credentials", unknown.body<ErrorResponse>().error.code)
 
-        val duplicate = client.post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody(RegisterRequest(email, "outra-senha-123")) }
+        val duplicate = client.post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody(RegisterRequest(email, "outra-senha-123", acceptTerms = true)) }
         assertEquals(HttpStatusCode.Conflict, duplicate.status)
     }
 
     @Test
     fun validacoes_de_cadastro() = run { client ->
-        val weak = client.post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody(RegisterRequest(email(), "curta")) }
+        val weak = client.post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody(RegisterRequest(email(), "curta", acceptTerms = true)) }
         assertEquals(HttpStatusCode.BadRequest, weak.status)
         assertEquals("weak_password", weak.body<ErrorResponse>().error.code)
 
-        val bad = client.post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody(RegisterRequest("isso-nao-e-email", "senha-forte-123")) }
+        val bad = client.post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody(RegisterRequest("isso-nao-e-email", "senha-forte-123", acceptTerms = true)) }
         assertEquals("invalid_email", bad.body<ErrorResponse>().error.code)
 
         val garbage = client.post("/v1/auth/register") { contentType(ContentType.Application.Json); setBody("{isso nao e json") }

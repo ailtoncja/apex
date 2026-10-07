@@ -32,14 +32,15 @@ Sem `CONTACT_EMAIL` as páginas dizem que o contato "ainda não foi configurado"
 
 ### 2. E-mails de verdade (recuperar senha, confirmar e-mail)
 
-Hoje o servidor **não consegue mandar e-mail para qualquer pessoa**: sem `RESEND_API_KEY`, os e-mails só vão para o log.
-Quem esquecer a senha fica sem como recuperar. Para resolver:
+Sem configurar nada, o servidor **não consegue mandar e-mail para ninguém** (só escreve no log), e quem esquecer a senha fica sem como recuperar. Dois caminhos:
 
-1. Tenha um domínio (cerca de R$ 40 por ano, por exemplo em registro.br). Pode ser só para isso.
-2. Crie a conta grátis no [Resend](https://resend.com), adicione o domínio e copie os registros DNS que ele pedir (SPF/DKIM).
-3. No Render defina `RESEND_API_KEY` e `MAIL_FROM` (por exemplo `Apex <nao-responda@seudominio.com>`).
+- **Grátis e sem domínio, agora:** um relay no Google Apps Script (ou na Vercel) que envia pelo seu Gmail, com limite de 100 e-mails por dia (Apps Script).
+  Passo a passo em [docs/email-relay/README.md](email-relay/README.md). No Render: `MAIL_WEBHOOK_URL` e `MAIL_WEBHOOK_SECRET`.
+- **Definitivo, com domínio:** compre um domínio (cerca de R$ 40 por ano), crie a conta grátis no [Resend](https://resend.com) (3.000 e-mails por mês, 100 por dia),
+  adicione o domínio, cadastre os registros DNS que ele mostrar e, no Render, defina `RESEND_API_KEY` e `MAIL_FROM` (por exemplo `Apex <nao-responda@seudominio.com>`).
+  O Resend tem prioridade sobre o relay. (O Render grátis bloqueia SMTP, por isso não dá para usar o Gmail direto.)
 
-Enquanto isso não for feito, avise as pessoas, ou peça para usarem uma senha que não vão esquecer (o contato dos Termos serve de plano B).
+Para conferir, abra `https://apex-server-mg5l.onrender.com/v1/info`: deve mostrar `"mailEnabled":true`.
 
 ### 3. Evitar que o servidor durma (opcional)
 

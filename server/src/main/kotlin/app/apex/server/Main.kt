@@ -17,7 +17,7 @@ fun main() {
     }
 
     val db = Database.open(config)
-    val mailer: Mailer = config.resendApiKey?.let { ResendMailer(it, config.mailFrom) } ?: LogMailer()
+    val mailer = mailerFor(config)
 
     if (config.isProduction && config.contactEmail == null) {
         log.warn("CONTACT_EMAIL não está definido: a Política de Privacidade e os Termos ficam sem e-mail de contato. Defina antes de abrir ao público.")

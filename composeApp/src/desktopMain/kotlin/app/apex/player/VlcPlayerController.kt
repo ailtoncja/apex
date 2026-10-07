@@ -16,9 +16,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ColorType
+import org.jetbrains.skia.FilterMipmap
+import org.jetbrains.skia.FilterMode
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.ImageInfo
+import org.jetbrains.skia.MipmapMode
 import org.jetbrains.skia.Rect
+import org.jetbrains.skia.SamplingMode
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.player.base.MediaPlayer
 import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
@@ -31,6 +35,10 @@ import uk.co.caprica.vlcj.player.embedded.videosurface.callback.RenderCallback
 import uk.co.caprica.vlcj.player.embedded.videosurface.callback.format.RV32BufferFormat
 import java.nio.ByteBuffer
 import kotlin.math.min
+import kotlin.math.roundToInt
+
+private val DOWNSCALE: SamplingMode = FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR)
+private val UPSCALE: SamplingMode = SamplingMode.CATMULL_ROM
 
 /** Player do Windows: o libVLC decodifica e entrega cada quadro, que o Compose desenha por cima de tudo. */
 class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
@@ -181,13 +189,19 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
             synchronized(frameLock) {
                 val image = frame ?: return@Canvas
                 val scale = min(size.width / image.width, size.height / image.height)
-                val w = image.width * scale
-                val h = image.height * scale
+                val w = (image.width * scale).roundToInt().coerceAtLeast(1)
+                val h = (image.height * scale).roundToInt().coerceAtLeast(1)
+                val x = ((size.width - w) / 2).roundToInt()
+                val y = ((size.height - h) / 2).roundToInt()
+                // Sem filtro o Skia usa o "vizinho mais próximo": reduzindo 1080p para a janela o vídeo fica serrilhado e parece de bitrate
+                // baixo. Reduzindo usa mipmap com filtro linear (suave); ampliando usa Catmull-Rom (nítido, sem "blocos").
+                val sampling = if (scale < 0.98f) DOWNSCALE else UPSCALE
                 drawIntoCanvas { canvas ->
                     canvas.skiaCanvas.drawImageRect(
                         image,
                         Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
-                        Rect.makeXYWH((size.width - w) / 2, (size.height - h) / 2, w, h),
+                        Rect.makeXYWH(x.toFloat(), y.toFloat(), w.toFloat(), h.toFloat()),
+                        sampling, null, true,
                     )
                 }
             }

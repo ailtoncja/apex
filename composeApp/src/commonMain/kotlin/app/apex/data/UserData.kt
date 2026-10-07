@@ -43,6 +43,8 @@ data class Account(
     val avatarUrl: String? = null,
     /** YouTube: cabeçalho de cookies. Twitch: token. Kick: token de sessão. */
     val credential: String,
+    /** De onde veio o login, quando dá para renová-lo lendo o navegador de novo (`firefox:<id>`). */
+    val source: String? = null,
 )
 
 /** Login no servidor do Apex (guardado cifrado no disco). */

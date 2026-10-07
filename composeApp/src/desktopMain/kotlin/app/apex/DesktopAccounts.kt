@@ -4,7 +4,6 @@ import app.apex.browser.BrowserEngine
 import app.apex.browser.Browsers
 import app.apex.browser.ChromiumSession
 import app.apex.browser.FirefoxCookies
-import app.apex.browser.IsolatedFirefox
 import app.apex.browser.InstalledBrowser
 import app.apex.data.Account
 import app.apex.model.Platform
@@ -25,11 +24,17 @@ class Cookie(val domain: String, val name: String, val value: String, val line: 
  * - Firefox: abre o Firefox normal e lê o login do perfil dele (se já estiver logado, importa na hora).
  * - Chrome, Edge, Brave e outros Chromium: abre uma janela separada só do Apex e lê o login pelo protocolo de depuração.
  */
-class DesktopAccounts(private val dataDir: File) {
+class DesktopAccounts(
+    private val dataDir: File,
+    /** Onde o Firefox guarda os perfis (só muda nos testes). */
+    private val firefoxProfilesRoot: File = FirefoxCookies.defaultRoot(),
+    /** Navegadores instalados (só muda nos testes). */
+    private val installedBrowsers: () -> List<InstalledBrowser> = { Browsers.installed() },
+) {
     /** Onde o yt-dlp lê os cookies para o YouTube; só as linhas do Google/YouTube. */
     val youtubeCookieFile: File get() = File(dataDir, "cookies/youtube.txt")
 
-    private val browsers: List<InstalledBrowser> by lazy { Browsers.installed() }
+    private val browsers: List<InstalledBrowser> by lazy { installedBrowsers() }
 
     init {
         runCatching { cleanSavedJar() }
@@ -50,11 +55,11 @@ class DesktopAccounts(private val dataDir: File) {
         if (kept.size < lines.size) file.writeText(kept.joinToString("\n") + "\n")
     }
 
-    fun installedBrowsers(): List<BrowserOption> = browsers.map {
+    fun installedBrowserOptions(): List<BrowserOption> = browsers.map {
         BrowserOption(
             it.id, it.label,
             when (it.engine) {
-                BrowserEngine.Firefox -> "Twitch e Kick: usa o seu perfil do ${it.label} e importa na hora se você já estiver logado. YouTube: abre uma janela separada, só do Apex."
+                BrowserEngine.Firefox -> "Usa o seu perfil do ${it.label}. Se você já estiver logado, o Apex importa na hora e mantém a sessão atualizada."
                 BrowserEngine.Chromium -> "Abre uma janela separada do ${it.label}, só do Apex. Entre na conta lá e ela fecha sozinha."
             },
         )
@@ -80,39 +85,31 @@ class DesktopAccounts(private val dataDir: File) {
     }
 
     private suspend fun firefoxLogin(platform: Platform, browser: InstalledBrowser, onStatus: (String) -> Unit): Account? {
-        // O login do YouTube não pode vir do perfil do dia a dia: o Firefox aberto gira os cookies e a sessão copiada cai em minutos.
-        if (platform == Platform.YouTube) return firefoxIsolatedLogin(platform, browser, onStatus)
-        accountFromCookies(platform, FirefoxCookies.read(browser))?.let {
+        accountFromCookies(platform, FirefoxCookies.read(browser, firefoxProfilesRoot))?.let {
             onStatus("Encontrei o seu login no ${browser.label}.")
-            return it
+            return it.copy(source = "firefox:${browser.id}")
         }
         onStatus("Entre na sua conta na janela do ${browser.label}. O Apex detecta sozinho.")
         ProcessBuilder(browser.exe.absolutePath, loginUrl(platform)).start()
         while (coroutineContext.isActive) {
             delay(2_500)
-            accountFromCookies(platform, runCatching { FirefoxCookies.read(browser) }.getOrDefault(emptyList()))?.let { return it }
+            accountFromCookies(platform, runCatching { FirefoxCookies.read(browser, firefoxProfilesRoot) }.getOrDefault(emptyList()))?.let {
+                return it.copy(source = "firefox:${browser.id}")
+            }
         }
         return null
     }
 
-    /** Abre o Firefox num perfil só do Apex, espera o login, lê os cookies e fecha a janela (e apaga o perfil). */
-    private suspend fun firefoxIsolatedLogin(platform: Platform, browser: InstalledBrowser, onStatus: (String) -> Unit): Account? {
-        onStatus("Abrindo o ${browser.label} numa janela separada, só do Apex…")
-        val profile = File(dataDir, "login-browser/${browser.id}-isolado")
-        IsolatedFirefox.open(browser.exe, profile, loginUrl(platform)).use { firefox ->
-            onStatus("Entre na sua conta na janela que abriu. O Apex detecta sozinho e fecha a janela.")
-            while (coroutineContext.isActive) {
-                delay(2_500)
-                val account = accountFromCookies(platform, firefox.cookies())
-                if (account != null) {
-                    // Deixa o Firefox terminar de gravar os cookies do YouTube e lê de novo.
-                    delay(3_000)
-                    return accountFromCookies(platform, firefox.cookies()) ?: account
-                }
-                if (!firefox.isRunning) return null
-            }
-        }
-        return null
+    /**
+     * Contas ligadas ao perfil do Firefox (login feito por ele) ficam atualizadas: o Firefox aberto troca os cookies de login do YouTube a cada
+     * poucos minutos, e a cópia antiga deixa de valer. Aqui lemos o perfil de novo e devolvemos a conta com os cookies de agora
+     * (ou `null` se a conta não é ligada ao Firefox, ou se o Firefox não tem mais o login).
+     */
+    fun refreshLinked(current: Account): Account? {
+        val browserId = current.source?.removePrefix("firefox:")?.takeIf { current.source.startsWith("firefox:") } ?: return null
+        val browser = browsers.firstOrNull { it.id == browserId } ?: return null
+        val fresh = accountFromCookies(current.platform, runCatching { FirefoxCookies.read(browser, firefoxProfilesRoot) }.getOrDefault(emptyList())) ?: return null
+        return fresh.copy(source = current.source, displayName = current.displayName, avatarUrl = current.avatarUrl)
     }
 
     private suspend fun chromiumLogin(platform: Platform, browser: InstalledBrowser, onStatus: (String) -> Unit): Account? {

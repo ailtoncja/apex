@@ -59,6 +59,30 @@ class BrowserLoginTest {
     }
 
     @Test
+    fun renova_o_login_quando_o_firefox_troca_os_cookies() {
+        val root = tempDir()
+        val profile = fakeFirefoxProfile(root, "abc123.default")
+        val accounts = DesktopAccounts(tempDir(), firefoxProfilesRoot = root, installedBrowsers = { listOf(firefox) })
+        val first = FirefoxCookies.readProfile(profile).let { accounts.accountFromCookies(Platform.YouTube, it) }
+        val linked = assertNotNull(first).copy(source = "firefox:firefox", displayName = "Fulano")
+        assertTrue("__Secure-3PAPISID=apisid-falso" in linked.credential)
+
+        // O Firefox gira o cookie e grava o novo no perfil.
+        DriverManager.getConnection("jdbc:sqlite:${File(profile, "cookies.sqlite").absolutePath}").use { c ->
+            c.createStatement().use { it.execute("update moz_cookies set value = 'apisid-novo' where name = '__Secure-3PAPISID'") }
+        }
+        val renewed = assertNotNull(accounts.refreshLinked(linked))
+        assertTrue("__Secure-3PAPISID=apisid-novo" in renewed.credential)
+        assertTrue("apisid-falso" !in renewed.credential)
+        assertEquals("Fulano", renewed.displayName)
+        assertEquals("firefox:firefox", renewed.source)
+
+        // Conta que não veio do Firefox (ou sem origem) não é renovada.
+        assertNull(accounts.refreshLinked(linked.copy(source = null)))
+        assertNull(accounts.refreshLinked(linked.copy(source = "outra-coisa")))
+    }
+
+    @Test
     fun sem_login_no_perfil_nao_cria_conta() {
         val profile = fakeFirefoxProfile(tempDir(), "vazio.default", withLogin = false)
         val accounts = DesktopAccounts(tempDir())
@@ -128,39 +152,5 @@ class BrowserLoginTest {
         val tube = app.apex.source.InnerTube().also { it.cookieHeader = header }
         assertTrue(tube.loggedIn || "SAPISID" !in header)
         assertTrue((tube.cookieHeader?.length ?: 0) < 1_000)
-    }
-
-    /** Usa o Firefox de verdade, sem janela: o perfil isolado recebe o cookie, o Apex lê, e depois o Firefox é fechado e o perfil apagado. */
-    @Test
-    fun login_isolado_no_firefox_le_o_cookie_e_fecha_tudo() = runBlocking {
-        val firefox = Browsers.installed().firstOrNull { it.engine == BrowserEngine.Firefox } ?: return@runBlocking
-        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/") { ex ->
-            ex.responseHeaders.add("Set-Cookie", "auth-token=token-isolado; Path=/; Max-Age=3600")
-            val body = "ok".toByteArray()
-            ex.sendResponseHeaders(200, body.size.toLong())
-            ex.responseBody.use { it.write(body) }
-        }
-        server.start()
-        val profile = File(tempDir(), "login-browser/firefox-isolado")
-        try {
-            IsolatedFirefox.open(firefox.exe, profile, "http://127.0.0.1:${server.address.port}/", headless = true).use { ff ->
-                var found = false
-                repeat(80) {
-                    if (!found) {
-                        found = ff.cookies(listOf("127.0.0.1")).any { it.name == "auth-token" && it.value == "token-isolado" }
-                        if (!found) kotlinx.coroutines.delay(500)
-                    }
-                }
-                assertTrue(found, "o cookie não apareceu no perfil isolado")
-                assertTrue(ff.isRunning)
-            }
-            assertTrue(BrowserProcesses.using(profile).isEmpty(), "o Firefox do perfil isolado continuou aberto")
-            val left = profile.walkTopDown().filter { it.isFile }.map { it.relativeTo(profile).path }.take(10).toList()
-            assertTrue(!profile.exists(), "o perfil isolado não foi apagado; sobraram: $left")
-        } finally {
-            BrowserProcesses.closeUsing(profile)
-            server.stop(0)
-        }
     }
 }

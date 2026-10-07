@@ -48,6 +48,9 @@ interface SystemServices {
     suspend fun browserLogin(platform: Platform, browserId: String, onStatus: (String) -> Unit): Account?
 
     fun signOut(platform: Platform)
+
+    /** Relê o login no navegador de onde a conta veio (cookies que o navegador trocou) e devolve a conta atualizada, ou `null`. */
+    suspend fun refreshAccount(account: Account): Account?
 }
 
 data class BrowserOption(val id: String, val label: String, val note: String)
@@ -90,6 +93,13 @@ class AppContainer(
             }
         }
         scope.launch { data.settings.collect { kick.hideMature = it.hideMature } }
+        // O navegador troca os cookies do YouTube de tempos em tempos; relemos o perfil dele para a sessão não cair.
+        scope.launch {
+            while (true) {
+                runCatching { refreshAccountFromBrowser(Platform.YouTube) }
+                kotlinx.coroutines.delay(ACCOUNT_REFRESH_MS)
+            }
+        }
         cloud.start()
         scope.launch {
             val result = runCatching { extractor.ensureReady() }.getOrNull()
@@ -122,6 +132,17 @@ class AppContainer(
         ui.toast = message
     }
 
+    /** Renova a conta ligada ao navegador. Devolve `true` se os cookies mudaram. */
+    suspend fun refreshAccountFromBrowser(platform: Platform): Boolean {
+        val current = data.account(platform) ?: return false
+        val fresh = system.refreshAccount(current) ?: return false
+        if (fresh.credential == current.credential) return false
+        data.setAccount(fresh, platform)
+        // Já vale para o próximo pedido, sem esperar o observador das contas.
+        if (platform == Platform.YouTube) tube.cookieHeader = fresh.credential
+        return true
+    }
+
     /** Completa nome e foto da conta logada. */
     fun refreshAccountProfile(platform: Platform) {
         val account = data.account(platform) ?: return
@@ -151,7 +172,13 @@ class AppContainer(
     suspend fun importFollows(platform: Platform): ImportResult {
         var note: String? = null
         val channels = when (platform) {
-            Platform.YouTube -> youtube.subscribedChannels()
+            Platform.YouTube -> try {
+                youtube.subscribedChannels()
+            } catch (e: app.apex.source.SessionExpiredException) {
+                // O navegador pode já ter cookies mais novos: renova e tenta de novo uma vez.
+                if (!refreshAccountFromBrowser(Platform.YouTube)) throw e
+                youtube.subscribedChannels()
+            }
             Platform.Twitch -> {
                 val follows = twitch.followedChannels()
                 if (!follows.complete) {
@@ -184,5 +211,7 @@ class AppContainer(
         }
     }
 }
+
+private const val ACCOUNT_REFRESH_MS = 2 * 60_000L
 
 val LocalApp = staticCompositionLocalOf<AppContainer> { error("AppContainer não foi fornecido") }

@@ -1,0 +1,21 @@
+# Hospedagem no Render (plano grátis, sem cartão). No painel: New > Blueprint > escolha este repositório.
+# O servidor "dorme" após 15 minutos sem uso; o app já acorda ele ao abrir.
+services:
+  - type: web
+    name: apex-server
+    runtime: docker
+    plan: free
+    region: ohio
+    healthCheckPath: /health
+    envVars:
+      # Endereço do Neon (Connect > desligue "Connection pooling"). Preencha no painel; nunca no arquivo.
+      - key: DATABASE_URL
+        sync: false
+      # Chave que assina os logins: o Render gera uma aleatória.
+      - key: JWT_SECRET
+        generateValue: true
+      # Endereço público deste serviço (aparece no painel depois de criado), ex.: https://apex-server.onrender.com
+      - key: PUBLIC_URL
+        sync: false
+      - key: TRUST_PROXY
+        value: "true"

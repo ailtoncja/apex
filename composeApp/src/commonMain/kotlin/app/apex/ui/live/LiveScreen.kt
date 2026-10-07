@@ -18,6 +18,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
+import app.apex.ui.components.SkeletonCard
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
 import app.apex.source.SearchDate
 import app.apex.source.SearchSort
 import app.apex.state.CategoryTab
@@ -123,18 +126,65 @@ fun LiveScreen(initial: LiveFilter) {
     }
 }
 
+/**
+ * Uma fileira de categorias que carrega do servidor. Se a carga falhar (ou vier vazia), tenta de novo sozinha algumas vezes
+ * e, se não der, mostra o aviso com um botão para tentar de novo: a fileira nunca some sem explicação.
+ */
 @Composable
 private fun CategoryRow(title: String, platform: Platform) {
     val app = LocalApp.current
     val source = if (platform == Platform.Twitch) app.screens.live.twitchCategories else app.screens.live.kickCategories
+    CategoryRowContent(title, source, "as categorias da ${platform.label}") { c -> app.nav.push(Route.Category(platform, c)) }
+}
+
+@Composable
+internal fun CategoryRowContent(
+    title: String, source: app.apex.state.Loadable<List<app.apex.model.LiveCategory>>, what: String, onOpen: (app.apex.model.LiveCategory) -> Unit,
+) {
     val cats by source.value.collectAsState()
-    if (cats.isEmpty()) return
+    CategoryLoadGuard(source)
+    if (cats.isEmpty()) {
+        CategoryRowPlaceholder(title, source, what)
+        return
+    }
     Column {
         SectionTitle(title, Modifier.padding(bottom = 12.dp))
         LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(cats, key = { it.id + it.name }) { c ->
-                CategoryCard(c, { app.nav.push(Route.Category(platform, c)) }, Modifier.width(136.dp))
+            items(cats, key = { it.id + it.name }) { c -> CategoryCard(c, { onOpen(c) }, Modifier.width(136.dp)) }
+        }
+    }
+}
+
+/** Tenta de novo (3 vezes, com pausa maior a cada uma) quando a lista de categorias terminou de carregar vazia. */
+@Composable
+private fun CategoryLoadGuard(source: app.apex.state.Loadable<List<app.apex.model.LiveCategory>>) {
+    val cats by source.value.collectAsState()
+    val loaded by source.loaded.collectAsState()
+    val loading by source.loading.collectAsState()
+    var tries by remember { mutableIntStateOf(0) }
+    LaunchedEffect(cats.isEmpty(), loaded, loading, tries) {
+        if (cats.isEmpty() && loaded && !loading && tries < 3) {
+            kotlinx.coroutines.delay(2_500L * (tries + 1))
+            tries++
+            source.reload()
+        }
+    }
+}
+
+/** No lugar da fileira vazia: o título e "carregando" ou, se falhou, o aviso com o botão de tentar de novo. */
+@Composable
+private fun CategoryRowPlaceholder(title: String, source: app.apex.state.Loadable<List<app.apex.model.LiveCategory>>, what: String) {
+    val loaded by source.loaded.collectAsState()
+    val loading by source.loading.collectAsState()
+    val error by source.error.collectAsState()
+    Column {
+        SectionTitle(title, Modifier.padding(bottom = 12.dp))
+        if (!loaded || loading) {
+            LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                items(7) { SkeletonCard(Modifier.width(136.dp)) }
             }
+        } else {
+            ErrorBox(error ?: "Não consegui carregar $what agora.", { source.reload() })
         }
     }
 }
@@ -145,8 +195,13 @@ private fun YouTubeCategoryRow(title: String, games: Boolean) {
     val app = LocalApp.current
     val twitchCats by app.screens.live.twitchCategories.value.collectAsState()
     LaunchedEffect(games) { if (games) app.screens.live.twitchCategories.loadIfNeeded() }
+    if (games) CategoryLoadGuard(app.screens.live.twitchCategories)
     val cats = if (games) youtubeGameCategories(twitchCats) else YOUTUBE_TOPIC_CATEGORIES
-    if (cats.isEmpty()) return
+    if (cats.isEmpty()) {
+        // Os jogos vêm da lista da Twitch: sem ela, mostra o mesmo aviso em vez de sumir.
+        if (games) CategoryRowPlaceholder(title, app.screens.live.twitchCategories, "os jogos mais vistos")
+        return
+    }
     Column {
         SectionTitle(title, Modifier.padding(bottom = 12.dp))
         LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {

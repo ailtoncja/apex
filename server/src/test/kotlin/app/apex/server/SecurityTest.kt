@@ -84,6 +84,44 @@ class SecurityTest {
     }
 
     @Test
+    fun na_render_valem_tres_entradas_e_o_cabecalho_do_cdn() = run(base.copy(trustProxy = true, trustedProxyHops = 3, mailLimitPerHour = 2)) { client ->
+        // Como na Render: cliente, Cloudflare e rede interna. O cliente ainda tenta inventar entradas no começo.
+        assertEquals(HttpStatusCode.Accepted, client.forgot("a@apex.test", "1.1.1.1, 2.2.2.2, 203.0.113.7, 172.71.28.191, 10.24.0.151").status)
+        assertEquals(HttpStatusCode.Accepted, client.forgot("a@apex.test", "3.3.3.3, 203.0.113.7, 172.71.28.191, 10.24.0.151").status)
+        assertEquals(HttpStatusCode.TooManyRequests, client.forgot("a@apex.test", "203.0.113.7, 172.71.28.191, 10.24.0.151").status)
+    }
+
+    @Test
+    fun cabecalho_do_cdn_tem_prioridade_e_sem_ele_cai_no_x_forwarded_for() =
+        run(base.copy(trustProxy = true, trustedProxyHops = 3, clientIpHeader = "CF-Connecting-IP", mailLimitPerHour = 2)) { client ->
+            suspend fun call(ip: String?, xff: String) = client.post("/v1/auth/forgot") {
+                ip?.let { header("CF-Connecting-IP", it) }
+                header("X-Forwarded-For", xff)
+                contentType(ContentType.Application.Json)
+                setBody(ForgotRequest("a@apex.test"))
+            }.status
+            // O X-Forwarded-For muda a cada pedido, mas o IP do CDN é o mesmo: conta como a mesma pessoa.
+            assertEquals(HttpStatusCode.Accepted, call("198.51.100.20", "1.1.1.1, 9.9.9.9, 8.8.8.8"))
+            assertEquals(HttpStatusCode.Accepted, call("198.51.100.20", "2.2.2.2, 9.9.9.9, 8.8.8.8"))
+            assertEquals(HttpStatusCode.TooManyRequests, call("198.51.100.20", "3.3.3.3, 9.9.9.9, 8.8.8.8"))
+            // Sem o cabeçalho do CDN, vale a terceira entrada a partir do fim.
+            assertEquals(HttpStatusCode.Accepted, call(null, "7.7.7.7, 192.0.2.5, 9.9.9.9, 8.8.8.8"))
+            assertEquals(HttpStatusCode.Accepted, call(null, "6.6.6.6, 192.0.2.5, 9.9.9.9, 8.8.8.8"))
+            assertEquals(HttpStatusCode.TooManyRequests, call(null, "5.5.5.5, 192.0.2.5, 9.9.9.9, 8.8.8.8"))
+        }
+
+    @Test
+    fun configuracao_do_ip_do_cliente() {
+        val c = ServerConfig.fromEnv(mapOf("TRUST_PROXY" to "true", "TRUSTED_PROXY_HOPS" to "3", "CLIENT_IP_HEADER" to " CF-Connecting-IP "))
+        assertEquals(3, c.trustedProxyHops)
+        assertEquals("CF-Connecting-IP", c.clientIpHeader)
+        // Valor estranho é ignorado; o número de proxies fica entre 1 e 5.
+        val bad = ServerConfig.fromEnv(mapOf("TRUSTED_PROXY_HOPS" to "99", "CLIENT_IP_HEADER" to "X Y\r\nZ"))
+        assertEquals(5, bad.trustedProxyHops)
+        assertEquals(null, bad.clientIpHeader)
+    }
+
+    @Test
     fun sem_proxy_configurado_o_cabecalho_e_ignorado() = run(base.copy(trustProxy = false, mailLimitPerHour = 2)) { client ->
         assertEquals(HttpStatusCode.Accepted, client.forgot("a@apex.test", "1.1.1.1").status)
         assertEquals(HttpStatusCode.Accepted, client.forgot("a@apex.test", "2.2.2.2").status)

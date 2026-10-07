@@ -27,7 +27,8 @@ import java.io.File
 
 class YtDlpExtractor(
     private val bins: Binaries,
-    private val cookieFile: () -> File? = { null },
+    /** Cookies do YouTube (cabeçalho `Cookie`) da conta logada; viram um arquivo temporário só durante cada execução. */
+    private val cookieHeader: () -> String? = { null },
 ) : Extractor {
     private val gate = Semaphore(4)
 
@@ -64,32 +65,40 @@ class YtDlpExtractor(
     private suspend fun run(args: List<String>, timeoutMs: Long = 90_000): ByteArray = gate.withPermit {
         withContext(Dispatchers.IO) {
             if (!bins.ready) throw ExtractionException("O yt-dlp não está instalado. Abra Ajustes › Mecanismo para instalar.")
-            val cmd = buildList {
-                add(bins.ytdlp.absolutePath)
-                addAll(listOf("--ignore-config", "--no-warnings", "--no-color", "--encoding", "utf-8", "--socket-timeout", "15"))
-                addAll(bins.jsRuntimeArgs())
-                cookieFile()?.takeIf { it.isFile }?.let { addAll(listOf("--cookies", it.absolutePath)) }
-                addAll(args)
-            }
-            val process = ProcessBuilder(cmd).also {
-                it.environment()["PYTHONUTF8"] = "1"
-                it.environment()["PYTHONIOENCODING"] = "utf-8"
-            }.start()
+            // O login nunca fica em texto puro no disco: o arquivo de cookies existe só enquanto o yt-dlp roda.
+            val jar = cookieHeader()?.let { CookieJar.write(it) }
             try {
-                coroutineScope {
-                    val err = async { process.errorStream.readBytes() }
-                    val out = async { process.inputStream.readBytes() }
-                    val finished = withTimeoutOrNull(timeoutMs) { out.await(); err.await(); true }
-                    if (finished == null) {
-                        process.destroyForcibly()
-                        throw ExtractionException("O yt-dlp demorou demais para responder.")
+                val cmd = buildList {
+                    add(bins.ytdlp.absolutePath)
+                    addAll(listOf("--ignore-config", "--no-warnings", "--no-color", "--encoding", "utf-8", "--socket-timeout", "15"))
+                    addAll(bins.jsRuntimeArgs())
+                    jar?.let { addAll(listOf("--cookies", it.absolutePath)) }
+                    addAll(args)
+                }
+                val process = ProcessBuilder(cmd).also {
+                    it.environment()["PYTHONUTF8"] = "1"
+                    it.environment()["PYTHONIOENCODING"] = "utf-8"
+                }.start()
+                try {
+                    coroutineScope {
+                        val err = async { process.errorStream.readBytes() }
+                        val out = async { process.inputStream.readBytes() }
+                        val finished = withTimeoutOrNull(timeoutMs) { out.await(); err.await(); true }
+                        if (finished == null) {
+                            process.destroyForcibly()
+                            throw ExtractionException("O yt-dlp demorou demais para responder.")
+                        }
+                        val stdout = out.await()
+                        if (stdout.isEmpty()) throw ExtractionException(friendlyError(err.await().toString(Charsets.UTF_8)))
+                        stdout
                     }
-                    val stdout = out.await()
-                    if (stdout.isEmpty()) throw ExtractionException(friendlyError(err.await().toString(Charsets.UTF_8)))
-                    stdout
+                } finally {
+                    if (process.isAlive) process.destroyForcibly()
+                    // O Windows só solta o arquivo quando o processo termina de vez.
+                    process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
                 }
             } finally {
-                if (process.isAlive) process.destroyForcibly()
+                jar?.let { CookieJar.discard(it) }
             }
         }
     }
@@ -119,7 +128,10 @@ class YtDlpExtractor(
     // ---------- Extractor ----------
 
     override suspend fun resolve(media: Media): Resolved {
-        val info = json(listOf("-J", "--no-playlist", "--skip-download", media.url))
+        // O endereço pode vir de dados sincronizados: tem de ser https e nunca pode começar com "-" (viraria opção do yt-dlp, como --exec).
+        val url = media.url.trim()
+        if (!url.startsWith("https://") || url.any { it.isWhitespace() || it.isISOControl() }) throw ExtractionException("Endereço de vídeo inválido.")
+        val info = json(listOf("-J", "--no-playlist", "--skip-download", "--", url))
         val live = info["is_live"].bool() == true || info["live_status"].str() == "is_live"
         val qualities = buildQualities(info, live)
         if (qualities.isEmpty()) throw ExtractionException("Nenhum formato de vídeo disponível.")

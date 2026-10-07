@@ -127,6 +127,7 @@ fun main(args: Array<String>) {
         System.setProperty("jdk.net.unixdomain.tmpdir", it.absolutePath)
         System.setProperty("java.io.tmpdir", it.absolutePath)
     }
+    runCatching { app.apex.source.CookieJar.deleteStale() }
     if (System.getenv("APEX_SELFTEST") == "1") selfTest()
     runApp()
 }
@@ -150,7 +151,7 @@ private fun runApp() = application {
             val bins = Binaries(File(dataDir, "bin"))
             val accounts = DesktopAccounts(dataDir)
             val system = DesktopSystem(windowState, accounts)
-            val extractor = YtDlpExtractor(bins, cookieFile = { accounts.youtubeCookieFile.takeIf { data.account(Platform.YouTube) != null } })
+            val extractor = YtDlpExtractor(bins, cookieHeader = { data.account(Platform.YouTube)?.credential })
             val player = VlcPlayerController(hardwareDecode = data.settings.value.preferHardwareDecode)
             AppContainer(scope, system, data, extractor, player).also { navigateFromEnv(it) }
         }

@@ -145,16 +145,6 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
 
     routing {
         get("/health") { call.respondText("ok") }
-        // TEMPORÁRIO: descobrir quantos proxies a hospedagem coloca na frente (sai no próximo commit).
-        get("/v1/_whoami") {
-            val h = call.request.headers
-            fun all(n: String) = (h.getAll(n) ?: emptyList()).joinToString(" | ")
-            val lines = listOf(
-                "direct=${call.request.local.remoteAddress}", "xff=${all("X-Forwarded-For")}", "cf=${all("CF-Connecting-IP")}",
-                "true=${all("True-Client-IP")}", "real=${all("X-Real-IP")}", "fwd=${all("Forwarded")}",
-            )
-            call.respondText(lines.joinToString(System.lineSeparator()))
-        }
         get("/") { call.respondText(pages.home(), ContentType.Text.Html) }
         get("/terms") { call.respondText(pages.terms(), ContentType.Text.Html) }
         get("/privacy") { call.respondText(pages.privacy(), ContentType.Text.Html) }
@@ -273,6 +263,8 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
 fun ApplicationCall.clientIp(config: ServerConfig): String {
     val direct = request.local.remoteAddress
     if (!config.trustProxy) return direct
+    // O CDN reescreve esse cabeçalho a cada pedido (o que o cliente mandar é descartado).
+    config.clientIpHeader?.let { name -> request.headers[name]?.trim()?.take(64)?.takeIf { it.isNotEmpty() }?.let { return it } }
     val entries = request.headers.getAll("X-Forwarded-For").orEmpty().flatMap { it.split(',') }.map { it.trim() }.filter { it.isNotEmpty() }
     return entries.getOrNull(entries.size - config.trustedProxyHops) ?: direct
 }

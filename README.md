@@ -34,7 +34,7 @@ depois, curtidos, playlists), **Canal**, **Busca** e **Ajustes**. Atalhos: `Espa
 
 ## Rodar
 
-Requisitos: **VLC 3.x de 64 bits** instalado e um **JDK 21+** (o do Android Studio serve).
+Requisitos: **VLC 3.x de 64 bits** instalado (o app avisa e leva ao download se faltar) e um **JDK 21+** (o do Android Studio serve).
 
 ```
 gradlew.bat :composeApp:run                              # modo desenvolvimento
@@ -47,6 +47,13 @@ Testes: `gradlew.bat :server:test :composeApp:desktopTest` (servidor com Postgre
 
 No Windows 11 com Java 25, se o Gradle ou o app falharem com `Unable to establish loopback connection`, aponte a variável
 `TEMP` para uma pasta simples (por exemplo `C:\Users\<você>\jt`). O `Apex.cmd` já faz isso.
+
+## Licença e privacidade
+
+- O Apex é software livre sob a **GNU GPL-3.0** ([LICENSE](LICENSE)); as bibliotecas usadas estão em [NOTICE.md](NOTICE.md).
+- O servidor publica os **Termos de Uso** (`/terms`) e a **Política de Privacidade** (`/privacy`); o cadastro só vale com o aceite,
+  e a pessoa pode **baixar** os dados (Ajustes › Conta do Apex) e **apagar** a conta (no app ou em `/account/delete`).
+- Para abrir ao público: [docs/PUBLICAR.md](docs/PUBLICAR.md).
 
 ## O que ainda não foi testado com conta real
 
@@ -61,5 +68,6 @@ Enviar mensagem no chat da Kick e do YouTube ainda não existe.
 - [x] Conta do Apex com servidor próprio e sincronização entre aparelhos
 - [ ] Ligar YouTube, Twitch e Kick por OAuth oficial (sincronização automática com as plataformas)
 - [ ] Android (mesmo código compartilhado, player Media3 ou libVLC)
+- [x] Servidor pronto para o público: termos e privacidade, limites de uso, exportar e apagar dados, limpeza automática
 - [ ] Instalador `.msi` (precisa de um JDK com `jpackage`)
 - [ ] Enviar mensagens no chat da Kick e do YouTube

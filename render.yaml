@@ -29,3 +29,11 @@ services:
         sync: false
       - key: TRUST_PROXY
         value: "true"
+      # Quem responde pelo serviço: aparece na Política de Privacidade e nos Termos. Preencha no painel.
+      - key: CONTACT_EMAIL
+        sync: false
+      - key: OPERATOR_NAME
+        sync: false
+      # Proteção do banco grátis: limite de contas no total.
+      - key: MAX_USERS
+        value: "2000"

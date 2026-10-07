@@ -22,6 +22,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
@@ -46,7 +47,7 @@ class CloudClient(
 
     private fun base() = serverUrl().trim().ifBlank { DEFAULT_SERVER_URL }.trimEnd('/')
 
-    private suspend fun raw(url: String, body: String?, token: String?, delete: Boolean = false): HttpResponse = try {
+    private suspend fun raw(url: String, body: String?, token: String?, method: HttpMethod = HttpMethod.Post): HttpResponse = try {
         val block: io.ktor.client.request.HttpRequestBuilder.() -> Unit = {
             // Hospedagens grátis "dormem" e levam cerca de um minuto para acordar na primeira chamada.
             timeout { requestTimeoutMillis = 70_000; connectTimeoutMillis = 30_000 }
@@ -56,7 +57,11 @@ class CloudClient(
                 setBody(body)
             }
         }
-        if (delete) http.delete(url, block) else http.post(url, block)
+        when (method) {
+            HttpMethod.Delete -> http.delete(url, block)
+            HttpMethod.Get -> http.get(url, block)
+            else -> http.post(url, block)
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -65,11 +70,8 @@ class CloudClient(
 
     private suspend fun failure(response: HttpResponse): Nothing {
         val parsed = runCatching { AppJson.decodeFromString<ErrorResponse>(response.bodyAsText()) }.getOrNull()
-        throw CloudException(
-            parsed?.error?.code ?: "http_${response.status.value}",
-            parsed?.error?.message ?: "O servidor respondeu com erro ${response.status.value}.",
-            response.status.value,
-        )
+        val fallback = if (response.status.value == 429) "Muitas tentativas. Espere um pouco e tente de novo." else "O servidor respondeu com erro ${response.status.value}."
+        throw CloudException(parsed?.error?.code ?: "http_${response.status.value}", parsed?.error?.message ?: fallback, response.status.value)
     }
 
     private fun AuthResponse.toSession(url: String) = CloudSession(url, accessToken, refreshToken, user)
@@ -81,9 +83,9 @@ class CloudClient(
 
     // ---------- sem sessão
 
-    suspend fun register(email: String, password: String, name: String?): CloudSession {
+    suspend fun register(email: String, password: String, name: String?, acceptTerms: Boolean): CloudSession {
         val url = base()
-        val response = raw("$url/v1/auth/register", AppJson.encodeToString(RegisterRequest(email, password, name)), null)
+        val response = raw("$url/v1/auth/register", AppJson.encodeToString(RegisterRequest(email, password, name, acceptTerms)), null)
         if (!response.status.isSuccess()) failure(response)
         return AppJson.decodeFromString<AuthResponse>(response.bodyAsText()).toSession(url).also(data::setCloudSession)
     }
@@ -103,13 +105,13 @@ class CloudClient(
     // ---------- com sessão
 
     /** Faz a chamada com o token de acesso; se vencer, renova a sessão e tenta de novo. */
-    private suspend fun authed(path: String, body: String?, delete: Boolean = false): HttpResponse {
+    private suspend fun authed(path: String, body: String?, method: HttpMethod = HttpMethod.Post): HttpResponse {
         var s = session.value ?: throw CloudException("signed_out", "Entre na sua conta do Apex.")
-        var response = raw("${s.serverUrl}$path", body, s.accessToken, delete)
+        var response = raw("${s.serverUrl}$path", body, s.accessToken, method)
         if (response.status.value == 401) {
             refresh(s.refreshToken)
             s = session.value ?: throw CloudException("signed_out", "Sua sessão terminou. Entre de novo.")
-            response = raw("${s.serverUrl}$path", body, s.accessToken, delete)
+            response = raw("${s.serverUrl}$path", body, s.accessToken, method)
         }
         return response
     }
@@ -132,6 +134,13 @@ class CloudClient(
         return AppJson.decodeFromString(response.bodyAsText())
     }
 
+    /** Tudo o que o servidor guarda sobre a conta (JSON). */
+    suspend fun export(): String {
+        val response = authed("/v1/me/export", null, HttpMethod.Get)
+        if (!response.status.isSuccess()) failure(response)
+        return response.bodyAsText()
+    }
+
     suspend fun logout() {
         val s = session.value ?: return
         runCatching { raw("${s.serverUrl}/v1/auth/logout", AppJson.encodeToString(RefreshRequest(s.refreshToken)), null) }
@@ -139,7 +148,7 @@ class CloudClient(
     }
 
     suspend fun deleteAccount(password: String) {
-        val response = authed("/v1/me", AppJson.encodeToString(DeleteAccountRequest(password)), delete = true)
+        val response = authed("/v1/me", AppJson.encodeToString(DeleteAccountRequest(password)), HttpMethod.Delete)
         if (!response.status.isSuccess()) failure(response)
         data.setCloudSession(null)
     }

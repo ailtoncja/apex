@@ -6,7 +6,13 @@ import kotlinx.serialization.json.JsonElement
 /** Formatos trocados entre o app e o servidor do Apex. */
 
 @Serializable
-data class RegisterRequest(val email: String, val password: String, val displayName: String? = null)
+data class RegisterRequest(
+    val email: String,
+    val password: String,
+    val displayName: String? = null,
+    /** A pessoa marcou que leu e aceita os Termos de Uso e a Política de Privacidade. */
+    val acceptTerms: Boolean = false,
+)
 
 @Serializable
 data class LoginRequest(val email: String, val password: String, val device: String? = null)
@@ -98,4 +104,17 @@ data class SyncResponse(
     val hasMore: Boolean = false,
     /** Quantas mudanças enviadas foram aceitas (as mais antigas que o servidor já tem são ignoradas). */
     val applied: Int = 0,
+)
+
+/** Tudo o que o servidor guarda sobre a pessoa (direito de acesso e de portabilidade da LGPD). */
+@Serializable
+data class ExportDto(
+    val exportedAt: String,
+    val user: UserDto,
+    val createdAt: String,
+    val termsAcceptedAt: String? = null,
+    val termsVersion: String? = null,
+    /** Aparelhos com sessão aberta. */
+    val activeSessions: Int = 0,
+    val items: List<SyncItem> = emptyList(),
 )

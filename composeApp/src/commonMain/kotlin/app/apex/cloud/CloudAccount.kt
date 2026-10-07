@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 /** O que fazer quando o aparelho já tem dados de outra conta do Apex. */
 data class ForeignData(val newUserEmail: String)
@@ -41,8 +43,8 @@ class CloudAccount(
         afterSignIn(session)
     }
 
-    suspend fun signUp(email: String, password: String, name: String?) {
-        val session = client.register(email.trim(), password, name?.trim()?.ifBlank { null })
+    suspend fun signUp(email: String, password: String, name: String?, acceptedTerms: Boolean) {
+        val session = client.register(email.trim(), password, name?.trim()?.ifBlank { null }, acceptedTerms)
         afterSignIn(session)
     }
 
@@ -92,4 +94,14 @@ class CloudAccount(
     }
 
     suspend fun forgot(email: String) = client.forgot(email.trim())
+
+    /** Os dados da conta no servidor, já legíveis (para o usuário guardar uma cópia). */
+    suspend fun exportData(): String {
+        val raw = client.export()
+        val pretty = Json { prettyPrint = true }
+        return runCatching { pretty.encodeToString(JsonElement.serializer(), pretty.parseToJsonElement(raw)) }.getOrDefault(raw)
+    }
+
+    /** Endereço de uma página do servidor (termos, privacidade, excluir conta). */
+    fun pageUrl(path: String): String = (data.cloudSession.value?.serverUrl ?: data.settings.value.serverUrl.ifBlank { DEFAULT_SERVER_URL }).trim().trimEnd('/') + path
 }

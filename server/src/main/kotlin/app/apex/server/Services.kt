@@ -2,6 +2,7 @@ package app.apex.server
 
 import app.apex.shared.AuthResponse
 import app.apex.shared.DeleteAccountRequest
+import app.apex.shared.ExportDto
 import app.apex.shared.LoginRequest
 import app.apex.shared.RegisterRequest
 import app.apex.shared.SyncChange
@@ -88,12 +89,16 @@ class AuthService(
     }
 
     suspend fun register(req: RegisterRequest, device: String?): AuthResponse {
+        if (!req.acceptTerms) fail(HttpStatusCode.BadRequest, "terms_required", "Aceite os Termos de Uso e a Política de Privacidade para criar a conta.")
         val email = normalizeEmail(req.email)
         checkPassword(req.password)
+        if (db.query { UserRepo.count(it) } >= config.maxUsers) {
+            fail(HttpStatusCode.ServiceUnavailable, "registrations_closed", "No momento não estamos aceitando contas novas. Tente de novo mais tarde.")
+        }
         val name = req.displayName?.trim()?.take(60)?.ifBlank { null } ?: email.substringBefore('@')
         val hash = hash(req.password)
         val user = try {
-            db.query { UserRepo.create(it, email, hash, name) }
+            db.query { UserRepo.create(it, email, hash, name, Legal.VERSION) }
         } catch (e: SQLException) {
             if (e.sqlState == "23505") fail(HttpStatusCode.Conflict, "email_taken", "Este e-mail já tem uma conta. Tente entrar.")
             throw e
@@ -103,18 +108,21 @@ class AuthService(
         return session(user, device)
     }
 
-    suspend fun login(req: LoginRequest): AuthResponse {
-        val email = req.email.trim().lowercase()
+    /** Confere e-mail e senha (com a barreira de tentativas) e devolve a pessoa. */
+    private suspend fun authenticate(rawEmail: String, password: String): UserRow {
+        val email = rawEmail.trim().lowercase()
         throttle.check(email)
         val user = db.query { UserRepo.findByEmail(it, email) }
-        val ok = withContext(Dispatchers.Default) { Passwords.verify(req.password, user?.passwordHash) }
+        val ok = withContext(Dispatchers.Default) { Passwords.verify(password, user?.passwordHash) }
         if (user == null || !ok) {
             throttle.failure(email)
             fail(HttpStatusCode.Unauthorized, "invalid_credentials", "E-mail ou senha incorretos.")
         }
         throttle.success(email)
-        return session(user, req.device)
+        return user
     }
+
+    suspend fun login(req: LoginRequest): AuthResponse = session(authenticate(req.email, req.password), req.device)
 
     suspend fun refresh(raw: String): AuthResponse {
         val result = db.query { TokenRepo.rotate(it, raw) }
@@ -164,6 +172,13 @@ class AuthService(
         if (!ok) fail(HttpStatusCode.BadRequest, "invalid_token", "Este link venceu ou já foi usado.")
     }
 
+    /** Apagar a conta pela página do site, sem precisar do app. */
+    suspend fun deleteAccount(email: String, password: String) {
+        val user = authenticate(email, password)
+        db.query { UserRepo.delete(it, user.id) }
+        log.info("Conta apagada pelo site.")
+    }
+
     suspend fun deleteAccount(userId: UUID, req: DeleteAccountRequest) {
         val user = db.query { UserRepo.findById(it, userId) } ?: fail(HttpStatusCode.Unauthorized, "unknown_user", "Conta não encontrada.")
         val ok = withContext(Dispatchers.Default) { Passwords.verify(req.password, user.passwordHash) }
@@ -173,7 +188,12 @@ class AuthService(
 }
 
 /** [overlapSeconds]: o cursor devolvido volta alguns segundos, para nunca perder uma gravação que terminou fora de ordem. */
-class SyncService(private val db: Database, private val overlapSeconds: Long = 5) {
+class SyncService(
+    private val db: Database,
+    private val overlapSeconds: Long = 5,
+    private val maxRows: Long = MAX_ROWS_PER_USER,
+    private val maxBytes: Long = MAX_BYTES_PER_USER,
+) {
     private val json = Json
 
     suspend fun sync(userId: UUID, req: SyncRequest): SyncResponse {
@@ -189,6 +209,13 @@ class SyncService(private val db: Database, private val overlapSeconds: Long = 5
                 var applied = 0
                 for (change in prepared) {
                     if (SyncRepo.upsert(c, userId, change.collection, change.key, change.dataText, change.modifiedAt, change.deleted)) applied++
+                }
+                if (prepared.isNotEmpty()) {
+                    // Estourou o limite: a transação toda é desfeita, nada fica pela metade.
+                    val (rows, bytes) = SyncRepo.usage(c, userId)
+                    if (rows > maxRows || bytes > maxBytes) {
+                        fail(HttpStatusCode.PayloadTooLarge, "quota_exceeded", "Sua conta chegou ao limite de dados sincronizados. Apague itens antigos e tente de novo.")
+                    }
                 }
                 val startedAt = SyncRepo.now(c)
                 val rows = SyncRepo.pull(c, userId, since, PAGE + 1)
@@ -214,6 +241,23 @@ class SyncService(private val db: Database, private val overlapSeconds: Long = 5
         }
     }
 
+    /** Tudo o que o servidor guarda sobre a pessoa. */
+    suspend fun export(userId: UUID): ExportDto = db.query { c ->
+        val user = UserRepo.findById(c, userId) ?: fail(HttpStatusCode.Unauthorized, "unknown_user", "Conta não encontrada.")
+        val items = SyncRepo.pull(c, userId, null, maxRows.toInt() + 1).filterNot { it.deleted }
+        ExportDto(
+            exportedAt = Instant.now().toString(),
+            user = UserDto(user.id.toString(), user.email, user.displayName, user.avatarUrl, user.emailVerified),
+            createdAt = user.createdAt.toString(),
+            termsAcceptedAt = user.termsAcceptedAt?.toString(),
+            termsVersion = user.termsVersion,
+            activeSessions = TokenRepo.activeSessions(c, userId),
+            items = items.map {
+                SyncItem(it.collection, it.key, it.data?.let { text -> json.parseToJsonElement(text) }, it.deleted, it.modifiedAt, it.updatedAt.toString())
+            },
+        )
+    }
+
     private class Prepared(val collection: String, val key: String, val dataText: String?, val modifiedAt: Long, val deleted: Boolean)
 
     private fun validate(c: SyncChange, maxFuture: Long): Prepared {
@@ -228,5 +272,25 @@ class SyncService(private val db: Database, private val overlapSeconds: Long = 5
         const val MAX_CHANGES = 500
         const val PAGE = 500
         const val MAX_ITEM_CHARS = 60_000
+
+        /** Limites por conta, para que uma pessoa sozinha não encha o banco (o plano grátis do Neon tem 0,5 GB). */
+        const val MAX_ROWS_PER_USER = 50_000L
+        const val MAX_BYTES_PER_USER = 10L * 1024 * 1024
+    }
+}
+
+/** Limpeza periódica do que não serve mais. */
+object Maintenance {
+    private val log = LoggerFactory.getLogger("maintenance")
+
+    /** Quanto tempo guardamos a marca de "item apagado" para os outros aparelhos ficarem sabendo. */
+    const val TOMBSTONE_DAYS = 180
+
+    fun run(db: Database): Int = db.tx { c ->
+        val sessions = c.execute("delete from refresh_tokens where expires_at < now() - interval '7 days' or revoked_at < now() - interval '7 days'")
+        val links = c.execute("delete from email_tokens where expires_at < now() - interval '1 day' or used_at < now() - interval '1 day'")
+        val tombstones = c.execute("delete from sync_items where deleted and deleted_at < now() - interval '$TOMBSTONE_DAYS days'")
+        if (sessions + links + tombstones > 0) log.info("Limpeza: {} sessões, {} links, {} itens apagados antigos.", sessions, links, tombstones)
+        sessions + links + tombstones
     }
 }

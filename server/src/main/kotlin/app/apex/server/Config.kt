@@ -22,6 +22,20 @@ data class ServerConfig(
     val mailFrom: String,
     val trustProxy: Boolean,
     val devDataDir: File,
+    /** Quem responde pelo serviço; aparece na Política de Privacidade e nos Termos. */
+    val contactEmail: String? = null,
+    val operatorName: String? = null,
+    /** Link para baixar o app, mostrado na página inicial. */
+    val downloadUrl: String? = null,
+    /** Proteção do banco grátis: depois disso, novos cadastros são recusados até você aumentar o limite. */
+    val maxUsers: Int = 2000,
+    /** Contas novas por hora, por endereço (IP). */
+    val registerLimitPerHour: Int = 20,
+    /** Pedidos de "esqueci a senha" por hora, por endereço (cada um manda um e-mail). */
+    val mailLimitPerHour: Int = 10,
+    /** Limites de dados sincronizados por conta (linhas e bytes). */
+    val maxRowsPerUser: Long = SyncService.MAX_ROWS_PER_USER,
+    val maxBytesPerUser: Long = SyncService.MAX_BYTES_PER_USER,
 ) {
     val isProduction: Boolean get() = database != null
 
@@ -62,6 +76,12 @@ data class ServerConfig(
                 mailFrom = env["MAIL_FROM"] ?: "Apex <onboarding@resend.dev>",
                 trustProxy = env["TRUST_PROXY"] == "true",
                 devDataDir = dataDir,
+                contactEmail = env["CONTACT_EMAIL"]?.trim()?.takeIf { it.isNotBlank() },
+                operatorName = env["OPERATOR_NAME"]?.trim()?.takeIf { it.isNotBlank() },
+                downloadUrl = env["DOWNLOAD_URL"]?.trim()?.takeIf { it.startsWith("https://") },
+                maxUsers = env["MAX_USERS"]?.toIntOrNull()?.coerceAtLeast(0) ?: 2000,
+                registerLimitPerHour = env["REGISTER_LIMIT_PER_HOUR"]?.toIntOrNull()?.coerceAtLeast(1) ?: 20,
+                mailLimitPerHour = env["MAIL_LIMIT_PER_HOUR"]?.toIntOrNull()?.coerceAtLeast(1) ?: 10,
             )
         }
 

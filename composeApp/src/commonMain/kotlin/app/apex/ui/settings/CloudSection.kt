@@ -1,5 +1,6 @@
 package app.apex.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,9 +10,11 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -54,6 +57,7 @@ fun CloudSection() {
     val scope = rememberCoroutineScope()
 
     var signUp by remember { mutableStateOf(false) }
+    var acceptedTerms by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
@@ -70,11 +74,15 @@ fun CloudSection() {
             message = "Preencha o e-mail e a senha."
             return
         }
+        if (signUp && !acceptedTerms) {
+            message = "Para criar a conta, marque que leu e aceita os Termos de Uso e a Política de Privacidade."
+            return
+        }
         busy = true
         message = null
         scope.launch {
             try {
-                if (signUp) cloud.signUp(email, password, name) else cloud.signIn(email, password)
+                if (signUp) cloud.signUp(email, password, name, acceptedTerms) else cloud.signIn(email, password)
                 password = ""
             } catch (e: CloudException) {
                 message = e.message
@@ -107,6 +115,19 @@ fun CloudSection() {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { submit() }),
             )
+            if (signUp) Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(acceptedTerms, { acceptedTerms = it })
+                Text("Li e aceito os ", style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted)
+                Text(
+                    "Termos de Uso", style = MaterialTheme.typography.bodySmall, color = ApexColors.Accent,
+                    modifier = Modifier.clickable { app.system.openUrl(cloud.pageUrl("/terms")) },
+                )
+                Text(" e a ", style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted)
+                Text(
+                    "Política de Privacidade", style = MaterialTheme.typography.bodySmall, color = ApexColors.Accent,
+                    modifier = Modifier.clickable { app.system.openUrl(cloud.pageUrl("/privacy")) },
+                )
+            }
             message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ApexColors.Accent) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 ActionButton(if (busy) "Aguarde…" else if (signUp) "Criar conta" else "Entrar", { submit() }, primary = true)
@@ -155,6 +176,20 @@ fun CloudSection() {
                 ActionButton("Sincronizar agora", { cloud.syncNow() }, icon = Icons.Rounded.Sync)
                 ActionButton("Sair", { confirmSignOut = true }, icon = Icons.Rounded.Logout)
                 ActionButton("Apagar conta", { confirmDelete = true }, icon = Icons.Rounded.Delete)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ActionButton("Baixar meus dados", {
+                    scope.launch {
+                        try {
+                            val path = app.system.saveDownload("apex-meus-dados.json", cloud.exportData())
+                            app.toast(if (path != null) "Salvo em $path" else "Não consegui salvar o arquivo.")
+                        } catch (e: CloudException) {
+                            app.toast(e.message ?: "Não foi possível baixar os dados.")
+                        }
+                    }
+                }, icon = Icons.Rounded.Download)
+                TextButton({ app.system.openUrl(cloud.pageUrl("/privacy")) }) { Text("Privacidade", color = ApexColors.Faint) }
+                TextButton({ app.system.openUrl(cloud.pageUrl("/terms")) }) { Text("Termos", color = ApexColors.Faint) }
             }
         }
     }

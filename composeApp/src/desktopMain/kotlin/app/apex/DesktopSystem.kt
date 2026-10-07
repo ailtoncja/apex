@@ -4,9 +4,11 @@ import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
 import app.apex.data.Account
 import app.apex.model.Platform
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.io.File
 import java.awt.Toolkit
@@ -51,7 +53,7 @@ class DesktopSystem(
         target.absolutePath
     }.getOrNull()
 
-    override val installedBrowsers: List<BrowserOption> get() = accounts.installedBrowsers()
+    override val installedBrowsers: List<BrowserOption> get() = accounts.installedBrowserOptions()
 
     override val defaultBrowserId: String? get() = accounts.defaultBrowserId()
 
@@ -59,4 +61,6 @@ class DesktopSystem(
         accounts.browserLogin(platform, browserId, onStatus)
 
     override fun signOut(platform: Platform) = accounts.signOut(platform)
+
+    override suspend fun refreshAccount(account: Account): Account? = withContext(Dispatchers.IO) { accounts.refreshLinked(account) }
 }

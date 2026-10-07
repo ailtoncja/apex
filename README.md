@@ -39,7 +39,8 @@ depois, curtidos, playlists), **Canal**, **Busca** e **Ajustes**. Atalhos: `Espa
   (IRC da Twitch e Pusher da Kick).
 - **libVLC** (via vlcj) decodifica; cada quadro é desenhado pelo Compose, então os controles ficam por cima do vídeo.
 - **Contas das plataformas:** o Apex abre um navegador que você já tem instalado, você entra na conta e ele importa o login
-  (sua senha nunca passa pelo Apex). No **Firefox** ele lê o perfil do próprio Firefox, e se você já estiver logado importa na hora.
+  (sua senha nunca passa pelo Apex). No **Firefox** ele lê o perfil do próprio Firefox, e se você já estiver logado importa na hora; como o Firefox aberto troca os cookies do YouTube
+  a cada poucos minutos, o Apex relê o perfil a cada 2 minutos para a sessão não cair.
   No **Chrome, Edge, Brave, Vivaldi e Opera** abre uma janela separada só do Apex e lê o login pelo protocolo de depuração,
   fechando a janela quando termina. Os logins ficam cifrados no disco com a conta do Windows (DPAPI).
 - Dados do usuário em `%APPDATA%\Apex` (JSON). Cada arquivo pode ser apagado sem quebrar nada.

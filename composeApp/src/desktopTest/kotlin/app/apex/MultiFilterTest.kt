@@ -253,7 +253,7 @@ class MultiFilterTest {
         val base = SearchFilters(type = SearchType.Any)
         container.screens.search("gaules", base).also { it.platforms = setOf(Platform.YouTube, Platform.Twitch); it.onlySubs = false }
         setContent { CompositionLocalProvider(LocalApp provides container) { SearchScreen(Route.Search("gaules", base)) } }
-        onAllNodesWithText("Filtros").onFirst().performClick()
+        onAllNodesWithText("Filtros", substring = true).onFirst().performClick()
         waitForIdle()
         onAllNodesWithText("Hoje").onFirst().performClick()
         waitForIdle()

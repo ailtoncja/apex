@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -142,37 +143,49 @@ private fun SearchField(modifier: Modifier) {
     val density = LocalDensity.current
 
     Box(modifier.onSizeChanged { fieldWidth = it.width }) {
-        Row(
-            Modifier.fillMaxWidth().height(42.dp).clip(RoundedCornerShape(50))
-                .background(ApexColors.SurfaceHigh)
-                .border(1.dp, if (focused) ApexColors.Accent.copy(alpha = 0.8f) else ApexColors.Outline, RoundedCornerShape(50))
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(Icons.Rounded.Search, null, tint = ApexColors.Muted, modifier = Modifier.size(20.dp))
-            Box(Modifier.weight(1f)) {
-                if (text.isEmpty()) Text("Buscar vídeos, lives e canais, ou colar um link", color = ApexColors.Faint, fontSize = 15.sp)
-                BasicTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    singleLine = true,
-                    textStyle = TextStyle(color = ApexColors.OnSurface, fontSize = 15.sp),
-                    cursorBrush = SolidColor(ApexColors.Accent),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { submit() }),
-                    modifier = Modifier.fillMaxWidth()
-                        .onFocusChanged { focused = it.isFocused; app.ui.typing = it.isFocused }
-                        .onPreviewKeyEvent {
-                            if (it.type == KeyEventType.KeyDown && it.key == Key.Enter) { submit(); true } else false
-                        },
-                )
+        // Como no YouTube: o campo arredondado e, colado nele à direita, o botão de pesquisar.
+        Row(Modifier.fillMaxWidth().height(42.dp)) {
+            Row(
+                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(topStart = 50.dp, bottomStart = 50.dp))
+                    .background(ApexColors.Background)
+                    .border(1.dp, if (focused) ApexColors.Accent.copy(alpha = 0.8f) else ApexColors.Outline, RoundedCornerShape(topStart = 50.dp, bottomStart = 50.dp))
+                    .padding(start = 16.dp, end = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (focused) Icon(Icons.Rounded.Search, null, tint = ApexColors.Muted, modifier = Modifier.size(18.dp))
+                Box(Modifier.weight(1f)) {
+                    if (text.isEmpty()) Text("Pesquisar", color = ApexColors.Faint, fontSize = 15.sp)
+                    BasicTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = ApexColors.OnSurface, fontSize = 15.sp),
+                        cursorBrush = SolidColor(ApexColors.Accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { submit() }),
+                        modifier = Modifier.fillMaxWidth()
+                            .onFocusChanged { focused = it.isFocused; app.ui.typing = it.isFocused }
+                            .onPreviewKeyEvent {
+                                if (it.type == KeyEventType.KeyDown && it.key == Key.Enter) { submit(); true } else false
+                            },
+                    )
+                }
+                if (text.isNotEmpty()) {
+                    Icon(
+                        Icons.Rounded.Close, "Limpar", tint = ApexColors.Muted,
+                        modifier = Modifier.size(20.dp).clip(CircleShape).clickable { text = "" },
+                    )
+                }
             }
-            if (text.isNotEmpty()) {
-                Icon(
-                    Icons.Rounded.Close, "Limpar", tint = ApexColors.Muted,
-                    modifier = Modifier.size(18.dp).clip(CircleShape).clickable { text = "" },
-                )
+            Box(
+                Modifier.width(64.dp).fillMaxHeight().clip(RoundedCornerShape(topEnd = 50.dp, bottomEnd = 50.dp))
+                    .background(ApexColors.SurfaceHigh)
+                    .border(1.dp, ApexColors.Outline, RoundedCornerShape(topEnd = 50.dp, bottomEnd = 50.dp))
+                    .clickable { submit() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Search, "Pesquisar", tint = ApexColors.OnSurface, modifier = Modifier.size(22.dp))
             }
         }
 

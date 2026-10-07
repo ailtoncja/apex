@@ -36,6 +36,7 @@ class ScreenStates(private val app: AppContainer) {
     val subs = SubscriptionsState(app)
 
     private val searches = LinkedHashMap<String, SearchState>()
+    private val sharedSearches = LinkedHashMap<String, SharedSearch>()
     private val channels = LinkedHashMap<String, ChannelState>()
     private val categories = LinkedHashMap<String, CategoryState>()
     val watch = WatchState(app)
@@ -44,8 +45,14 @@ class ScreenStates(private val app: AppContainer) {
         val key = "$query|$filters"
         return searches.getOrPut(key) {
             if (searches.size > 8) searches.remove(searches.keys.first())
-            SearchState(app, query, filters)
+            SearchState(app, query, filters, sharedSearch(query))
         }
+    }
+
+    /** O que a Twitch e a Kick devolveram para a consulta: vale para qualquer filtro do YouTube, então não é buscado de novo ao trocar de aba. */
+    private fun sharedSearch(query: String): SharedSearch = sharedSearches.getOrPut(query) {
+        if (sharedSearches.size > 8) sharedSearches.remove(sharedSearches.keys.first())
+        SharedSearch(app, query)
     }
 
     fun channel(channel: Channel): ChannelState = channels.getOrPut(channel.key) {
@@ -464,7 +471,20 @@ class SubscriptionsState(private val app: AppContainer) {
 
 // ---------------------------------------------------------------------------------------------
 
-class SearchState(private val app: AppContainer, val query: String, val filters: SearchFilters) {
+/** As buscas da Twitch e da Kick por uma consulta (não dependem dos filtros do YouTube). */
+class SharedSearch(app: AppContainer, query: String) {
+    val twitchLives = Loadable(app.scope, emptyList<Media>()) { app.twitch.searchStreams(query, 24) }
+    val twitchChannels = Loadable(app.scope, emptyList<ChannelHit>()) { app.twitch.searchChannels(query, 10) }
+    val kickChannels = Loadable(app.scope, emptyList<ChannelHit>()) { app.kick.search(query) }
+
+    fun start() {
+        twitchLives.loadIfNeeded()
+        twitchChannels.loadIfNeeded()
+        kickChannels.loadIfNeeded()
+    }
+}
+
+class SearchState(private val app: AppContainer, val query: String, val filters: SearchFilters, private val shared: SharedSearch = SharedSearch(app, query)) {
     /** As plataformas ligadas (vazio = todas); dá para ligar mais de uma, e "Inscrições" combina com elas. */
     var platforms by mutableStateOf<Set<Platform>>(emptySet())
 
@@ -486,15 +506,13 @@ class SearchState(private val app: AppContainer, val query: String, val filters:
         Page(page.videos, page.continuation)
     }
 
-    val twitchLives = Loadable(app.scope, emptyList<Media>()) { app.twitch.searchStreams(query, 24) }
-    val twitchChannels = Loadable(app.scope, emptyList<ChannelHit>()) { app.twitch.searchChannels(query, 10) }
-    val kickChannels = Loadable(app.scope, emptyList<ChannelHit>()) { app.kick.search(query) }
+    val twitchLives get() = shared.twitchLives
+    val twitchChannels get() = shared.twitchChannels
+    val kickChannels get() = shared.kickChannels
 
     fun start() {
         youtube.loadIfNeeded()
-        twitchLives.loadIfNeeded()
-        twitchChannels.loadIfNeeded()
-        kickChannels.loadIfNeeded()
+        shared.start()
     }
 }
 

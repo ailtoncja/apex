@@ -42,6 +42,8 @@ import app.apex.nav.LibraryTab
 import app.apex.nav.LiveFilter
 import app.apex.source.SearchFilters
 import app.apex.source.SearchType
+import app.apex.state.SearchKind
+import app.apex.state.withKind
 import app.apex.state.YOUTUBE_TOPIC_CATEGORIES
 import app.apex.nav.Route
 import app.apex.player.VlcPlayerController
@@ -266,7 +268,11 @@ private fun navigateFromEnv(app: AppContainer) {
         "search" -> {
             val parts = arg.split('|')
             val query = parts[0].trim()
-            val filters = SearchFilters(type = SearchType.Any)
+            // O quarto trecho escolhe a aba: videos, lives, canais ou playlists.
+            val kindName = parts.getOrNull(3).orEmpty()
+            val filters = SearchFilters(type = SearchType.Any).withKind(
+                when (kindName) { "videos" -> SearchKind.Videos; "lives" -> SearchKind.Lives; "canais" -> SearchKind.Channels; "playlists" -> SearchKind.Playlists; else -> SearchKind.All },
+            )
             val state = app.screens.search(query, filters)
             state.platforms = parts.getOrNull(1).orEmpty().split(',').mapNotNull { n -> Platform.entries.firstOrNull { it.name.equals(n.trim(), ignoreCase = true) } }.toSet()
             state.onlySubs = parts.getOrNull(2) == "subs"

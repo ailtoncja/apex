@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -204,6 +205,8 @@ fun VideoCard(media: Media, modifier: Modifier = Modifier, upNext: List<Media>? 
     val hovered by source.collectIsHoveredAsState()
     var menu by remember { mutableStateOf(false) }
     val progress = rememberProgress(media)
+    // Mouse parado em cima do vídeo por um instante: começa a preparar, para abrir na hora se a pessoa clicar.
+    LaunchedEffect(hovered) { if (hovered) { kotlinx.coroutines.delay(HOVER_PREPARE_MS); app.session.prefetch(media) } }
 
     ContextMenuHost(
         modifier.clip(RoundedCornerShape(12.dp)).hoverable(source)
@@ -276,6 +279,8 @@ fun VideoRow(
     val hovered by source.collectIsHoveredAsState()
     var menu by remember { mutableStateOf(false) }
     val progress = rememberProgress(media)
+    // Mouse parado em cima do vídeo por um instante: começa a preparar, para abrir na hora se a pessoa clicar.
+    LaunchedEffect(hovered) { if (hovered) { kotlinx.coroutines.delay(HOVER_PREPARE_MS); app.session.prefetch(media) } }
 
     ContextMenuHost(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).hoverable(source)
@@ -400,3 +405,6 @@ fun CategoryCard(category: LiveCategory, onClick: () -> Unit, modifier: Modifier
         }
     }
 }
+
+/** Quanto tempo o mouse precisa ficar sobre um vídeo para começar a prepará-lo. */
+private const val HOVER_PREPARE_MS = 250L

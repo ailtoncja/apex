@@ -48,6 +48,13 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.apex.LocalApp
+import app.apex.ui.components.ActionButton
+import app.apex.model.ChatMessage
+import app.apex.chat.replaySourceFor
+import app.apex.chat.ReplaySource
+import app.apex.chat.ChatReplay
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.runtime.produceState
 import app.apex.chat.ChatClient
 import app.apex.chat.KickChat
 import app.apex.chat.TwitchChat
@@ -58,6 +65,7 @@ import app.apex.theme.ApexColors
 import app.apex.ui.components.IconBtn
 import kotlinx.coroutines.launch
 
+/** O chat de uma live (ao vivo). */
 @Composable
 fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
     val app = LocalApp.current
@@ -79,14 +87,7 @@ fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
     }
     val messages by client.messages.collectAsState()
     val status by client.status.collectAsState()
-    val listState = rememberLazyListState()
     var text by remember(media.key) { mutableStateOf("") }
-
-    LaunchedEffect(messages.size) {
-        val info = listState.layoutInfo
-        val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-        if (messages.isNotEmpty() && last >= info.totalItemsCount - 3) listState.scrollToItem(messages.lastIndex)
-    }
 
     fun submit() {
         val t = text.trim()
@@ -95,37 +96,7 @@ fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
         scope.launch { if (!client.send(t)) app.toast("Não foi possível enviar a mensagem") }
     }
 
-    Column(
-        modifier.clip(RoundedCornerShape(14.dp)).background(ApexColors.Surface)
-            .border(1.dp, ApexColors.Outline, RoundedCornerShape(14.dp)),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().background(ApexColors.SurfaceHigh).padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Box(Modifier.size(8.dp).background(if (status == "Chat ao vivo") ApexColors.Live else ApexColors.Faint, CircleShape))
-            Text("Chat da live", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            Text(status, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, maxLines = 1)
-            // Oculta o chat inteiro (e para de ler as mensagens); "Mostrar chat" volta pela coluna ao lado do vídeo.
-            IconBtn(Icons.Rounded.VisibilityOff, "Ocultar o chat", { app.data.updateSettings { it.copy(showChat = false) } }, size = 28.dp, iconSize = 18.dp)
-        }
-        LazyColumn(
-            Modifier.weight(1f).fillMaxWidth(),
-            state = listState,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            items(messages, key = { it.id }) { m ->
-                Text(
-                    buildAnnotatedString {
-                        withStyle(SpanStyle(color = Color(m.color ?: 0xFFFFFFFF), fontWeight = FontWeight.Bold)) { append(m.author) }
-                        append("  ")
-                        append(m.text)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
+    ChatSurface("Chat da live", status == "Chat ao vivo", status, messages, modifier) {
         Row(
             Modifier.fillMaxWidth().background(ApexColors.SurfaceHigh).padding(10.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -148,5 +119,100 @@ fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
             }
             IconBtn(Icons.Rounded.Send, "Enviar", { submit() }, size = 36.dp, iconSize = 18.dp, tint = if (client.canSend) ApexColors.Accent else ApexColors.Faint)
         }
+    }
+}
+
+/**
+ * O chat gravado de um vídeo que já foi ao ar (VOD da Twitch e da Kick, live encerrada do YouTube), junto com o vídeo.
+ * Não aparece nada se o vídeo não tem chat gravado.
+ */
+@Composable
+fun ReplayChatSection(media: Media, modifier: Modifier = Modifier) {
+    val app = LocalApp.current
+    val settings by app.data.settings.collectAsState()
+    // null = ainda conferindo ou sem chat gravado: nada na tela (o painel entra só quando existe).
+    val source by produceState<ReplaySource?>(null, media.key) { value = app.replaySourceFor(media) }
+    val found = source ?: return
+    if (settings.showChat) {
+        ReplayChatPanel(found, media.key, { app.player.state.value.positionMs }, modifier.fillMaxWidth().height(520.dp))
+    } else {
+        Row(
+            modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(ApexColors.Surface)
+                .border(1.dp, ApexColors.Outline, RoundedCornerShape(14.dp)).padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Chat oculto", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, color = ApexColors.Muted)
+            ActionButton("Mostrar chat", { app.data.updateSettings { it.copy(showChat = true) } }, icon = Icons.Rounded.Visibility)
+        }
+    }
+}
+
+/** O painel do chat gravado: as mensagens acompanham a posição do vídeo (e voltam a ler se a pessoa pular no vídeo). */
+@Composable
+internal fun ReplayChatPanel(source: ReplaySource, key: Any, position: () -> Long, modifier: Modifier = Modifier) {
+    val app = LocalApp.current
+    val replay = remember(source, key) { ChatReplay(app.scope, source, position) }
+    DisposableEffect(replay) {
+        replay.start()
+        onDispose { replay.stop() }
+    }
+    val messages by replay.messages.collectAsState()
+    val status by replay.status.collectAsState()
+    ChatSurface("Replay do chat", false, status, messages, modifier) {
+        Text(
+            "Chat gravado: as mensagens acompanham o vídeo.",
+            Modifier.fillMaxWidth().background(ApexColors.SurfaceHigh).padding(horizontal = 14.dp, vertical = 11.dp),
+            style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, maxLines = 1,
+        )
+    }
+}
+
+/** A moldura do chat (ao vivo ou gravado): título, estado, a lista de mensagens que desce sozinha e o rodapé de cada um. */
+@Composable
+private fun ChatSurface(
+    title: String, active: Boolean, status: String, messages: List<ChatMessage>, modifier: Modifier, footer: @Composable () -> Unit,
+) {
+    val app = LocalApp.current
+    val listState = rememberLazyListState()
+    LaunchedEffect(messages.size, messages.lastOrNull()?.id) {
+        val info = listState.layoutInfo
+        val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+        if (messages.isNotEmpty() && last >= info.totalItemsCount - 3) listState.scrollToItem(messages.lastIndex)
+    }
+    Column(
+        modifier.clip(RoundedCornerShape(14.dp)).background(ApexColors.Surface)
+            .border(1.dp, ApexColors.Outline, RoundedCornerShape(14.dp)),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().background(ApexColors.SurfaceHigh).padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(Modifier.size(8.dp).background(if (active) ApexColors.Live else ApexColors.Faint, CircleShape))
+            Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, softWrap = false)
+            Text(
+                status, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted,
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            )
+            // Oculta o chat inteiro (e para de ler as mensagens); "Mostrar chat" volta pela coluna ao lado do vídeo.
+            IconBtn(Icons.Rounded.VisibilityOff, "Ocultar o chat", { app.data.updateSettings { it.copy(showChat = false) } }, size = 28.dp, iconSize = 18.dp)
+        }
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth(),
+            state = listState,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            items(messages, key = { it.id }) { m ->
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(color = Color(m.color ?: 0xFFFFFFFF), fontWeight = FontWeight.Bold)) { append(m.author) }
+                        append("  ")
+                        append(m.text)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+        footer()
     }
 }

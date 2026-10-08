@@ -1,5 +1,7 @@
 package app.apex.source
 
+import kotlinx.serialization.json.buildJsonObject
+import app.apex.model.ReplayMessage
 import app.apex.model.CLIP_PREFIX
 import app.apex.model.Channel
 import app.apex.model.Media
@@ -440,6 +442,37 @@ class YouTubeSource(val tube: InnerTube) {
             it.second.path("availabilityMessage", "messageRenderer", "text", "runs", 0, "text").str()
         }
         return LiveChatStart.Unavailable(reason ?: "Esta live não tem chat.")
+    }
+
+    /** O que o YouTube devolveu do chat gravado: as mensagens e o código da página seguinte (`null` = acabou). */
+    class ChatReplayPage(val messages: List<ReplayMessage>, val next: String?)
+
+    /** O código para ler o chat gravado de uma live que já acabou; `null` se este vídeo não tem repetição do chat. */
+    suspend fun chatReplaySeed(videoId: String): String? {
+        val root = tube.call("next") { put("videoId", videoId) } ?: return null
+        val renderer = root.collect("liveChatRenderer").firstOrNull()?.second ?: return null
+        if (renderer["isReplay"].str() != "true") return null
+        return renderer.path("continuations", 0, "reloadContinuationData", "continuation").str()
+    }
+
+    /** Uma página do chat gravado. Com [fromMs] pula para esse ponto do vídeo (use o código inicial); sem ele segue do código da página anterior. */
+    suspend fun chatReplay(continuation: String, fromMs: Long? = null): ChatReplayPage {
+        val resp = tube.call("live_chat/get_live_chat_replay") {
+            put("continuation", continuation)
+            if (fromMs != null) put("currentPlayerState", buildJsonObject { put("playerOffsetMs", fromMs.toString()) })
+        } ?: error("O YouTube não devolveu o chat gravado.")
+        return parseChatReplay(resp)
+    }
+
+    internal fun parseChatReplay(resp: JsonElement): ChatReplayPage {
+        val live = resp.path("continuationContents", "liveChatContinuation") ?: return ChatReplayPage(emptyList(), null)
+        val messages = live["actions"].list().mapNotNull { action ->
+            val replay = action["replayChatItemAction"] ?: return@mapNotNull null
+            val offset = replay["videoOffsetTimeMsec"].str()?.toLongOrNull() ?: return@mapNotNull null
+            val item = replay["actions"].list().firstNotNullOfOrNull { it.path("addChatItemAction", "item", "liveChatTextMessageRenderer") } ?: return@mapNotNull null
+            app.apex.chat.parseYoutubeChatItem(item)?.let { ReplayMessage(offset, it) }
+        }
+        return ChatReplayPage(messages.sortedBy { it.offsetMs }, live["continuations"][0]["liveChatReplayContinuationData"]["continuation"].str())
     }
 
     // ---------- leitura ----------

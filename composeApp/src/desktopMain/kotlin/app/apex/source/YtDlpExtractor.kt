@@ -133,7 +133,7 @@ class YtDlpExtractor(
         // O endereço pode vir de dados sincronizados: tem de ser https e nunca pode começar com "-" (viraria opção do yt-dlp, como --exec).
         val url = media.url.trim()
         if (!url.startsWith("https://") || url.any { it.isWhitespace() || it.isISOControl() }) throw ExtractionException("Endereço de vídeo inválido.")
-        val info = json(listOf("-J", "--no-playlist", "--skip-download", "--", url))
+        val info = fastInfo(url)
         val live = info["is_live"].bool() == true || info["live_status"].str() == "is_live"
         val qualities = buildQualities(info, live)
         if (qualities.isEmpty()) throw ExtractionException("Nenhum formato de vídeo disponível.")
@@ -177,6 +177,28 @@ class YtDlpExtractor(
             tags = info["tags"].list().mapNotNull { it.str() },
             isLive = live,
         )
+    }
+
+    /**
+     * As informações do vídeo. Pula a página do vídeo e a de configurações (o YouTube entrega o mesmo pelo player, conferido em vídeo
+     * comum, com capítulos e em live: título, canal, inscritos, curtidas, descrição, legendas e todos os formatos), o que leva uns 4 s em vez de 5 s.
+     * Se der erro (e não for um motivo definitivo, como vídeo privado), repete do jeito completo.
+     */
+    private suspend fun fastInfo(url: String): JsonElement {
+        val base = listOf("-J", "--no-playlist", "--skip-download")
+        return try {
+            json(base + listOf("--extractor-args", "youtube:player_skip=webpage,configs", "--", url))
+        } catch (e: ExtractionException) {
+            if (isDefinitive(e.message)) throw e
+            json(base + listOf("--", url))
+        }
+    }
+
+    /** Erros que repetir não resolve (o vídeo não existe, é privado…). */
+    private fun isDefinitive(message: String?): Boolean = message != null && DEFINITIVE.any { message.contains(it, ignoreCase = true) }
+
+    private companion object {
+        val DEFINITIVE = listOf("privado", "exclusivo para membros", "ainda não começou", "indisponível", "restrição de idade", "robô", "endereço de vídeo inválido")
     }
 
     /** O yt-dlp acrescenta a data e a hora ao título das lives; aqui ela sai. */

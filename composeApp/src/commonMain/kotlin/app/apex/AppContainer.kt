@@ -96,6 +96,9 @@ class AppContainer(
     val liveWatcher = app.apex.state.LiveWatcher(this)
     val screens = ScreenStates(this)
 
+    /** Quem está logado no YouTube (para saber quando trocou de conta; o cookie em si muda toda hora). */
+    private var lastYoutubeUser: String? = null
+
     private val _twitchTurbo = kotlinx.coroutines.flow.MutableStateFlow<Boolean?>(null)
 
     /** A conta da Twitch tem Turbo? `null` = sem conta ou ainda conferindo. */
@@ -108,6 +111,9 @@ class AppContainer(
     init {
         scope.launch {
             data.accounts.collect { accounts ->
+                // Os endereços de vídeo dependem do login do YouTube: quem trocou de conta não pode herdar os preparados da outra.
+                val youtubeUser = accounts[Platform.YouTube.name]?.displayName
+                if (youtubeUser != lastYoutubeUser) { lastYoutubeUser = youtubeUser; session.clearPrepared() }
                 tube.cookieHeader = accounts[Platform.YouTube.name]?.credential
                 twitch.authToken = accounts[Platform.Twitch.name]?.credential
                 // Troca de conta (ou entrada/saída): confere de novo se a Twitch dessa conta tem Turbo.

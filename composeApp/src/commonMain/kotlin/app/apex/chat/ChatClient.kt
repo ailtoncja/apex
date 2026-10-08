@@ -10,6 +10,7 @@ import app.apex.source.parseJson
 import app.apex.source.path
 import app.apex.source.str
 import io.ktor.client.HttpClient
+import kotlinx.serialization.json.JsonElement
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
@@ -199,14 +200,9 @@ class YouTubeChat(
             val live = resp.path("continuationContents", "liveChatContinuation")
             live["actions"].list().forEach { action ->
                 val item = action.path("addChatItemAction", "item", "liveChatTextMessageRenderer") ?: return@forEach
-                val id = item["id"].str() ?: return@forEach
-                if (!seen.add(id)) return@forEach
-                val name = item["authorName"]["simpleText"].str() ?: return@forEach
-                val text = item["message"]["runs"].list().joinToString("") {
-                    it["text"].str() ?: it.path("emoji", "shortcuts", 0).str() ?: ""
-                }
-                val isMod = item["authorBadges"].list().isNotEmpty()
-                push(ChatMessage(id, name, text, colorFromName(name), if (isMod) listOf("moderator") else emptyList()))
+                val message = parseYoutubeChatItem(item) ?: return@forEach
+                if (!seen.add(message.id)) return@forEach
+                push(message)
             }
             val next = live["continuations"][0]
             val data = next["timedContinuationData"] ?: next["invalidationContinuationData"] ?: next["reloadContinuationData"] ?: error("Chat encerrado")
@@ -258,9 +254,18 @@ class KickChat(
         }
     }
 
-    /** As figurinhas da Kick vêm como `[emote:1234:nome]`; deixa só o nome. */
-    private fun cleanKickText(raw: String): String =
-        Regex("""\[emote:\d+:([^\]]+)]""").replace(raw) { it.groupValues[1] }
-
     override suspend fun send(text: String): Boolean = false
+}
+
+/** As figurinhas da Kick vêm como `[emote:1234:nome]`; deixa só o nome. */
+internal fun cleanKickText(raw: String): String =
+    Regex("""\[emote:\d+:([^\]]+)]""").replace(raw) { it.groupValues[1] }
+
+/** Uma mensagem de texto do chat do YouTube (ao vivo ou gravado). */
+internal fun parseYoutubeChatItem(item: JsonElement): ChatMessage? {
+    val id = item["id"].str() ?: return null
+    val name = item["authorName"]["simpleText"].str() ?: return null
+    val text = item["message"]["runs"].list().joinToString("") { it["text"].str() ?: it.path("emoji", "shortcuts", 0).str() ?: "" }
+    val isMod = item["authorBadges"].list().isNotEmpty()
+    return ChatMessage(id, name, text, colorFromName(name), if (isMod) listOf("moderator") else emptyList())
 }

@@ -40,6 +40,26 @@ import kotlin.math.roundToInt
 private val DOWNSCALE: SamplingMode = FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR)
 private val UPSCALE: SamplingMode = SamplingMode.CATMULL_ROM
 
+/**
+ * As opções do libVLC para tocar [source]. Numa live, o VLC por padrão começa 8 segmentos (~16 s) antes do "ao vivo" na Twitch (a lista
+ * declara segmentos de 6 s) e ainda guarda 3 s; com [PlaySource.lowLatency] ele começa 3 segmentos (~6 s) antes, o mínimo que o VLC
+ * aceita, e guarda 1 s (medido nos logs do próprio VLC: de ~19 s para ~7 s de atraso).
+ */
+internal fun vlcOptions(source: PlaySource): List<String> = buildList {
+    source.audioUrl?.let { add(":input-slave=$it") }
+    source.userAgent?.let { add(":http-user-agent=$it") }
+    if (source.startMs > 1000) add(":start-time=${source.startMs / 1000.0}")
+    source.endMs?.let { add(":stop-time=${it / 1000.0}") }
+    when {
+        !source.live -> add(":network-caching=1500")
+        source.lowLatency -> {
+            add(":network-caching=1000")
+            add(":adaptive-livedelay=3000")
+        }
+        else -> add(":network-caching=3000")
+    }
+}
+
 /** Player do Windows: o libVLC decodifica e entrega cada quadro, que o Compose desenha por cima de tudo. */
 class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     private val factory = MediaPlayerFactory(
@@ -98,14 +118,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                 durationMs = source.endMs?.let { end -> end - source.startMs } ?: 0,
             )
         }
-        val options = buildList {
-            source.audioUrl?.let { add(":input-slave=$it") }
-            source.userAgent?.let { add(":http-user-agent=$it") }
-            if (source.startMs > 1000) add(":start-time=${source.startMs / 1000.0}")
-            source.endMs?.let { add(":stop-time=${it / 1000.0}") }
-            add(if (source.live) ":network-caching=3000" else ":network-caching=1500")
-        }
-        mediaPlayer.media().play(source.videoUrl, *options.toTypedArray())
+        mediaPlayer.media().play(source.videoUrl, *vlcOptions(source).toTypedArray())
     }
 
     override fun togglePause() {
@@ -139,7 +152,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     }
 
     override fun setVolume(percent: Int) {
-        val v = percent.coerceIn(0, 100)
+        val v = percent.coerceIn(0, MAX_VOLUME) // até 200%: o libVLC amplifica o que passa de 100
         mediaPlayer.audio().setVolume(v)
         _state.update { it.copy(volume = v, muted = if (v > 0) false else it.muted) }
         if (v > 0) mediaPlayer.audio().isMute = false

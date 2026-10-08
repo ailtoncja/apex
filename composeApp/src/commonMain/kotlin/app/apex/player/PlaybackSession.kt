@@ -161,6 +161,7 @@ class PlaybackSession(
                 userAgent = resolved.userAgent,
                 startMs = startMs,
                 live = resolved.isLive,
+                lowLatency = data.settings.value.lowLatencyLive,
                 endMs = resolved.media.clipEndMs,
             ),
         )

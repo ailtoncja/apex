@@ -11,6 +11,8 @@ data class PlaySource(
     val userAgent: String? = null,
     val startMs: Long = 0,
     val live: Boolean = false,
+    /** Numa live, começar mais perto do "ao vivo" (menos atraso, com um buffer menor). */
+    val lowLatency: Boolean = true,
     /**
      * Quando preenchido, só o trecho [startMs]–[endMs] do arquivo é o vídeo (clipe do YouTube): a posição e a duração que o player
      * mostra são do trecho, e ele termina em [endMs].

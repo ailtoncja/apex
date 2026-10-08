@@ -42,6 +42,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,6 +66,13 @@ import app.apex.util.formatCount
 import app.apex.util.formatDuration
 import app.apex.util.formatUploadDate
 import app.apex.util.relativeTime
+
+/** O que fica visível da página (o título) embaixo do player no modo cinema. */
+private val THEATER_PEEK = 80.dp
+
+/** A altura do player no modo cinema: 16:9 da largura inteira, mas sem passar da altura da tela menos a espiada do título. */
+internal fun theaterPlayerHeight(width: Dp, height: Dp): Dp =
+    minOf(width * 9f / 16f, (height - THEATER_PEEK).coerceAtLeast(height * 0.6f))
 
 @Composable
 fun WatchScreen(fullscreen: Boolean) {
@@ -89,9 +98,10 @@ fun WatchScreen(fullscreen: Boolean) {
         val scroll = rememberScrollState()
         Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
             if (theater) {
-                // Altura calculada de forma explícita (16:9, no máximo 74% da tela). Com `heightIn` + `aspectRatio` numa coluna rolável o
-                // player era medido menor do que desenhado e o restante da página subia por cima dele.
-                PlayerView(Modifier.fillMaxWidth().height(minOf(maxW * 9f / 16f, maxH * 0.74f)))
+                // Altura calculada de forma explícita (16:9, ocupando quase toda a altura da tela; sobra só uma espiada do título embaixo,
+                // como no YouTube). Com `heightIn` + `aspectRatio` numa coluna rolável o player era medido menor do que desenhado e o
+                // restante da página subia por cima dele.
+                PlayerView(Modifier.fillMaxWidth().height(theaterPlayerHeight(maxW, maxH)).testTag("theater-player"))
             }
             if (wide) {
                 Row(Modifier.padding(horizontal = 24.dp, vertical = if (theater) 16.dp else 8.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {

@@ -201,7 +201,8 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                         image,
                         Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
                         Rect.makeXYWH(x.toFloat(), y.toFloat(), w.toFloat(), h.toFloat()),
-                        sampling, null, true,
+                        // strict = false: com `true` o Skia ignora os mipmaps e o vídeo reduzido sai serrilhado, como se tivesse bitrate baixo.
+                        sampling, null, false,
                     )
                 }
             }

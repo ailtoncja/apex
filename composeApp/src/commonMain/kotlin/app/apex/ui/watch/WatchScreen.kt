@@ -236,6 +236,8 @@ private fun SideColumn(media: Media, modifier: Modifier) {
                 ActionButton("Mostrar chat", { app.data.updateSettings { it.copy(showChat = true) } }, icon = Icons.Rounded.Visibility)
             }
         }
+        // VOD ou live encerrada: o chat gravado roda junto com o vídeo (só aparece se existir).
+        if (!media.isLive) ReplayChatSection(media)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(if (media.isLive) "Mais ao vivo" else "A seguir", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             Text("Reprodução automática", style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, modifier = Modifier.padding(end = 8.dp))

@@ -54,6 +54,17 @@ class PlaybackSession(
     private var job: Job? = null
     private var played: List<Media> = emptyList()
 
+    /** O preparo dos vídeos do YouTube (o mais lento da abertura) fica guardado e pode ser feito antes do clique. */
+    private val resolved = ResolveCache(scope, { media -> extractor.resolve(media) })
+
+    /** Prepara um vídeo do YouTube antes de a pessoa abrir (ao passar o mouse, ou o próximo da fila), para abrir na hora. */
+    fun prefetch(media: Media) {
+        if (media.platform == Platform.YouTube) resolved.prefetch(media)
+    }
+
+    /** Esquece os vídeos preparados (os endereços dependem do login do YouTube). */
+    fun clearPrepared() = resolved.clear()
+
     init {
         scope.launch {
             player.state.map { it.ended }.distinctUntilChanged().collect { ended ->
@@ -88,7 +99,7 @@ class PlaybackSession(
         job = scope.launch {
             try {
                 val resolved = when (media.platform) {
-                    Platform.YouTube -> extractor.resolve(media)
+                    Platform.YouTube -> this@PlaybackSession.resolved.get(media).await()
                     Platform.Twitch -> twitch.resolve(media)
                     Platform.Kick -> kick.resolve(media)
                 }
@@ -107,11 +118,22 @@ class PlaybackSession(
                     resolved.subtitles.firstOrNull { it.lang.startsWith(settings.subtitleLang) && !it.auto }
                         ?.let { setSubtitleTrack(it) }
                 }
+                prepareNext(resolved)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _load.value = LoadState.Error(e.message ?: "Não foi possível abrir este vídeo.")
             }
+        }
+    }
+
+    /** Com a reprodução automática ligada, prepara o próximo vídeo da fila enquanto este toca: quando acabar, o seguinte abre na hora. */
+    private fun prepareNext(current: Resolved) {
+        if (current.isLive || !data.settings.value.autoplayNext) return
+        scope.launch {
+            delay(NEXT_PREPARE_DELAY_MS) // deixa este vídeo começar bem antes de gastar rede e processador com o outro
+            if (_current.value?.key != current.media.key) return@launch
+            _upNext.value.firstOrNull { it.key != current.media.key }?.let { prefetch(it) }
         }
     }
 
@@ -179,6 +201,10 @@ class PlaybackSession(
     }
 
     val hasPrevious: Boolean get() = played.isNotEmpty()
+
+    private companion object {
+        const val NEXT_PREPARE_DELAY_MS = 8_000L
+    }
 
     fun close() {
         saveProgress()

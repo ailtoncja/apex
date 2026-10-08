@@ -89,3 +89,21 @@ fun formatUploadDate(yyyymmdd: String?): String {
     val m = yyyymmdd.substring(4, 6).toIntOrNull() ?: return ""
     return "${yyyymmdd.substring(6, 8).trimStart('0')} de ${months.getOrElse(m - 1) { "" }}. de ${yyyymmdd.substring(0, 4)}"
 }
+
+/** Milissegundos desde 1970 → "2026-10-07T13:33:28.000Z" (UTC); o contrário de [parseIsoMillis]. */
+fun formatIsoMillis(ms: Long): String {
+    val days = ms.floorDiv(86_400_000L)
+    val inDay = ms.mod(86_400_000L)
+    // dias desde 1970 → data civil (algoritmo de Howard Hinnant)
+    val z = days + 719_468
+    val era = (if (z >= 0) z else z - 146_096) / 146_097
+    val doe = z - era * 146_097
+    val yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365
+    val doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    val mp = (5 * doy + 2) / 153
+    val d = doy - (153 * mp + 2) / 5 + 1
+    val m = if (mp < 10) mp + 3 else mp - 9
+    val y = yoe + era * 400 + (if (m <= 2) 1 else 0)
+    fun two(n: Long) = n.toString().padStart(2, '0')
+    return "${y.toString().padStart(4, '0')}-${two(m)}-${two(d)}T${two(inDay / 3_600_000)}:${two(inDay / 60_000 % 60)}:${two(inDay / 1000 % 60)}.000Z"
+}

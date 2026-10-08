@@ -117,6 +117,9 @@ data class Resolved(
 
 data class LiveCategory(val id: String, val name: String, val viewers: Long?, val imageUrl: String?)
 
+/** Uma mensagem do chat gravado, com o ponto do vídeo (em ms) em que ela apareceu. */
+data class ReplayMessage(val offsetMs: Long, val message: ChatMessage)
+
 data class ChatMessage(
     val id: String,
     val author: String,

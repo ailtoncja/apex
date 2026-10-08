@@ -1,5 +1,8 @@
 package app.apex.source
 
+import app.apex.util.formatIsoMillis
+import app.apex.model.ChatMessage
+import app.apex.model.ReplayMessage
 import app.apex.model.Channel
 import app.apex.model.LiveCategory
 import app.apex.model.Media
@@ -141,6 +144,39 @@ class KickSource(private val http: HttpClient = Http.client) {
             } else null
             ChannelHit(channel, live)
         }
+    }
+
+    private val channelIds = HashMap<String, String>()
+
+    /** O número do canal (o chat gravado pede por ele, não pelo nome). */
+    suspend fun channelId(slug: String): String? =
+        channelIds[slug] ?: json("https://kick.com/api/v2/channels/$slug")["id"].long()?.toString()?.also { channelIds[slug] = it }
+
+    /**
+     * Chat gravado: as mensagens dos 5 segundos que começam em [vodStartMs] + [fromMs] (a Kick entrega até 25 por janela).
+     * [vodStartMs] é a hora em que a transmissão começou; o ponto do vídeo de cada mensagem é a diferença para ela.
+     */
+    suspend fun chatReplay(channelId: String, fromMs: Long, vodStartMs: Long): List<ReplayMessage> {
+        val start = formatIsoMillis(vodStartMs + fromMs).encodeURLParameter()
+        val data = json("https://kick.com/api/v2/channels/$channelId/messages?start_time=$start")["data"] ?: error("A Kick não devolveu o chat deste vídeo.")
+        return data["messages"].list().mapNotNull { replayMessage(it, vodStartMs) }.sortedBy { it.offsetMs }
+    }
+
+    internal fun replayMessage(m: JsonElement?, vodStartMs: Long): ReplayMessage? {
+        val id = m["id"].str() ?: return null
+        val sender = m["sender"]
+        val name = sender["username"].str() ?: return null
+        val text = app.apex.chat.cleanKickText(m["content"].str().orEmpty())
+        if (text.isBlank()) return null
+        val at = parseIsoMillis(m["created_at"].str()) ?: return null
+        val badges = sender["identity"]["badges"].list().mapNotNull { it["type"].str() }
+        return ReplayMessage(
+            (at - vodStartMs).coerceAtLeast(0),
+            ChatMessage(
+                id, name, text,
+                app.apex.chat.parseHexColor(sender["identity"]["color"].str()) ?: app.apex.chat.colorFromName(name), badges,
+            ),
+        )
     }
 
     suspend fun channel(slug: String): KickChannelInfo? {

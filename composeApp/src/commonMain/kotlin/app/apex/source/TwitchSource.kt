@@ -1,5 +1,9 @@
 package app.apex.source
 
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import app.apex.model.ChatMessage
+import app.apex.model.ReplayMessage
 import app.apex.model.Channel
 import app.apex.model.LiveCategory
 import app.apex.model.Media
@@ -234,6 +238,58 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         return FollowsPage(items, follows["pageInfo"]["hasNextPage"].str() == "true")
     }
 
+    /** O que a Twitch devolveu do chat gravado: as mensagens e se há mais depois. */
+    class VideoComments(val messages: List<ReplayMessage>, val hasNext: Boolean)
+
+    /**
+     * Chat gravado de um VOD a partir de [offsetSeconds] (segundos do vídeo): cerca de 50 mensagens, começando um pouco antes.
+     * É a "consulta salva" que o site usa; pedir pela posição funciona sem login, a página seguinte por cursor não (verificação do navegador).
+     */
+    suspend fun videoComments(videoId: String, offsetSeconds: Long): VideoComments {
+        val body = buildJsonArray {
+            add(
+                buildJsonObject {
+                    put("operationName", "VideoCommentsByOffsetOrCursor")
+                    put("variables", buildJsonObject {
+                        put("videoID", videoId)
+                        put("contentOffsetSeconds", offsetSeconds)
+                    })
+                    put("extensions", buildJsonObject {
+                        put("persistedQuery", buildJsonObject {
+                            put("version", 1)
+                            put("sha256Hash", VIDEO_COMMENTS_HASH)
+                        })
+                    })
+                },
+            )
+        }.toString()
+        // Sem o login da conta: a consulta anônima é a que o site usa para quem não entrou.
+        val response = parseJson(http.postJson(GQL_URL, body, mapOf("Client-ID" to CLIENT_ID))).list().firstOrNull()
+        val comments = response["data"]["video"]["comments"]
+            ?: error("A Twitch não devolveu o chat deste vídeo (${response["errors"].list().firstOrNull()["message"].str() ?: "sem detalhes"}).")
+        return parseVideoComments(comments)
+    }
+
+    internal fun parseVideoComments(comments: JsonElement): VideoComments {
+        val out = comments["edges"].list().mapNotNull { edge ->
+            val node = edge["node"] ?: return@mapNotNull null
+            val id = node["id"].str() ?: return@mapNotNull null
+            val offset = node["contentOffsetSeconds"].long() ?: return@mapNotNull null
+            val name = node["commenter"]["displayName"].str() ?: node["commenter"]["login"].str() ?: "?"
+            val text = node["message"]["fragments"].list().joinToString("") { it["text"].str().orEmpty() }
+            if (text.isBlank()) return@mapNotNull null
+            ReplayMessage(
+                offset * 1000,
+                ChatMessage(
+                    id = id, author = name, text = text,
+                    color = app.apex.chat.parseHexColor(node["message"]["userColor"].str()) ?: app.apex.chat.colorFromName(name),
+                    badges = node["message"]["userBadges"].list().mapNotNull { it["setID"].str()?.takeIf { s -> s.isNotBlank() } },
+                ),
+            )
+        }.sortedBy { it.offsetMs }
+        return VideoComments(out, comments["pageInfo"]["hasNextPage"].str() == "true")
+    }
+
     /** Canais em que a conta é inscrita (sub pago, Prime ou presente). */
     suspend fun subscribedChannels(): List<ChannelHit> {
         if (authToken == null) return emptyList()
@@ -397,6 +453,8 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         const val CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
         private const val GQL_URL = "https://gql.twitch.tv/gql"
         private const val PAGE = 100
+        /** A "consulta salva" do chat gravado de VODs (a mesma que o site da Twitch usa). */
+        private const val VIDEO_COMMENTS_HASH = "b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a"
         /** O máximo que a consulta de "streams" da Twitch aceita em `first`. */
         private const val TOP_STREAMS_PAGE = 30
 

@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
@@ -62,18 +63,28 @@ import app.apex.theme.color
 import coil3.compose.AsyncImage
 import kotlin.math.abs
 
+/**
+ * Imagem da internet. A imagem é decodificada no tamanho original (até [MAX_IMAGE_PX]) e reduzida para a tela com suavização de
+ * verdade ([smoothPainter]): se o Coil reduzisse antes, ou o Compose reduzisse sozinho, as miniaturas e capas ficariam serrilhadas.
+ */
 @Composable
 fun RemoteImage(url: String?, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
     Box(modifier.background(ApexColors.SurfaceHigh)) {
         if (!url.isNullOrBlank()) {
-            AsyncImage(
-                model = url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = contentScale,
-                // "Medium" reduz com mipmaps: capas cheias de detalhe (jogos) não ficam serrilhadas/pixeladas.
-                filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium,
-            )
+            val context = coil3.compose.LocalPlatformContext.current
+            val request = remember(url, context) { coil3.request.ImageRequest.Builder(context).data(url).size(coil3.size.Size(MAX_IMAGE_PX, MAX_IMAGE_PX)).build() }
+            val painter = coil3.compose.rememberAsyncImagePainter(request, contentScale = contentScale, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
+            val state by painter.state.collectAsState()
+            // Já carregou: desenha com a suavização de verdade (o painter do Coil só serve enquanto carrega ou se o tipo for outro).
+            val smooth = (state as? coil3.compose.AsyncImagePainter.State.Success)?.result?.image
+                ?.let { loaded -> remember(loaded) { smoothPainter(loaded) } }
+            androidx.compose.foundation.Image(painter = smooth ?: painter, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = contentScale)
         }
     }
 }
+
+/** Imagens maiores que isso (em qualquer lado) são reduzidas ao decodificar; as miniaturas e capas ficam abaixo. */
+private const val MAX_IMAGE_PX = 1600
 
 @Composable
 fun Avatar(url: String?, name: String, size: Dp = 36.dp, modifier: Modifier = Modifier, ring: Color? = null) {

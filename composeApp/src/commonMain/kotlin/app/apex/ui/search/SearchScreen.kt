@@ -80,6 +80,9 @@ import app.apex.ui.components.RemotePlaylistRow
 import app.apex.ui.components.VideoRow
 import app.apex.ui.components.shimmer
 
+/** A largura máxima da lista de resultados (em janelas bem largas ela para aqui, encostada à esquerda). */
+private val RESULTS_MAX_WIDTH = 1500.dp
+
 /** A tela de resultados como a do YouTube: abas de tipo no topo, o botão de filtros e uma lista só. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -144,9 +147,10 @@ fun SearchScreen(route: Route.Search) {
     val waiting = !onlySubs && ((showYt && !ytLoaded) || (showTw && (!twLivesLoaded || !twChannelsLoaded)) || (showKick && !kickLoaded))
     val activeCount = route.filters.extraCount + platforms.size + (if (onlySubs) 1 else 0)
 
-    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+    // Os resultados começam no canto esquerdo da página (como as outras telas), sem flutuar no meio da janela.
+    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopStart) {
         LazyColumn(
-            Modifier.widthIn(max = 1280.dp).fillMaxWidth(),
+            Modifier.widthIn(max = RESULTS_MAX_WIDTH).fillMaxWidth(),
             state = listState,
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),

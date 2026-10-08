@@ -63,6 +63,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
+import app.apex.player.volumeFromSlider
+import app.apex.player.sliderFromVolume
+import app.apex.player.NORMAL_VOLUME
 import app.apex.nav.Route
 import app.apex.player.LoadState
 import app.apex.theme.ApexColors
@@ -243,7 +246,7 @@ private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: Player
 }
 
 @Composable
-private fun VolumeControl() {
+internal fun VolumeControl() {
     val app = LocalApp.current
     val ps by app.player.state.collectAsState()
     val source = remember { MutableInteractionSource() }
@@ -256,15 +259,25 @@ private fun VolumeControl() {
         }
         PlayerBtn(icon, "Volume") { app.player.setMuted(!ps.muted) }
         AnimatedVisibility(hovered) {
-            MiniSlider(
-                if (ps.muted) 0f else ps.volume / 100f,
-                { v ->
-                    val percent = (v * 100).toInt()
-                    app.player.setVolume(percent)
-                    app.data.updateSettings { it.copy(volume = percent) }
-                },
-                Modifier.width(84.dp).padding(horizontal = 6.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // O controle vai até 200%; a marquinha no meio é o 100% (som normal), onde o arrasto "gruda".
+                MiniSlider(
+                    if (ps.muted) 0f else sliderFromVolume(ps.volume),
+                    { v ->
+                        val percent = volumeFromSlider(v)
+                        app.player.setVolume(percent)
+                        app.data.updateSettings { it.copy(volume = percent) }
+                    },
+                    Modifier.width(110.dp).padding(horizontal = 6.dp),
+                    markAt = sliderFromVolume(NORMAL_VOLUME),
+                )
+                val shown = if (ps.muted) 0 else ps.volume
+                Text(
+                    "$shown%", Modifier.width(44.dp), style = MaterialTheme.typography.labelMedium,
+                    // Acima de 100% o som é amplificado e pode distorcer: o número avisa.
+                    color = if (shown > NORMAL_VOLUME) ApexColors.Support else Color.White,
+                )
+            }
         }
     }
 }

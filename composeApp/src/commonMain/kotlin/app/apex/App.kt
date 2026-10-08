@@ -1,5 +1,6 @@
 package app.apex
 
+import app.apex.player.stepVolume
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -165,8 +166,8 @@ private fun handleShortcut(app: AppContainer, event: KeyEvent): Boolean {
         Key.DirectionRight -> { if (!live) player.seekBy(5_000); true }
         Key.J -> { if (!live) player.seekBy(-10_000); true }
         Key.L -> { if (!live) player.seekBy(10_000); true }
-        Key.DirectionUp -> { player.setVolume((state.volume + 5).coerceAtMost(100)); true }
-        Key.DirectionDown -> { player.setVolume((state.volume - 5).coerceAtLeast(0)); true }
+        Key.DirectionUp -> { player.setVolume(stepVolume(state.volume, 5)); true }
+        Key.DirectionDown -> { player.setVolume(stepVolume(state.volume, -5)); true }
         Key.N -> { if (event.isShiftPressed) { app.session.next(); true } else false }
         Key.P -> { if (event.isShiftPressed) { app.session.previous(); true } else false }
         Key.C -> {

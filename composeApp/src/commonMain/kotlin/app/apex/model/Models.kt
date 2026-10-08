@@ -170,4 +170,6 @@ data class AppSettings(
     val homePlatforms: List<String> = emptyList(),
     /** Avisar quando um canal que a pessoa segue entra ao vivo. */
     val liveAlerts: Boolean = true,
+    /** Nas lives, começar mais perto do "ao vivo" (menos atraso). Desligar dá mais folga se a internet oscila. */
+    val lowLatencyLive: Boolean = true,
 )

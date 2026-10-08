@@ -98,6 +98,9 @@ fun SettingsScreen() {
                 Setting("Avisar quando entrarem ao vivo", "Mostra um aviso quando um canal que você segue começa a transmitir") {
                     Toggle(settings.liveAlerts) { v -> app.data.updateSettings { it.copy(liveAlerts = v) } }
                 }
+                Setting("Menos atraso nas lives", "Começa mais perto do ao vivo (cerca de 7 s de atraso em vez de 19 s). Desligue se a live travar") {
+                    Toggle(settings.lowLatencyLive) { v -> app.data.updateSettings { it.copy(lowLatencyLive = v) } }
+                }
                 Setting("Continuar de onde parei", "Retoma vídeos longos pelo ponto em que você saiu") {
                     Toggle(settings.rememberPosition) { v -> app.data.updateSettings { it.copy(rememberPosition = v) } }
                 }
@@ -209,7 +212,7 @@ fun SettingsScreen() {
             Section("Atalhos do teclado") {
                 listOf(
                     "Espaço ou K" to "Pausar e continuar", "F" to "Tela cheia", "T" to "Modo cinema", "M" to "Silenciar",
-                    "← →" to "Voltar e avançar 5 s", "J L" to "Voltar e avançar 10 s", "↑ ↓" to "Volume",
+                    "← →" to "Voltar e avançar 5 s", "J L" to "Voltar e avançar 10 s", "↑ ↓" to "Volume (até 200%)",
                     "0 a 9" to "Pular para 0% a 90%", "C" to "Legendas", "Shift + N" to "Próximo vídeo", "Esc" to "Sair da tela cheia",
                 ).forEach { (k, d) ->
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

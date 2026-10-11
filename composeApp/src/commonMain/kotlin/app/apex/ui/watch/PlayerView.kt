@@ -64,8 +64,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
 import app.apex.player.volumeFromSlider
+import app.apex.player.maxVolume
 import app.apex.player.sliderFromVolume
 import app.apex.player.NORMAL_VOLUME
+import app.apex.player.PLAYBACK_SPEEDS
 import app.apex.nav.Route
 import app.apex.player.LoadState
 import app.apex.theme.ApexColors
@@ -79,7 +81,6 @@ import kotlinx.coroutines.delay
 
 private enum class PlayerMenu { Main, Quality, Speed, Subtitles }
 
-private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 
 /** Vídeo + controles. Usado na página do vídeo e em tela cheia. */
 @Composable
@@ -209,7 +210,7 @@ private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: Player
             VolumeControl()
 
             if (isLive) {
-                LiveTag(Modifier.padding(start = 8.dp))
+                LiveEdgeButton(ps.behindLiveMs, ps.playing, Modifier.padding(start = 8.dp)) { player.jumpToLive() }
             } else {
                 Text(
                     "${formatClock(ps.positionMs)} / ${formatClock(ps.durationMs)}",
@@ -245,10 +246,52 @@ private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: Player
     }
 }
 
+/** Mais que isso para trás (ou pausado) e o botão deixa de dizer "ao vivo" e passa a oferecer a volta. */
+internal const val LIVE_EDGE_SLACK_MS = 6_000L
+
+/**
+ * O botão "AO VIVO" do player, como o da Twitch e do YouTube: vermelho quando o vídeo está em dia; cinza, com "Voltar ao vivo" e quantos segundos
+ * ficou para trás, quando passou tempo (pausa, travadas). Apertar abre a live de novo no ponto mais novo: tira o atraso que se acumulou.
+ */
+@Composable
+internal fun LiveEdgeButton(playerBehindMs: Long, playing: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    // Pausado o player não manda mais a conta: o tempo parado soma aqui, de segundo em segundo (ao voltar a tocar o player já conta a pausa).
+    var pausedMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(playing) {
+        pausedMs = 0
+        if (!playing) while (true) { kotlinx.coroutines.delay(1_000); pausedMs += 1_000 }
+    }
+    val behindMs = playerBehindMs + pausedMs
+    val atEdge = playing && behindMs < LIVE_EDGE_SLACK_MS
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    val background = when {
+        atEdge -> if (hovered) ApexColors.Live.copy(alpha = 0.85f) else ApexColors.Live
+        else -> if (hovered) Color(0x66FFFFFF) else Color(0x40FFFFFF)
+    }
+    val label = when {
+        atEdge -> "AO VIVO"
+        behindMs >= 1_000 -> "Voltar ao vivo • ${behindMs / 1_000} s atrás"
+        else -> "Voltar ao vivo"
+    }
+    Row(
+        modifier.clip(RoundedCornerShape(4.dp)).hoverable(source).background(background)
+            .clickable(interactionSource = source, indication = null, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(Modifier.size(7.dp).background(if (atEdge) Color.White else ApexColors.Live, androidx.compose.foundation.shape.CircleShape))
+        Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
 @Composable
 internal fun VolumeControl() {
     val app = LocalApp.current
     val ps by app.player.state.collectAsState()
+    val settings by app.data.settings.collectAsState()
+    val max = maxVolume(settings.volumeBoost)
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
     Row(Modifier.hoverable(source), verticalAlignment = Alignment.CenterVertically) {
@@ -260,16 +303,13 @@ internal fun VolumeControl() {
         PlayerBtn(icon, "Volume") { app.player.setMuted(!ps.muted) }
         AnimatedVisibility(hovered) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // O controle vai até 200%; a marquinha no meio é o 100% (som normal), onde o arrasto "gruda".
+                // Com o reforço (Ajustes) o controle vai até 200% e a marquinha no meio é o 100% (som normal), onde o arrasto "gruda";
+                // sem ele vai até 100%, e a mudança é sempre imediata.
                 MiniSlider(
-                    if (ps.muted) 0f else sliderFromVolume(ps.volume),
-                    { v ->
-                        val percent = volumeFromSlider(v)
-                        app.player.setVolume(percent)
-                        app.data.updateSettings { it.copy(volume = percent) }
-                    },
+                    if (ps.muted) 0f else sliderFromVolume(ps.volume, max),
+                    { v -> app.setVolume(volumeFromSlider(v, max)) },
                     Modifier.width(110.dp).padding(horizontal = 6.dp),
-                    markAt = sliderFromVolume(NORMAL_VOLUME),
+                    markAt = if (max > NORMAL_VOLUME) sliderFromVolume(NORMAL_VOLUME, max) else null,
                 )
                 val shown = if (ps.muted) 0 else ps.volume
                 Text(
@@ -319,7 +359,7 @@ private fun BoxScope.SettingsPanel(menu: PlayerMenu, onMenu: (PlayerMenu?) -> Un
             }
             PlayerMenu.Speed -> {
                 MenuHeader("Velocidade") { onMenu(PlayerMenu.Main) }
-                SPEEDS.forEach { r ->
+                PLAYBACK_SPEEDS.forEach { r ->
                     MenuRow(if (r == 1f) "Normal" else "${r}x", "", checked = r == ps.rate) { app.player.setRate(r); onMenu(null) }
                 }
             }

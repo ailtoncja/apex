@@ -1,5 +1,6 @@
 package app.apex.model
 
+import kotlinx.coroutines.Deferred
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -70,6 +71,9 @@ data class Media(
 /** Como ordenar os clipes de um canal. */
 enum class ClipSort(val label: String) { Popular("Mais vistos"), Recent("Mais recentes") }
 
+/** Como a lista de vídeos (ou transmissões) de um canal é ordenada, como os filtros "Mais recentes / Populares / Mais antigos" do YouTube. */
+enum class ChannelSort(val label: String) { Recent("Mais recentes"), Popular("Mais vistos"), Oldest("Mais antigos") }
+
 data class ChannelDetails(
     val channel: Channel,
     val bannerUrl: String? = null,
@@ -113,6 +117,17 @@ data class Resolved(
     val userAgent: String?,
     val tags: List<String> = emptyList(),
     val isLive: Boolean = false,
+    /** `false`: veio da abertura rápida (sem legendas nem curtidas); a sessão completa esses dados em segundo plano com o yt-dlp. */
+    val complete: Boolean = true,
+    /**
+     * Os endereços da abertura rápida só entregam o começo de cada arquivo (cerca de um minuto) e só aceitam pedidos de um trecho com começo e
+     * fim: o player busca em pedaços por uma ponte local e, passado o começo, no endereço completo do yt-dlp (ver [PlaySource.bridgeRanges]).
+     */
+    val rangeBridge: Boolean = false,
+    /** Os endereços de todos os arquivos do vídeo que o yt-dlp achou (os de [qualities] são só alguns deles). */
+    val fileUrls: List<String> = emptyList(),
+    /** Na abertura rápida: o resultado do yt-dlp para este mesmo vídeo, que já está a caminho (traz [fileUrls], legendas e curtidas). */
+    val pendingFull: Deferred<Result<Resolved>>? = null,
 )
 
 data class LiveCategory(val id: String, val name: String, val viewers: Long?, val imageUrl: String?)
@@ -150,6 +165,8 @@ data class AppSettings(
     val defaultQuality: Int = 0,
     val defaultRate: Float = 1f,
     val volume: Int = 100,
+    /** Deixa o volume passar de 100% (até 200%, amplificando o som; pode distorcer). Desligado, o volume vai até 100%. */
+    val volumeBoost: Boolean = true,
     val rememberPosition: Boolean = true,
     val showChat: Boolean = true,
     val hideMature: Boolean = true,
@@ -172,4 +189,6 @@ data class AppSettings(
     val liveAlerts: Boolean = true,
     /** Nas lives, começar mais perto do "ao vivo" (menos atraso). Desligar dá mais folga se a internet oscila. */
     val lowLatencyLive: Boolean = true,
+    /** O tema das cores (id de [app.apex.theme.Themes]): escuro, claro ou um dos dois Subaru. */
+    val theme: String = "dark",
 )

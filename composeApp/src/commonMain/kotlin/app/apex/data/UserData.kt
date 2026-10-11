@@ -131,6 +131,10 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
     private val _liked = MutableStateFlow(load<List<Media>>("liked", emptyList()))
     val liked: StateFlow<List<Media>> = _liked.asStateFlow()
 
+    /** As lives do Multi (voltam quando o app abre de novo). */
+    private val _multiStreams = MutableStateFlow(load<List<Media>>("multistream", emptyList()))
+    val multiStreams: StateFlow<List<Media>> = _multiStreams.asStateFlow()
+
     private val _feed = MutableStateFlow(load("feed", FeedCache()))
     val feed: StateFlow<FeedCache> = _feed.asStateFlow()
 
@@ -151,6 +155,7 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
         persist("playlists", _playlists)
         persist("reactions", _reactions)
         persist("liked", _liked)
+        persist("multistream", _multiStreams)
         persist("feed", _feed)
         persist("accounts", _accounts)
         persist("cloud", _cloud)
@@ -166,6 +171,8 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
     // ---------- ajustes ----------
 
     fun updateSettings(change: (AppSettings) -> AppSettings) = _settings.update(change)
+
+    fun setMultiStreams(list: List<Media>) { _multiStreams.value = list }
 
     fun addSearchHistory(query: String) {
         val q = query.trim()

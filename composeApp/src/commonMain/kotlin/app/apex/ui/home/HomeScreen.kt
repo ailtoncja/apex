@@ -7,11 +7,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,6 +21,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -46,6 +47,10 @@ import app.apex.theme.color
 import app.apex.ui.components.ActionButton
 import app.apex.ui.components.ApexChip
 import app.apex.ui.components.ApexGrid
+import app.apex.ui.components.FilterColumn
+import app.apex.ui.components.FilterOption
+import app.apex.ui.components.FiltersButton
+import app.apex.ui.components.FiltersSheet
 import app.apex.ui.components.ChipRow
 import app.apex.ui.components.EmptyState
 import app.apex.ui.components.ErrorBox
@@ -150,23 +155,23 @@ fun HomeScreen() {
     }
     OnNearEnd(state) { if (mainShown) list.loadMore() }
 
+    var showFilters by remember { mutableStateOf(false) }
+    val activeCount = sources.size + platforms.size
     ApexGrid(state) {
-        fullSpan("filters") {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                FlowRow(
-                    Modifier.fillMaxWidth().padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    HomeSource.entries.forEach { s ->
-                        ApexChip(s.label, s in sources, { setFilters(if (s in sources) sources - s else sources + s, platforms) })
-                    }
-                    Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(26.dp).background(ApexColors.Outline))
-                    Platform.entries.forEach { p ->
-                        ApexChip(p.label, p in platforms, { setFilters(sources, platforms.toggled(p)) }, dot = p.color())
-                    }
-                    if (sources.isNotEmpty() || platforms.isNotEmpty()) ApexChip("Limpar", false, { setFilters(emptySet(), emptySet()) })
+        // A barra de assuntos ("Tudo", Jogos, Música…) como sempre foi: a primeira linha da página, que rola junto com o conteúdo. Na ponta
+        // direita, o botão "Filtros" (igual ao da pesquisa) escolhe de onde vêm os vídeos e em qual plataforma; os ligados aparecem embaixo, com ✕.
+        fullSpan("chips") {
+            Column {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(Modifier.weight(1f)) { ChipRow(home.topics.map { it.label }, selected, { home.selected = it }, arrows = false) }
+                    FiltersButton(activeCount) { showFilters = true }
                 }
-                ChipRow(home.topics.map { it.label }, selected, { home.selected = it })
+                if (activeCount > 0) {
+                    FlowRow(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        sources.forEach { src -> ApexChip("${src.label}  ✕", true, { setFilters(sources - src, platforms) }) }
+                        platforms.forEach { p -> ApexChip("${p.label}  ✕", true, { setFilters(sources, platforms - p) }, dot = p.color()) }
+                    }
+                }
             }
         }
 
@@ -326,5 +331,29 @@ fun HomeScreen() {
             error != null -> fullSpan("error") { ErrorBox(error.orEmpty(), { list.refresh() }) }
         }
         if (mainShown && loading && shown.isNotEmpty()) skeletons(4)
+    }
+
+    if (showFilters) HomeFiltersDialog(sources, platforms, { newSources, newPlatforms -> setFilters(newSources, newPlatforms) }) { showFilters = false }
+}
+
+/** A janela do botão "Filtros" da tela inicial: o que mostrar (de onde vêm os vídeos) e de quais plataformas; escolhas de colunas diferentes se somam. */
+@Composable
+private fun HomeFiltersDialog(
+    sources: Set<HomeSource>, platforms: Set<Platform>, onChange: (Set<HomeSource>, Set<Platform>) -> Unit, onClose: () -> Unit,
+) {
+    FiltersSheet("Filtros da tela inicial", sources.isNotEmpty() || platforms.isNotEmpty(), onClear = { onChange(emptySet(), emptySet()) }, onClose = onClose) {
+        Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+            FilterColumn("O que mostrar", Modifier.weight(1f)) {
+                FilterOption("Tudo", sources.isEmpty()) { onChange(emptySet(), platforms) }
+                HomeSource.entries.forEach { src ->
+                    FilterOption(src.label, src in sources) { onChange(if (src in sources) sources - src else sources + src, platforms) }
+                }
+            }
+            FilterColumn("Plataforma", Modifier.weight(1f)) {
+                FilterOption("Todas as plataformas", platforms.isEmpty()) { onChange(sources, emptySet()) }
+                Platform.entries.forEach { p -> FilterOption(p.label, p in platforms) { onChange(sources, platforms.toggled(p)) } }
+            }
+            Box(Modifier.weight(2.4f))
+        }
     }
 }

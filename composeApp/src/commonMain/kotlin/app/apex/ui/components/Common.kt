@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,6 +43,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -206,7 +208,7 @@ fun ActionButton(
         active -> if (hovered) ApexColors.OnSurface.copy(alpha = 0.85f) else ApexColors.OnSurface
         else -> if (hovered) ApexColors.SurfaceHighest else ApexColors.SurfaceHigh
     }
-    val fg = if (primary) Color.White else if (active) ApexColors.Background else ApexColors.OnSurface
+    val fg = if (primary) ApexColors.OnAccent else if (active) ApexColors.Background else ApexColors.OnSurface
     Row(
         modifier.clip(RoundedCornerShape(50)).hoverable(source).background(bg)
             .clickable(interactionSource = source, indication = null, onClick = onClick)
@@ -265,18 +267,22 @@ fun SectionTitle(title: String, modifier: Modifier = Modifier, subtitle: String?
     }
 }
 
+/** [alignStart]: encostado no canto esquerdo da página (nas telas de lista que também começam no canto) em vez de centralizado. */
 @Composable
-fun EmptyState(icon: ImageVector, title: String, message: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
+fun EmptyState(
+    icon: ImageVector, title: String, message: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null,
+    alignStart: Boolean = false,
+) {
     Column(
-        modifier.fillMaxWidth().padding(48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier.fillMaxWidth().padding(if (alignStart) PaddingValues(vertical = 40.dp) else PaddingValues(48.dp)),
+        horizontalAlignment = if (alignStart) Alignment.Start else Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box(Modifier.size(72.dp).background(ApexColors.SurfaceHigh, CircleShape), contentAlignment = Alignment.Center) {
             Icon(icon, null, tint = ApexColors.Muted, modifier = Modifier.size(34.dp))
         }
-        Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-        Text(message, style = MaterialTheme.typography.bodyMedium, color = ApexColors.Muted, textAlign = TextAlign.Center)
+        Text(title, style = MaterialTheme.typography.titleMedium, textAlign = if (alignStart) TextAlign.Start else TextAlign.Center)
+        Text(message, style = MaterialTheme.typography.bodyMedium, color = ApexColors.Muted, textAlign = if (alignStart) TextAlign.Start else TextAlign.Center)
         if (action != null) {
             Spacer(Modifier.height(4.dp))
             action()
@@ -285,14 +291,14 @@ fun EmptyState(icon: ImageVector, title: String, message: String, modifier: Modi
 }
 
 @Composable
-fun ErrorBox(message: String, onRetry: (() -> Unit)?, modifier: Modifier = Modifier) {
+fun ErrorBox(message: String, onRetry: (() -> Unit)?, modifier: Modifier = Modifier, alignStart: Boolean = false) {
     Column(
-        modifier.fillMaxWidth().padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier.fillMaxWidth().padding(if (alignStart) PaddingValues(vertical = 32.dp) else PaddingValues(32.dp)),
+        horizontalAlignment = if (alignStart) Alignment.Start else Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Icon(Icons.Rounded.ErrorOutline, null, tint = ApexColors.Accent, modifier = Modifier.size(36.dp))
-        Text(message, style = MaterialTheme.typography.bodyMedium, color = ApexColors.Muted, textAlign = TextAlign.Center)
+        Text(message, style = MaterialTheme.typography.bodyMedium, color = ApexColors.Muted, textAlign = if (alignStart) TextAlign.Start else TextAlign.Center)
         if (onRetry != null) {
             Button(
                 onClick = onRetry,
@@ -307,26 +313,31 @@ fun VerifiedMark(modifier: Modifier = Modifier) {
     Icon(Icons.Rounded.CheckCircle, "Verificado", tint = ApexColors.Muted, modifier = modifier.size(13.dp))
 }
 
-/** Dispara [onLoadMore] quando a rolagem chega perto do fim. */
+/**
+ * Dispara [onLoadMore] quando a rolagem chega perto do fim. Usa sempre a versão mais nova do [onLoadMore]: as telas trocam de lista (outra
+ * ordem, outra aba, outro assunto) sem trocar a rolagem, e com a primeira versão guardada o "carregar mais" ia para a lista antiga.
+ */
 @Composable
 fun OnNearEnd(state: LazyGridState, buffer: Int = 8, onLoadMore: () -> Unit) {
+    val latest by rememberUpdatedState(onLoadMore)
     LaunchedEffect(state) {
         snapshotFlow {
             val info = state.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
             info.totalItemsCount > 0 && last >= info.totalItemsCount - buffer
-        }.collect { if (it) onLoadMore() }
+        }.collect { if (it) latest() }
     }
 }
 
 @Composable
 fun OnNearEnd(state: LazyListState, buffer: Int = 6, onLoadMore: () -> Unit) {
+    val latest by rememberUpdatedState(onLoadMore)
     LaunchedEffect(state) {
         snapshotFlow {
             val info = state.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
             info.totalItemsCount > 0 && last >= info.totalItemsCount - buffer
-        }.collect { if (it) onLoadMore() }
+        }.collect { if (it) latest() }
     }
 }
 

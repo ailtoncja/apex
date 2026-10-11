@@ -7,8 +7,11 @@ import androidx.compose.runtime.setValue
 import app.apex.AppContainer
 import app.apex.model.Channel
 import app.apex.model.ChannelDetails
+import app.apex.model.ChannelSort
 import app.apex.model.ClipSort
 import app.apex.model.Comment
+import app.apex.source.CommentPoster
+import app.apex.source.PostResult
 import app.apex.model.LiveCategory
 import app.apex.model.Media
 import app.apex.model.Platform
@@ -21,6 +24,10 @@ import app.apex.source.SearchFilters
 import app.apex.source.SearchSort
 import app.apex.util.ImagePrefetch
 import app.apex.util.currentTimeMillis
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -522,6 +529,44 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
         else app.youtube.channelPlaylists(seed.id, token).let { Page(it.items, it.continuation) }
     }
 
+    // ---------- ordem das listas (como os filtros "Mais recentes / Mais vistos / Mais antigos" do YouTube) ----------
+
+    /** A ordem escolhida em cada aba: vídeos e transmissões do YouTube, VODs da Twitch e da Kick. */
+    var videoSort by mutableStateOf(ChannelSort.Recent)
+    var liveSort by mutableStateOf(ChannelSort.Recent)
+    var vodSort by mutableStateOf(ChannelSort.Recent)
+
+    private val sortedVideos = mutableMapOf<ChannelSort, Paged<Media>>()
+    private val sortedLives = mutableMapOf<ChannelSort, Paged<Media>>()
+    private val sortedVods = mutableMapOf<ChannelSort, Paged<Media>>()
+
+    /** A lista de vídeos do canal na ordem [sort] (uma lista por ordem: voltar a uma ordem já vista não carrega de novo). */
+    fun videosBy(sort: ChannelSort): Paged<Media> = if (sort == ChannelSort.Recent) videos else sortedVideos.getOrPut(sort) {
+        Paged(app.scope, { it.key }) { token ->
+            if (seed.platform != Platform.YouTube) Page(emptyList(), null)
+            else app.youtube.channelVideos(seed.id, ChannelTab.Videos, token, sort).let { Page(it.items, it.continuation) }
+        }
+    }
+
+    /** O mesmo para as transmissões passadas do YouTube. */
+    fun pastLivesBy(sort: ChannelSort): Paged<Media> = if (sort == ChannelSort.Recent) pastLives else sortedLives.getOrPut(sort) {
+        Paged(app.scope, { it.key }) { token ->
+            if (seed.platform != Platform.YouTube) Page(emptyList(), null)
+            else app.youtube.channelVideos(seed.id, ChannelTab.Lives, token, sort).let { Page(it.items, it.continuation) }
+        }
+    }
+
+    /** Os VODs na ordem [sort]: na Twitch a ordem vem do servidor (os 100 mais vistos); a Kick só entrega os 30 mais recentes, que são reordenados aqui. */
+    fun vodsBy(sort: ChannelSort): Paged<Media> = if (sort == ChannelSort.Recent) vods else sortedVods.getOrPut(sort) {
+        Paged(app.scope, { it.key }) {
+            when (seed.platform) {
+                Platform.Twitch -> Page(app.twitch.vods(seed.id, sort = sort), null)
+                Platform.Kick -> Page(app.kick.vods(seed).let { list -> if (sort == ChannelSort.Popular) list.sortedByDescending { it.viewCount ?: 0 } else list }, null)
+                Platform.YouTube -> Page(emptyList(), null)
+            }
+        }
+    }
+
     /** Como os clipes ficam ordenados na aba "Clipes". */
     val clipSort = MutableStateFlow(ClipSort.Popular)
 
@@ -531,6 +576,54 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
             Platform.Twitch -> Page(app.twitch.clips(seed.id, clipSort.value), null)
             Platform.Kick -> app.kick.clips(seed, clipSort.value, token).let { Page(it.items, it.next) }
             Platform.YouTube -> Page(emptyList(), null)
+        }
+    }
+
+    // ---------- busca dentro do canal ----------
+
+    /** O que a pessoa digitou no campo "Pesquisar" do canal (vale para a aba aberta). */
+    var query by mutableStateOf("")
+        private set
+
+    /** A busca já feita no YouTube (aba "Vídeos"): só muda depois que a pessoa para de digitar. */
+    var searchedQuery by mutableStateOf("")
+        private set
+
+    private var searchJob: Job? = null
+    private var searchCache: Pair<String, Paged<Media>>? = null
+
+    fun updateQuery(text: String) {
+        query = text
+        searchJob?.cancel()
+        val q = text.trim()
+        if (q.isEmpty()) { searchedQuery = ""; return }
+        // O YouTube só é consultado quando a pessoa para de digitar (as outras abas filtram o que já está na tela).
+        searchJob = app.scope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            searchedQuery = q
+        }
+    }
+
+    /** Os resultados de [q] dentro do canal (uma lista por busca; repetir a mesma busca reaproveita a lista). */
+    fun searchPaged(q: String): Paged<Media> {
+        searchCache?.takeIf { it.first == q }?.let { return it.second }
+        val paged = Paged<Media>(app.scope, { it.key }) { token ->
+            app.youtube.channelSearch(seed.id, q, token).let { Page(it.items, it.continuation) }
+        }
+        searchCache = q to paged
+        return paged
+    }
+
+    /**
+     * Carrega todas as páginas de [paged] (até [maxPages]): quem filtra uma lista pelo nome precisa dela inteira, não só do que a rolagem já
+     * trouxe. Para se a lista der erro.
+     */
+    suspend fun loadAll(paged: Paged<*>, maxPages: Int = 25) {
+        withTimeoutOrNull(LOAD_PAGE_TIMEOUT_MS) { paged.loading.first { !it } }
+        repeat(maxPages) {
+            if (!paged.hasMore || paged.error.value != null) return
+            paged.loadMore()
+            withTimeoutOrNull(LOAD_PAGE_TIMEOUT_MS) { paged.loading.first { !it } } ?: return
         }
     }
 
@@ -545,12 +638,41 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
         live.loadIfNeeded()
         videos.loadIfNeeded()
     }
+
+    private companion object {
+        const val SEARCH_DEBOUNCE_MS = 450L
+        const val LOAD_PAGE_TIMEOUT_MS = 20_000L
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
 
+/** O campo "Adicione um comentário" da página do vídeo. */
+sealed interface CommentBox {
+    /** Ainda descobrindo se esta conta pode comentar neste vídeo. */
+    data object Loading : CommentBox
+    /** Sem conta do YouTube: mostra o convite para entrar. */
+    data object LoggedOut : CommentBox
+    /** Comentários desligados no vídeo (ou o YouTube não deixou preparar o campo). */
+    data object Disabled : CommentBox
+    data class Ready(val params: String) : CommentBox
+}
+
+/** O YouTube aceita até 10 mil caracteres num comentário. */
+const val MAX_COMMENT_LENGTH = 10_000
+
 /** Dados extras da página de vídeo: relacionados e comentários do vídeo que está tocando. */
 class WatchState(private val app: AppContainer) {
+    /** Quem publica os comentários (trocável nos testes). */
+    var poster: CommentPoster = app.youtube
+
+    var commentBox by mutableStateOf<CommentBox>(CommentBox.Loading)
+        private set
+
+    /** Publicando agora: o botão "Comentar" espera. */
+    var posting by mutableStateOf(false)
+        private set
+
     private val _related = MutableStateFlow<List<Media>>(emptyList())
     val related: StateFlow<List<Media>> = _related.asStateFlow()
 
@@ -571,10 +693,7 @@ class WatchState(private val app: AppContainer) {
 
     fun load(media: Media) {
         if (forKey == media.key) return
-        forKey = media.key
-        _related.value = emptyList()
-        _comments.value = emptyList()
-        _commentsError.value = null
+        startFor(media)
         _relatedLoading.value = true
         app.scope.launch {
             try {
@@ -602,6 +721,68 @@ class WatchState(private val app: AppContainer) {
             }
         }
         loadComments(media)
+    }
+
+    /** Zera a página para o vídeo [media] (relacionados, comentários e o campo de comentar). */
+    internal fun startFor(media: Media) {
+        forKey = media.key
+        _related.value = emptyList()
+        _comments.value = emptyList()
+        _commentsError.value = null
+        prepareCommentBox(media)
+    }
+
+    /** A pessoa entrou (ou saiu) da conta do YouTube enquanto o vídeo estava aberto: o campo de comentário acompanha. */
+    fun syncCommentBox(media: Media) {
+        if (forKey != media.key) return
+        val hasAccount = app.data.account(Platform.YouTube) != null
+        when {
+            hasAccount && commentBox == CommentBox.LoggedOut -> prepareCommentBox(media)
+            !hasAccount && commentBox != CommentBox.LoggedOut && media.platform == Platform.YouTube && !media.isLive -> commentBox = CommentBox.LoggedOut
+        }
+    }
+
+    private fun prepareCommentBox(media: Media) {
+        posting = false
+        if (media.platform != Platform.YouTube || media.isLive) { commentBox = CommentBox.Disabled; return }
+        if (app.data.account(Platform.YouTube) == null) { commentBox = CommentBox.LoggedOut; return }
+        commentBox = CommentBox.Loading
+        val key = media.key
+        app.scope.launch {
+            val params = runCatching { poster.commentParams(media.videoId) }.getOrNull()
+            if (forKey == key) commentBox = if (params != null) CommentBox.Ready(params) else CommentBox.Disabled
+        }
+    }
+
+    /**
+     * Publica [text] como comentário do vídeo, como a conta do YouTube. [done] diz se o YouTube aceitou (o campo só limpa se sim). O comentário
+     * novo aparece no topo da lista na hora, sem recarregar tudo.
+     */
+    fun postComment(media: Media, text: String, done: (Boolean) -> Unit) {
+        val box = commentBox as? CommentBox.Ready
+        val clean = text.trim()
+        if (box == null || clean.isEmpty() || clean.length > MAX_COMMENT_LENGTH || posting) { done(false); return }
+        posting = true
+        val key = media.key
+        app.scope.launch {
+            val result = runCatching { poster.postComment(box.params, clean) }.getOrDefault(PostResult.Rejected)
+            posting = false
+            when (result) {
+                PostResult.Posted -> {
+                    val me = app.data.account(Platform.YouTube)
+                    val mine = Comment(
+                        id = "novo-" + currentTimeMillis(), author = me?.displayName ?: "Você", authorAvatar = me?.avatarUrl,
+                        text = clean, likes = 0, pinned = false, timeText = "agora",
+                    )
+                    if (forKey == key) _comments.value = listOf(mine) + _comments.value
+                    app.toast("Comentário publicado")
+                }
+                PostResult.Rejected -> app.toast("Não foi possível publicar o comentário")
+                // O texto fica no campo, mas sem repetir o envio às cegas: se o YouTube publicou, enviar de novo duplicaria.
+                PostResult.Unclear -> app.toast("O YouTube não confirmou. Confira nos comentários antes de tentar de novo")
+            }
+            done(result == PostResult.Posted)
+        }
     }
 
     fun loadComments(media: Media) {

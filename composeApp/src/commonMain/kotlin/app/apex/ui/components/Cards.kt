@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -168,6 +169,13 @@ fun MediaMenu(media: Media, expanded: Boolean, onDismiss: () -> Unit) {
                 text = { Text("Adicionar à playlist…") },
                 leadingIcon = { Icon(Icons.Rounded.PlaylistAdd, null) },
                 onClick = { app.ui.playlistTarget = media; onDismiss() },
+            )
+        }
+        if (media.isLive) {
+            DropdownMenuItem(
+                text = { Text("Assistir no Multi") },
+                leadingIcon = { Icon(Icons.Rounded.GridView, null) },
+                onClick = { app.openMulti(listOf(media)); onDismiss() },
             )
         }
         media.channel?.let { ch ->

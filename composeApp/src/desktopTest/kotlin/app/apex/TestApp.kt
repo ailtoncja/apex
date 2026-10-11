@@ -37,18 +37,28 @@ internal class FakeSystem : SystemServices {
 
 internal class FakePlayer2 : app.apex.player.PlayerController {
     override val state = kotlinx.coroutines.flow.MutableStateFlow(app.apex.player.PlayerState())
-    override fun play(source: app.apex.player.PlaySource) {}
+    /** O que mandaram tocar, na ordem. */
+    val played = mutableListOf<app.apex.player.PlaySource>()
+    var silenced = false
+    var stops = 0
+    var released = false
+    override fun play(source: app.apex.player.PlaySource) { played += source }
     override fun togglePause() {}
     override fun pause() {}
     override fun resume() {}
-    override fun seekTo(positionMs: Long) {}
+    /** Para onde os atalhos pediram para pular (em ms). */
+    val seeks = mutableListOf<Long>()
+    override fun seekTo(positionMs: Long) { seeks += positionMs }
     override fun seekBy(deltaMs: Long) {}
     override fun setVolume(percent: Int) {}
-    override fun setMuted(muted: Boolean) {}
-    override fun setRate(rate: Float) {}
+    override fun setMuted(muted: Boolean) { silenced = muted }
+    override fun setRate(rate: Float) { state.value = state.value.copy(rate = rate) }
+    /** Quantas vezes pediram para voltar ao ao vivo. */
+    var jumps = 0
+    override fun jumpToLive() { jumps++ }
     override fun setSubtitle(url: String?) {}
-    override fun stop() {}
-    override fun release() {}
+    override fun stop() { stops++ }
+    override fun release() { released = true }
     @androidx.compose.runtime.Composable override fun Video(modifier: androidx.compose.ui.Modifier) {}
 }
 
@@ -63,9 +73,26 @@ internal class FakeExtractor2 : app.apex.source.Extractor {
 
 
 /** Um [AppContainer] de verdade com os dados numa pasta temporária e as peças do sistema trocadas por falsas. */
-internal fun newTestApp(): Pair<AppContainer, FakeSystem> {
+internal fun newTestApp(youtubeHttp: io.ktor.client.HttpClient? = null): Pair<AppContainer, FakeSystem> {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val system = FakeSystem()
     val data = UserData(FileStore(Files.createTempDirectory("apex-test").toFile()), scope)
-    return AppContainer(scope, system, data, FakeExtractor2(), FakePlayer2()) to system
+    return AppContainer(
+        scope, system, data, FakeExtractor2(), FakePlayer2(), newPlayer = { FakePlayer2() }, youtubeHttp = youtubeHttp ?: app.apex.source.Http.client,
+        fastYoutube = false, tileResolve = ::fakeTileResolve,
+    ) to system
+}
+
+/** O "endereço" de uma live do Multi nos testes: qualidades de mentira, sem rede. */
+internal suspend fun fakeTileResolve(media: Media): app.apex.model.Resolved {
+    kotlinx.coroutines.delay(20)
+    return app.apex.model.Resolved(
+        media.copy(title = "Live de ${media.id}"), null, null, null, null, emptyList(), emptyList(),
+        listOf(
+            app.apex.model.Quality("1080p", 1080, "https://fake/${media.id}/1080.m3u8"),
+            app.apex.model.Quality("720p", 720, "https://fake/${media.id}/720.m3u8"),
+            app.apex.model.Quality("480p", 480, "https://fake/${media.id}/480.m3u8"),
+        ),
+        null, isLive = true,
+    )
 }

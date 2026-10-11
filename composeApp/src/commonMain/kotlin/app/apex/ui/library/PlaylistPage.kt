@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -57,6 +58,10 @@ import app.apex.LocalApp
 import app.apex.model.Channel
 import app.apex.model.Media
 import app.apex.source.PlaylistInfo
+import androidx.compose.material.icons.rounded.Search
+import app.apex.ui.components.FilterTextField
+import app.apex.state.matchesWords
+import app.apex.state.searchWords
 import app.apex.state.Page
 import app.apex.state.Paged
 import app.apex.theme.ApexColors
@@ -96,20 +101,25 @@ private fun PlaylistPageLayout(
     val listState = rememberLazyListState()
     OnNearEnd(listState) { onNearEnd() }
     val unique = items.distinctBy { it.key }
+    // Pesquisar dentro da playlist: pelo título e pelo canal; enquanto há texto, vai buscando as páginas que faltam para achar tudo.
+    var query by remember { mutableStateOf("") }
+    val words = remember(query) { searchWords(query) }
+    val shown = if (words.isEmpty()) unique else unique.filter { matchesWords(words, it.title, it.channel?.name) }
+    LaunchedEffect(words.isNotEmpty(), unique.size, loading) { if (words.isNotEmpty() && !loading) onNearEnd() }
 
     val header: @Composable (Modifier) -> Unit = { modifier ->
         Column(
             modifier.clip(RoundedCornerShape(20.dp))
-                .background(Brush.verticalGradient(listOf(Color(0xFF3B1E24), ApexColors.SurfaceHigh)))
+                .background(Brush.verticalGradient(listOf(ApexColors.Accent.copy(alpha = 0.28f).compositeOver(ApexColors.SurfaceHigh), ApexColors.SurfaceHigh)))
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp))) {
                 if (!cover.isNullOrBlank()) RemoteImage(cover, Modifier.fillMaxSize())
                 else Box(
-                    Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFF5A2B35), Color(0xFF1C1C26)))),
+                    Modifier.fillMaxSize().background(Brush.linearGradient(listOf(ApexColors.Accent.copy(alpha = 0.45f).compositeOver(ApexColors.SurfaceHigh), ApexColors.SurfaceHighest))),
                     contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Rounded.PlaylistPlay, null, tint = Color.White.copy(alpha = 0.55f), modifier = Modifier.size(72.dp)) }
+                ) { Icon(Icons.Rounded.PlaylistPlay, null, tint = ApexColors.OnSurface.copy(alpha = 0.55f), modifier = Modifier.size(72.dp)) }
             }
             Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
             owner?.let { o ->
@@ -148,7 +158,13 @@ private fun PlaylistPageLayout(
             if (unique.isEmpty() && !loading) scope.item("empty") {
                 if (error != null) ErrorBox(error, onRetry) else EmptyState(Icons.Rounded.PlaylistPlay, "Playlist vazia", emptyMessage)
             }
-            scope.items(unique, key = { it.key }) { m ->
+            if (unique.size > 6 || query.isNotEmpty()) scope.item("filter") {
+                FilterTextField(query, { query = it }, "Pesquisar nesta playlist", Modifier.fillMaxWidth().padding(start = 34.dp))
+            }
+            if (words.isNotEmpty() && shown.isEmpty() && unique.isNotEmpty() && !loading) scope.item("no-match") {
+                EmptyState(Icons.Rounded.Search, "Nada encontrado", "Nenhum vídeo desta playlist combina com “${query.trim()}”.", alignStart = true)
+            }
+            scope.items(shown, key = { it.key }) { m ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "${unique.indexOf(m) + 1}", Modifier.width(34.dp), style = MaterialTheme.typography.labelLarge,

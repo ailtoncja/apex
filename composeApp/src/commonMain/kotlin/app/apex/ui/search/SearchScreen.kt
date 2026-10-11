@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,7 +72,14 @@ import app.apex.theme.color
 import app.apex.ui.components.ActionButton
 import app.apex.ui.components.ApexChip
 import app.apex.ui.components.ChannelRow
+import app.apex.ui.components.ChipBar
+import app.apex.ui.components.FilterColumn
+import app.apex.ui.components.FilterOption
+import app.apex.ui.components.FiltersButton
+import app.apex.ui.components.FiltersSheet
 import app.apex.ui.components.EmptyState
+import app.apex.ui.components.PAGE_MAX_WIDTH
+import app.apex.ui.components.ScrollRow
 import app.apex.ui.components.ErrorBox
 import app.apex.ui.components.OnNearEnd
 import app.apex.ui.components.RemotePlaylistRow
@@ -81,7 +87,7 @@ import app.apex.ui.components.VideoRow
 import app.apex.ui.components.shimmer
 
 /** A largura máxima da lista de resultados (em janelas bem largas ela para aqui, encostada à esquerda). */
-private val RESULTS_MAX_WIDTH = 1500.dp
+private val RESULTS_MAX_WIDTH = PAGE_MAX_WIDTH
 
 /** A tela de resultados como a do YouTube: abas de tipo no topo, o botão de filtros e uma lista só. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -158,7 +164,7 @@ fun SearchScreen(route: Route.Search) {
             // Abas de tipo (como as do YouTube) e o botão de filtros.
             item("tabs") {
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ChipBar(Modifier.weight(1f)) {
                         items(SearchKind.entries) { k -> ApexChip(k.label, kind == k, { if (k != kind) changeFilters(route.filters.withKind(k)) }) }
                     }
                     FiltersButton(activeCount) { showFilters = true }
@@ -221,23 +227,6 @@ internal fun emptyMessage(query: String, kind: SearchKind, platforms: Set<Platfo
     else -> "Nada para “$query”. Tente outras palavras ou tire algum filtro."
 }
 
-/** O botão "Filtros" do canto direito, como o do YouTube. */
-@Composable
-private fun FiltersButton(count: Int, onClick: () -> Unit) {
-    val source = remember { MutableInteractionSource() }
-    val hovered by source.collectIsHoveredAsState()
-    Row(
-        Modifier.clip(RoundedCornerShape(50)).hoverable(source)
-            .background(if (hovered) ApexColors.SurfaceHighest else ApexColors.SurfaceHigh)
-            .clickable(interactionSource = source, indication = null, onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Icon(Icons.Rounded.Tune, null, Modifier.size(18.dp), tint = ApexColors.OnSurface)
-        Text(if (count > 0) "Filtros ($count)" else "Filtros", style = MaterialTheme.typography.labelLarge, color = ApexColors.OnSurface)
-    }
-}
-
 /** Os filtros do YouTube ligados (a aba de tipo não entra: ela já aparece no topo), cada um como ficaria sem ele. */
 private fun activeFilters(f: SearchFilters): List<Pair<String, SearchFilters>> = buildList {
     if (f.sort != SearchSort.Relevance) add("Ordem: ${f.sort.label}" to f.copy(sort = SearchSort.Relevance))
@@ -256,75 +245,45 @@ internal fun FiltersDialog(
     onClear: (() -> Unit)? = null,
 ) {
     val anyActive = filters.activeCount > 0 || platforms.isNotEmpty() || onlySubs
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(shape = RoundedCornerShape(18.dp), color = ApexColors.SurfaceHigh, modifier = Modifier.widthIn(max = 940.dp).padding(24.dp)) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Filtros de pesquisa", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                    if (anyActive) {
-                        ActionButton("Limpar tudo", { onClear?.invoke() ?: onChange(SearchFilters(type = SearchType.Any)) })
-                        Box(Modifier.width(8.dp))
-                    }
-                    ActionButton("Concluído", onClose, primary = true)
+    FiltersSheet(
+        "Filtros de pesquisa", anyActive, onClear = { onClear?.invoke() ?: onChange(SearchFilters(type = SearchType.Any)) }, onClose = onClose,
+    ) {
+        if (onPlatforms != null && onOnlySubs != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                FilterColumn("Onde procurar", Modifier.weight(1f)) {
+                    FilterOption("Todas as plataformas", platforms.isEmpty()) { onPlatforms(emptySet()) }
+                    Platform.entries.forEach { p -> FilterOption(p.label, p in platforms) { onPlatforms(platforms.toggled(p)) } }
                 }
-                if (onPlatforms != null && onOnlySubs != null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                        FilterColumn("Onde procurar", Modifier.weight(1f)) {
-                            FilterOption("Todas as plataformas", platforms.isEmpty()) { onPlatforms(emptySet()) }
-                            Platform.entries.forEach { p -> FilterOption(p.label, p in platforms) { onPlatforms(platforms.toggled(p)) } }
-                        }
-                        FilterColumn("De quem", Modifier.weight(1f)) {
-                            FilterOption("De todos", !onlySubs) { onOnlySubs(false) }
-                            FilterOption("Só dos canais que sigo", onlySubs) { onOnlySubs(true) }
-                        }
-                        Box(Modifier.weight(3.2f))
-                    }
-                    Text("FILTROS DO YOUTUBE", style = MaterialTheme.typography.labelMedium, color = ApexColors.Muted)
+                FilterColumn("De quem", Modifier.weight(1f)) {
+                    FilterOption("De todos", !onlySubs) { onOnlySubs(false) }
+                    FilterOption("Só dos canais que sigo", onlySubs) { onOnlySubs(true) }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                    FilterColumn("Data de envio", Modifier.weight(1f)) {
-                        SearchDate.entries.forEach { d -> FilterOption(d.label, filters.date == d) { onChange(filters.copy(date = d)) } }
-                    }
-                    FilterColumn("Tipo", Modifier.weight(1f)) {
-                        SearchType.entries.forEach { t -> FilterOption(t.label, filters.type == t && !filters.channelsOnly) { onChange(filters.copy(type = t, channelsOnly = false)) } }
-                    }
-                    FilterColumn("Duração", Modifier.weight(1f)) {
-                        SearchDuration.entries.forEach { d -> FilterOption(d.label, filters.duration == d) { onChange(filters.copy(duration = d)) } }
-                    }
-                    FilterColumn("Recursos", Modifier.weight(1.2f)) {
-                        FilterOption("Ao vivo", filters.liveOnly) { onChange(filters.copy(liveOnly = !filters.liveOnly)) }
-                        SearchFeature.entries.forEach { f ->
-                            FilterOption(f.label, f in filters.features) {
-                                onChange(filters.copy(features = if (f in filters.features) filters.features - f else filters.features + f))
-                            }
-                        }
-                    }
-                    FilterColumn("Ordenar por", Modifier.weight(1f)) {
-                        SearchSort.entries.forEach { s -> FilterOption(s.label, filters.sort == s) { onChange(filters.copy(sort = s)) } }
+                Box(Modifier.weight(3.2f))
+            }
+            Text("FILTROS DO YOUTUBE", style = MaterialTheme.typography.labelMedium, color = ApexColors.Muted)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+            FilterColumn("Data de envio", Modifier.weight(1f)) {
+                SearchDate.entries.forEach { d -> FilterOption(d.label, filters.date == d) { onChange(filters.copy(date = d)) } }
+            }
+            FilterColumn("Tipo", Modifier.weight(1f)) {
+                SearchType.entries.forEach { t -> FilterOption(t.label, filters.type == t && !filters.channelsOnly) { onChange(filters.copy(type = t, channelsOnly = false)) } }
+            }
+            FilterColumn("Duração", Modifier.weight(1f)) {
+                SearchDuration.entries.forEach { d -> FilterOption(d.label, filters.duration == d) { onChange(filters.copy(duration = d)) } }
+            }
+            FilterColumn("Recursos", Modifier.weight(1.2f)) {
+                FilterOption("Ao vivo", filters.liveOnly) { onChange(filters.copy(liveOnly = !filters.liveOnly)) }
+                SearchFeature.entries.forEach { f ->
+                    FilterOption(f.label, f in filters.features) {
+                        onChange(filters.copy(features = if (f in filters.features) filters.features - f else filters.features + f))
                     }
                 }
             }
+            FilterColumn("Ordenar por", Modifier.weight(1f)) {
+                SearchSort.entries.forEach { s -> FilterOption(s.label, filters.sort == s) { onChange(filters.copy(sort = s)) } }
+            }
         }
-    }
-}
-
-@Composable
-private fun FilterColumn(title: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(title.uppercase(), style = MaterialTheme.typography.labelMedium, color = ApexColors.Muted, modifier = Modifier.padding(bottom = 6.dp))
-        content()
-    }
-}
-
-@Composable
-private fun FilterOption(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 7.dp, horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(Modifier.width(18.dp)) { if (selected) Icon(Icons.Rounded.Check, null, tint = ApexColors.Accent, modifier = Modifier.width(18.dp)) }
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = if (selected) ApexColors.OnSurface else ApexColors.OnSurface.copy(alpha = 0.8f), maxLines = 1)
     }
 }
 

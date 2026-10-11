@@ -45,6 +45,7 @@ import app.apex.theme.ApexColors
 import app.apex.update.UpdateState
 import app.apex.theme.color
 import app.apex.ui.components.ActionButton
+import app.apex.ui.shell.ShortcutsList
 import app.apex.ui.components.ApexChip
 import app.apex.ui.components.Avatar
 import app.apex.ui.components.Divider
@@ -62,7 +63,8 @@ fun SettingsScreen() {
     val engineState by app.extractor.state.collectAsState()
     var engineMessage by remember { mutableStateOf("") }
 
-    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+    // No canto esquerdo da página, como as outras telas.
+    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopStart) {
         Column(
             Modifier.widthIn(max = 880.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -80,8 +82,12 @@ fun SettingsScreen() {
                 }
             }
 
+            Section("Aparência", "As cores do app. A escolha vale na hora e fica guardada.") {
+                ThemeSection()
+            }
+
             Section("Reprodução") {
-                Setting("Qualidade padrão", "Máxima resolução ao abrir um vídeo (lives usam automático)") {
+                Setting("Qualidade padrão", "Máxima resolução ao abrir um vídeo ou uma live (a live abre direto nela; \"Automático\" fica no menu de qualidade do player)") {
                     ChoiceMenu(
                         listOf(0 to "Automática (até 1080p)", 2160 to "2160p (4K)", 1440 to "1440p", 1080 to "1080p", 720 to "720p", 480 to "480p", 360 to "360p"),
                         settings.defaultQuality,
@@ -92,13 +98,16 @@ fun SettingsScreen() {
                         app.data.updateSettings { it.copy(defaultRate = v) }
                     }
                 }
+                Setting("Volume acima de 100%", "Deixa o volume ir até 200%, amplificando o som (acima de 100% pode distorcer). Desligado, o controle e as setas param em 100%") {
+                    Toggle(settings.volumeBoost) { v -> app.setVolumeBoost(v) }
+                }
                 Setting("Reprodução automática", "Toca o próximo vídeo ao terminar") {
                     Toggle(settings.autoplayNext) { v -> app.data.updateSettings { it.copy(autoplayNext = v) } }
                 }
                 Setting("Avisar quando entrarem ao vivo", "Mostra um aviso quando um canal que você segue começa a transmitir") {
                     Toggle(settings.liveAlerts) { v -> app.data.updateSettings { it.copy(liveAlerts = v) } }
                 }
-                Setting("Menos atraso nas lives", "Começa mais perto do ao vivo (cerca de 7 s de atraso em vez de 19 s). Desligue se a live travar") {
+                Setting("Menos atraso nas lives", "Na Twitch e na Kick o vídeo fica uns 4 s atrás do ao vivo (em vez de uns 9 s) e se ajusta sozinho se atrasar. Desligue se a live travar") {
                     Toggle(settings.lowLatencyLive) { v -> app.data.updateSettings { it.copy(lowLatencyLive = v) } }
                 }
                 Setting("Continuar de onde parei", "Retoma vídeos longos pelo ponto em que você saiu") {
@@ -209,17 +218,8 @@ fun SettingsScreen() {
                 }
             }
 
-            Section("Atalhos do teclado") {
-                listOf(
-                    "Espaço ou K" to "Pausar e continuar", "F" to "Tela cheia", "T" to "Modo cinema", "M" to "Silenciar",
-                    "← →" to "Voltar e avançar 5 s", "J L" to "Voltar e avançar 10 s", "↑ ↓" to "Volume (até 200%)",
-                    "0 a 9" to "Pular para 0% a 90%", "C" to "Legendas", "Shift + N" to "Próximo vídeo", "Esc" to "Sair da tela cheia",
-                ).forEach { (k, d) ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(k, Modifier.widthIn(min = 120.dp), style = MaterialTheme.typography.labelLarge)
-                        Text(d, style = MaterialTheme.typography.bodyMedium, color = ApexColors.Muted)
-                    }
-                }
+            Section("Atalhos do teclado", "Aperte ? em qualquer tela para ver esta lista por cima dela.") {
+                ShortcutsList()
             }
             Text("Apex • feito para assistir", color = ApexColors.Faint, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 32.dp))
         }

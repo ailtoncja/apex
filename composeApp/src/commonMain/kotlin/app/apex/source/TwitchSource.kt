@@ -1,10 +1,12 @@
 package app.apex.source
 
+import kotlinx.coroutines.async
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import app.apex.model.ChatMessage
 import app.apex.model.ReplayMessage
 import app.apex.model.Channel
+import app.apex.model.ChannelSort
 import app.apex.model.LiveCategory
 import app.apex.model.Media
 import app.apex.model.Platform
@@ -181,6 +183,35 @@ class TwitchSource(private val http: HttpClient = Http.client) {
     }
 
     /**
+     * As últimas mensagens do chat de um canal (as de antes de entrar), como o site mostra ao abrir o chat: até 50, da mais antiga para a
+     * mais nova, sem as apagadas. A Twitch só as entrega com a conta ([authToken]); sem ela, vazio (e nem pergunta).
+     */
+    suspend fun recentChatMessages(login: String): List<ChatMessage> {
+        if (authToken == null) return emptyList()
+        val data = gql(
+            "{ channel(name: ${lit(login)}) { recentChatMessages { id sentAt deletedAt content { text } " +
+                "sender { login displayName chatColor } senderBadges { setID } } } }",
+        )
+        return parseRecentChat(data)
+    }
+
+    internal fun parseRecentChat(data: JsonElement?): List<ChatMessage> =
+        data["channel"]["recentChatMessages"].list()
+            .filter { it["deletedAt"].str() == null }
+            .sortedBy { parseIsoMillis(it["sentAt"].str()) ?: 0L }
+            .mapNotNull { m ->
+                val id = m["id"].str() ?: return@mapNotNull null
+                val sender = m["sender"]
+                val name = sender["displayName"].str() ?: sender["login"].str() ?: return@mapNotNull null
+                val text = m["content"]["text"].str()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                ChatMessage(
+                    id, name, text,
+                    app.apex.chat.parseHexColor(sender["chatColor"].str()) ?: app.apex.chat.colorFromName(name),
+                    m["senderBadges"].list().mapNotNull { it["setID"].str() },
+                )
+            }
+
+    /**
      * A conta ligada tem o **Twitch Turbo** (sem anúncios nas lives)? `null` se não há conta ligada ou a Twitch não respondeu.
      * O app já pede o vídeo com a sessão da conta, que é o que a Twitch usa para pular os anúncios de quem tem Turbo.
      */
@@ -304,9 +335,10 @@ class TwitchSource(private val http: HttpClient = Http.client) {
      * VODs (transmissões passadas) de um canal, os mais recentes primeiro. Vem uma página só (até [limit]): a página seguinte, por cursor,
      * exige a verificação de integridade que só o navegador da Twitch passa.
      */
-    suspend fun vods(login: String, limit: Int = 100): List<Media> {
+    suspend fun vods(login: String, limit: Int = 100, sort: ChannelSort = ChannelSort.Recent): List<Media> {
+        val order = if (sort == ChannelSort.Popular) "VIEWS" else "TIME"
         val data = gql(
-            """{ user(login: ${lit(login)}) { videos(first: $limit, type: ARCHIVE, sort: TIME) { edges { node { $VOD_FIELDS } } } } }""",
+            """{ user(login: ${lit(login)}) { videos(first: $limit, type: ARCHIVE, sort: $order) { edges { node { $VOD_FIELDS } } } } }""",
         )
         return data["user"]["videos"]["edges"].list().mapNotNull { vodToMedia(it["node"]) }
     }
@@ -384,6 +416,14 @@ class TwitchSource(private val http: HttpClient = Http.client) {
     suspend fun resolve(media: Media): Resolved {
         if (media.isVod) return resolveVod(media)
         if (media.isClip) return resolveClip(media)
+        // Os dados do canal (título, espectadores) são buscados junto com o endereço, não depois: poupam uma ida à rede inteira.
+        return kotlinx.coroutines.coroutineScope {
+            val info = async { runCatching { channels(listOf(media.id)).firstOrNull() }.getOrNull() }
+            resolveLive(media, info)
+        }
+    }
+
+    private suspend fun resolveLive(media: Media, info: kotlinx.coroutines.Deferred<ChannelHit?>): Resolved {
         val login = media.id
         val query = """query PlaybackAccessToken_Template(${'$'}login: String!, ${'$'}playerType: String!) {
             streamPlaybackAccessToken(channelName: ${'$'}login, params: {platform: "web", playerBackend: "mediaplayer", playerType: ${'$'}playerType}) { value signature }
@@ -395,10 +435,11 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         if (token == null || sig == null) error("A Twitch não liberou o stream (canal offline?).")
         val master = "https://usher.ttvnw.net/api/channel/hls/$login.m3u8" +
             "?client_id=$CLIENT_ID&token=${token.encodeURLParameter()}&sig=$sig" +
-            "&allow_source=true&allow_audio_only=true&player=twitchweb&playlist_include_framerate=true&p=${Random.nextInt(100000, 999999)}"
+            // `fast_bread` é o modo de baixa latência da Twitch: as listas passam a trazer os próximos trechos já antes de ficarem prontos.
+            "&allow_source=true&allow_audio_only=true&player=twitchweb&playlist_include_framerate=true&fast_bread=true&p=${Random.nextInt(100000, 999999)}"
         val text = http.getText(master)
         if (!text.startsWith("#EXTM3U")) error("O canal ${media.channel?.name ?: login} está offline.")
-        val hit = runCatching { channels(listOf(login)).firstOrNull() }.getOrNull()
+        val hit = info.await()
         val full = hit?.live?.copy(thumbnailUrl = hit.live.thumbnailUrl ?: media.thumbnailUrl)
             ?: media.copy(channel = hit?.channel ?: media.channel)
         return Resolved(

@@ -34,8 +34,7 @@ class ImageQualityTest {
         setContent { Box(Modifier.size(300.dp, 169.dp)) { RemoteImage(uri, Modifier.size(300.dp, 169.dp)) } }
         var mean = 0.0
         var deviation = 999.0
-        // A imagem chega de forma assíncrona: espera até aparecer algo mais claro que o fundo cinza-escuro.
-        waitUntil(timeoutMillis = 15_000) {
+        fun measure() {
             val map = onRoot().captureToImage().toPixelMap()
             val values = ArrayList<Double>()
             for (y in 20 until 150 step 3) for (x in 20 until 280 step 3) {
@@ -44,7 +43,18 @@ class ImageQualityTest {
             }
             mean = values.average()
             deviation = sqrt(values.sumOf { (it - mean) * (it - mean) } / values.size)
-            mean > 80
+        }
+        // A imagem chega de forma assíncrona: espera até aparecer algo mais claro que o fundo cinza-escuro.
+        waitUntil(timeoutMillis = 15_000) { measure(); mean > 80 }
+        // O primeiro quadro pode ser o do Coil, ainda sem a suavização (por um instante): dá alguns quadros para a imagem suave assumir.
+        // Se ela ficar serrilhada de vez, o desvio continua alto e o teste falha.
+        repeat(30) {
+            if (deviation >= 35.0) {
+                mainClock.advanceTimeByFrame()
+                waitForIdle()
+                Thread.sleep(20)
+                measure()
+            }
         }
         // Suave: cinza médio com pouca variação. Serrilhado seria listras de 0 e 255 (desvio perto de 127).
         assertTrue(mean in 100.0..160.0, "a média deveria ser um cinza médio, foi $mean")

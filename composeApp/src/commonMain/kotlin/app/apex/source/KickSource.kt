@@ -14,11 +14,20 @@ import app.apex.model.Resolved
 import app.apex.model.VOD_PREFIX
 import app.apex.util.parseIsoMillis
 import io.ktor.client.HttpClient
+import io.ktor.http.isSuccess
+import io.ktor.http.contentType
+import io.ktor.http.ContentType
+import io.ktor.client.statement.bodyAsText
+import io.ktor.client.request.header
+import io.ktor.client.request.setBody
+import io.ktor.client.request.post
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.buildJsonObject
 
 class KickLivePage(val items: List<Media>, val next: String?)
 
@@ -156,6 +165,18 @@ class KickSource(private val http: HttpClient = Http.client) {
      * Chat gravado: as mensagens dos 5 segundos que começam em [vodStartMs] + [fromMs] (a Kick entrega até 25 por janela).
      * [vodStartMs] é a hora em que a transmissão começou; o ponto do vídeo de cada mensagem é a diferença para ela.
      */
+    /**
+     * As últimas mensagens do chat do canal (as de antes de entrar): a Kick entrega até 25, sem precisar de conta, da mais nova para a mais
+     * antiga; aqui saem na ordem do chat. Vazio se o canal não existe.
+     */
+    suspend fun recentChat(slug: String): List<ChatMessage> {
+        val id = channelId(slug) ?: return emptyList()
+        return parseRecentChat(json("https://kick.com/api/v2/channels/$id/messages")["data"])
+    }
+
+    internal fun parseRecentChat(data: JsonElement?): List<ChatMessage> =
+        data["messages"].list().mapNotNull { replayMessage(it, vodStartMs = 0) }.sortedBy { it.offsetMs }.map { it.message }
+
     suspend fun chatReplay(channelId: String, fromMs: Long, vodStartMs: Long): List<ReplayMessage> {
         val start = formatIsoMillis(vodStartMs + fromMs).encodeURLParameter()
         val data = json("https://kick.com/api/v2/channels/$channelId/messages?start_time=$start")["data"] ?: error("A Kick não devolveu o chat deste vídeo.")
@@ -179,9 +200,11 @@ class KickSource(private val http: HttpClient = Http.client) {
         )
     }
 
-    suspend fun channel(slug: String): KickChannelInfo? {
+    /** [withThumbnail]: a resposta do canal não traz a miniatura da live; buscá-la custa mais uma ida à rede, que só vale para mostrar na lista. */
+    suspend fun channel(slug: String, withThumbnail: Boolean = true): KickChannelInfo? {
         val c = json("https://kick.com/api/v2/channels/$slug") ?: return null
         val id = c["slug"].str() ?: return null
+        c["id"].long()?.let { channelIds[id] = it.toString() }
         val user = c["user"]
         val name = user["username"].str() ?: id
         val channel = Channel(
@@ -192,7 +215,7 @@ class KickSource(private val http: HttpClient = Http.client) {
         val live = if (ls != null && ls["is_live"].bool() != false) {
             // A resposta do canal já não traz a miniatura da live: ela vem do endereço da live do canal.
             val thumbnail = ls["thumbnail"].str() ?: ls["thumbnail"]["src"].str()
-                ?: runCatching { json("https://kick.com/api/v2/channels/$id/livestream")["data"]["thumbnail"]["src"].str() }.getOrNull()
+                ?: if (withThumbnail) runCatching { json("https://kick.com/api/v2/channels/$id/livestream")["data"]["thumbnail"]["src"].str() }.getOrNull() else null
             Media(
                 Platform.Kick, id, ls["session_title"].str().orEmpty().ifBlank { name }, channel,
                 thumbnail, null,
@@ -337,12 +360,12 @@ class KickSource(private val http: HttpClient = Http.client) {
     suspend fun resolve(media: Media): Resolved {
         if (media.isVod) return resolveVod(media)
         if (media.isClip) return resolveClip(media)
-        val info = channel(media.id) ?: error("Canal não encontrado na Kick.")
+        val info = channel(media.id, withThumbnail = false) ?: error("Canal não encontrado na Kick.")
         val url = info.playbackUrl ?: error("A Kick não liberou o stream.")
         val text = http.getText(url, headers)
         if (!text.startsWith("#EXTM3U")) error("O canal ${info.hit.channel.name} está offline.")
         return Resolved(
-            media = info.hit.live ?: media, description = null, likes = null,
+            media = info.hit.live?.let { it.copy(thumbnailUrl = it.thumbnailUrl ?: media.thumbnailUrl) } ?: media, description = null, likes = null,
             subscribers = info.hit.channel.followers, uploadDate = null,
             chapters = emptyList(), subtitles = emptyList(),
             // A lista mestra da Kick aponta legendas que não existem e travam o VLC; usa as qualidades direto.
@@ -351,7 +374,30 @@ class KickSource(private val http: HttpClient = Http.client) {
         )
     }
 
-    suspend fun chatroomId(slug: String): Long? = channel(slug)?.chatroomId
+    suspend fun chatroomId(slug: String): Long? = channel(slug, withThumbnail = false)?.chatroomId
+
+    /**
+     * Escreve [text] no chat da sala [chatroomId] como a conta logada. Devolve `null` quando a Kick aceitou, ou o motivo da recusa em português
+     * (sessão vencida, banido, modo lento…). A própria mensagem volta pelo chat ao vivo, então quem chama não precisa mostrá-la por conta.
+     */
+    suspend fun sendChat(chatroomId: Long, text: String): String? {
+        if (sessionToken == null) return "Entre na conta da Kick (Ajustes) para escrever no chat."
+        val body = buildJsonObject { put("content", text); put("type", "message") }.toString()
+        val response = http.post("https://kick.com/api/v2/messages/send/$chatroomId") {
+            this@KickSource.headers.forEach { (k, v) -> header(k, v) }
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        if (response.status.isSuccess()) return null
+        val json = parseJson(response.bodyAsText())
+        val reason = json["message"].str() ?: json["status"]["message"].str()
+        return when (response.status.value) {
+            401 -> "A sessão da Kick venceu: entre de novo em Ajustes."
+            403 -> reason?.let { "A Kick recusou: $it" } ?: "A Kick não deixou enviar (você pode estar banido neste chat, ou o chat é só para seguidores/inscritos)."
+            429 -> "A Kick pediu para ir mais devagar (modo lento do chat)."
+            else -> reason ?: "A Kick recusou a mensagem."
+        }
+    }
 
     suspend fun currentUser(): Pair<String, String?>? {
         if (sessionToken == null) return null

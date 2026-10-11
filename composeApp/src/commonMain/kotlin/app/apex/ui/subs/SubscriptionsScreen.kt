@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
@@ -51,8 +51,10 @@ import app.apex.ui.components.ApexChip
 import app.apex.ui.components.ApexGrid
 import app.apex.ui.components.Avatar
 import app.apex.ui.components.ChannelRow
+import app.apex.ui.components.ChipBar
 import app.apex.ui.components.ChipRow
 import app.apex.ui.components.EmptyState
+import app.apex.ui.components.ScrollRow
 import app.apex.ui.components.FilterTextField
 import app.apex.ui.components.SectionTitle
 import app.apex.ui.components.fullSpan
@@ -109,22 +111,22 @@ fun SubscriptionsScreen() {
         if (subs.isNotEmpty()) {
             // Filtro por plataforma e busca por palavra-chave ou canal.
             fullSpan("filters") {
-                FlowRow(
-                    Modifier.fillMaxWidth().padding(top = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    ApexChip("Todas (${subs.size})", platforms.isEmpty(), { platforms = emptySet() })
-                    PLATFORMS.forEach { p ->
-                        val count = subs.count { it.platform == p }
-                        if (count > 0) ApexChip("${p.label} ($count)", p in platforms, { platforms = platforms.toggled(p) }, dot = p.color())
+                Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ChipBar(Modifier.weight(1f)) {
+                        item(key = "all") { ApexChip("Todas (${subs.size})", platforms.isEmpty(), { platforms = emptySet() }) }
+                        items(PLATFORMS, key = { it.name }) { p ->
+                            val count = subs.count { it.platform == p }
+                            if (count > 0) ApexChip("${p.label} ($count)", p in platforms, { platforms = platforms.toggled(p) }, dot = p.color())
+                        }
                     }
                     FilterTextField(query, { query = it }, "Buscar nas suas inscrições (canal ou palavra-chave)", Modifier.width(380.dp))
                 }
             }
             if (!searching) {
                 fullSpan("avatars") {
-                    LazyRow(
-                        Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp),
+                    ScrollRow(
+                        Modifier.padding(top = 6.dp, bottom = 6.dp),
+                        arrowCenterY = 40.dp,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(subsOnPlatform.sortedWith(compareByDescending<Channel> { it.key in liveKeys }.thenByDescending { it.support != null }), key = { it.key }) { ch ->

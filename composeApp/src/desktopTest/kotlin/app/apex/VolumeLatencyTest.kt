@@ -8,6 +8,7 @@ import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.runComposeUiTest
 import app.apex.player.MAX_VOLUME
 import app.apex.player.NORMAL_VOLUME
+import app.apex.player.maxVolume
 import app.apex.player.PlaySource
 import app.apex.player.PlayerState
 import app.apex.player.sliderFromVolume
@@ -48,6 +49,32 @@ class VolumeLatencyTest {
         assertEquals(200, stepVolume(200, 5))
         assertEquals(0, stepVolume(3, -5))
         assertEquals(95, stepVolume(100, -5))
+    }
+
+    @Test
+    fun sem_o_reforco_o_volume_para_em_100_e_nao_gruda_no_meio() {
+        assertEquals(200, maxVolume(true))
+        assertEquals(100, maxVolume(false))
+        assertEquals(100, stepVolume(98, 5, maxVolume(false)))
+        assertEquals(100, volumeFromSlider(1f, 100))
+        assertEquals(50, volumeFromSlider(0.5f, 100), "sem reforço o meio do controle é 50%, não gruda")
+        assertEquals(0.5f, sliderFromVolume(50, 100))
+        assertEquals(1f, sliderFromVolume(150, 100), "acima do máximo fica no fim")
+    }
+
+    @Test
+    fun mudar_o_volume_pelo_app_guarda_nos_ajustes_e_desligar_o_reforco_desce_para_100() {
+        val (app, _) = newTestApp()
+        app.setVolume(130)
+        assertEquals(130, app.data.settings.value.volume, "o volume das setas e do controle fica guardado")
+        app.setVolumeBoost(false)
+        assertEquals(100, app.data.settings.value.volume, "sem reforço o que passava de 100% desce para 100%")
+        assertEquals(100, app.maxVolume)
+        app.setVolume(150)
+        assertEquals(100, app.data.settings.value.volume, "sem reforço o volume para em 100")
+        app.setVolumeBoost(true)
+        app.setVolume(150)
+        assertEquals(150, app.data.settings.value.volume)
     }
 
     @OptIn(ExperimentalTestApi::class)

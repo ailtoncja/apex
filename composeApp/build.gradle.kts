@@ -49,6 +49,7 @@ kotlin {
                 implementation(libs.ktor.server.netty)
                 implementation(libs.ktor.server.core)
                 implementation(libs.kotlinx.coroutines.test)
+                implementation(libs.ktor.client.mock)
                 implementation(libs.logback)
                 @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
                 implementation(compose.uiTest)

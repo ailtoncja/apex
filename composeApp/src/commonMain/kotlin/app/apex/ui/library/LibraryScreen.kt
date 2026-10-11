@@ -59,6 +59,7 @@ import app.apex.source.RemotePlaylist
 import app.apex.state.Loadable
 import app.apex.state.Page
 import app.apex.state.Paged
+import app.apex.ui.components.PAGE_MAX_WIDTH
 import app.apex.ui.components.ErrorBox
 import app.apex.ui.components.OnNearEnd
 import androidx.compose.runtime.LaunchedEffect
@@ -120,20 +121,14 @@ fun LibraryScreen(tab: LibraryTab) {
     LaunchedEffect(tab, hasYouTube) { if (tab == LibraryTab.Playlists && hasYouTube) remotePlaylists.loadIfNeeded() }
     OnNearEnd(listState) { if (source == 1) remoteList?.loadMore() }
 
-    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+    // Encostada no canto esquerdo da página (sem flutuar no meio em janelas largas); as abas ficam só na barra lateral.
+    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopStart) {
         LazyColumn(
-            Modifier.widthIn(max = 1100.dp).fillMaxWidth(),
+            Modifier.widthIn(max = PAGE_MAX_WIDTH).fillMaxWidth(),
             state = listState,
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item("tabs") {
-                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    LibraryTab.entries.forEach { t ->
-                        ApexChip(t.label, t == tab, { app.nav.replaceTop(Route.Library(t)) })
-                    }
-                }
-            }
             if (remoteList != null) {
                 item("source") {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -145,8 +140,8 @@ fun LibraryScreen(tab: LibraryTab) {
             if (source == 1 && remoteList != null) {
                 item("r-title") { SectionTitle("${tab.label} no YouTube") }
                 if (remoteItems.isEmpty() && !remoteLoading) item("r-empty") {
-                    if (remoteError != null) ErrorBox(remoteError.orEmpty(), { remoteList.refresh() })
-                    else EmptyState(Icons.Rounded.History, "Nada por aqui", "Esta lista da sua conta está vazia.")
+                    if (remoteError != null) LibraryError(remoteError.orEmpty(), { remoteList.refresh() })
+                    else LibraryEmpty(Icons.Rounded.History, "Nada por aqui", "Esta lista da sua conta está vazia.")
                 }
                 items(remoteItems.distinctBy { it.key }, key = { "r-" + it.key }) { VideoRow(it, upNext = remoteItems.filter { m -> m.key != it.key }) }
                 if (remoteLoading) item("r-loading") { Text("Carregando…", color = ApexColors.Muted) }
@@ -161,7 +156,7 @@ fun LibraryScreen(tab: LibraryTab) {
                         )
                     }
                     if (history.isEmpty()) item("h-empty") {
-                        EmptyState(Icons.Rounded.History, "Nada por aqui", "Os vídeos e lives que você assistir aparecem neste histórico.")
+                        LibraryEmpty(Icons.Rounded.History, "Nada por aqui", "Os vídeos e lives que você assistir aparecem neste histórico.")
                     }
                     items(history.distinctBy { it.media.key }, key = { it.media.key }) { e ->
                         VideoRow(
@@ -180,7 +175,7 @@ fun LibraryScreen(tab: LibraryTab) {
                         )
                     }
                     if (later.isEmpty()) item("w-empty") {
-                        EmptyState(Icons.Rounded.WatchLater, "Lista vazia", "Salve vídeos com o botão do relógio e eles ficam aqui.")
+                        LibraryEmpty(Icons.Rounded.WatchLater, "Lista vazia", "Salve vídeos com o botão do relógio e eles ficam aqui.")
                     }
                     items(later.distinctBy { it.key }, key = { it.key }) { m ->
                         VideoRow(
@@ -199,7 +194,7 @@ fun LibraryScreen(tab: LibraryTab) {
                         )
                     }
                     if (liked.isEmpty()) item("l-empty") {
-                        EmptyState(Icons.Rounded.ThumbUp, "Nenhuma curtida", "Os vídeos que você curtir aparecem aqui.")
+                        LibraryEmpty(Icons.Rounded.ThumbUp, "Nenhuma curtida", "Os vídeos que você curtir aparecem aqui.")
                     }
                     items(liked.distinctBy { it.key }, key = { it.key }) { m ->
                         VideoRow(
@@ -219,13 +214,13 @@ fun LibraryScreen(tab: LibraryTab) {
                     }
                     when {
                         !hasYouTube -> item("c-login") {
-                            EmptyState(Icons.Rounded.ContentCut, "Entre no YouTube", "Os clipes que você criou aparecem aqui. Entre na sua conta em Ajustes › Contas.")
+                            LibraryEmpty(Icons.Rounded.ContentCut, "Entre no YouTube", "Os clipes que você criou aparecem aqui. Entre na sua conta em Ajustes › Contas.")
                         }
                         clipItems.isNotEmpty() -> items(clipItems, key = { "c-" + it.key }) { VideoRow(it, upNext = clipItems.filter { m -> m.key != it.key }) }
                         clipsLoading -> item("c-loading") { Text("Carregando…", color = ApexColors.Muted) }
-                        clipsError != null -> item("c-error") { ErrorBox(clipsError.orEmpty(), { myClips?.refresh() }) }
+                        clipsError != null -> item("c-error") { LibraryError(clipsError.orEmpty(), { myClips?.refresh() }) }
                         else -> item("c-empty") {
-                            EmptyState(Icons.Rounded.ContentCut, "Nenhum clipe", "Crie clipes no YouTube (botão Clipe, abaixo do vídeo) e eles aparecem aqui. Para ver clipes da Twitch e da Kick, abra a aba Clipes do canal.")
+                            LibraryEmpty(Icons.Rounded.ContentCut, "Nenhum clipe", "Crie clipes no YouTube (botão Clipe, abaixo do vídeo) e eles aparecem aqui. Para ver clipes da Twitch e da Kick, abra a aba Clipes do canal.")
                         }
                     }
                 }
@@ -237,7 +232,7 @@ fun LibraryScreen(tab: LibraryTab) {
                         )
                     }
                     if (playlists.isEmpty()) item("p-empty") {
-                        EmptyState(Icons.Rounded.PlaylistPlay, "Sem playlists", "Crie uma playlist e adicione vídeos pelo menu de cada vídeo.")
+                        LibraryEmpty(Icons.Rounded.PlaylistPlay, "Sem playlists", "Crie uma playlist e adicione vídeos pelo menu de cada vídeo.")
                     } else item("p-grid") {
                         PlaylistGrid(playlists)
                     }
@@ -258,6 +253,13 @@ fun LibraryScreen(tab: LibraryTab) {
         newPlaylist = false
     }
 }
+
+/** Estados vazios e erros da biblioteca começam no canto esquerdo, como as listas. */
+@Composable
+private fun LibraryEmpty(icon: ImageVector, title: String, message: String) = EmptyState(icon, title, message, alignStart = true)
+
+@Composable
+private fun LibraryError(message: String, onRetry: (() -> Unit)?) = ErrorBox(message, onRetry, alignStart = true)
 
 @Composable
 private fun PlaylistGrid(playlists: List<LocalPlaylist>) {

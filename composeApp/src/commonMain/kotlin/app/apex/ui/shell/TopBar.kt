@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Menu
@@ -48,6 +49,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -89,13 +92,15 @@ fun TopBar(onToggleSidebar: () -> Unit) {
         IconBtn(Icons.Rounded.Menu, "Menu", onToggleSidebar)
         Logo(Modifier.clickable { app.nav.goRoot(Route.Home) }.padding(horizontal = 6.dp))
         if (app.nav.canGoBack) IconBtn(Icons.Rounded.ArrowBack, "Voltar", { app.nav.back() })
+        if (app.nav.canGoForward) IconBtn(Icons.Rounded.ArrowForward, "Avançar", { app.nav.forward() })
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { SearchField(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 16.dp)) }
         IconBtn(Icons.Rounded.Refresh, "Atualizar", { refreshCurrent(app) })
         AccountButton()
     }
 }
 
-private fun refreshCurrent(app: app.apex.AppContainer) {
+/** Atualiza a tela de cima (o botão da barra, F5 e Ctrl+R). */
+internal fun refreshCurrent(app: app.apex.AppContainer) {
     when (app.nav.current) {
         is Route.Home -> app.screens.home.refresh()
         is Route.Live -> app.screens.live.refresh()
@@ -121,7 +126,16 @@ private fun SearchField(modifier: Modifier) {
     var text by remember { mutableStateOf("") }
     var focused by remember { mutableStateOf(false) }
     var popupHover by remember { mutableStateOf(false) }
+    var fieldHover by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf(emptyList<String>()) }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    // Um clique fora da barra e das sugestões tira o cursor dela, e as sugestões somem.
+    LaunchedEffect(app.ui.pressTick) {
+        if (app.ui.pressTick > 0 && focused && !fieldHover && !popupHover) { popupHover = false; focusManager.clearFocus() }
+    }
+    // "/" e Ctrl+K (ver App.kt) pedem o cursor aqui.
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(app.ui.focusSearchTick) { if (app.ui.focusSearchTick > 0) runCatching { searchFocus.requestFocus() } }
 
     LaunchedEffect(route) { text = if (route is Route.Search) route.query else "" }
     LaunchedEffect(text, focused) {
@@ -142,7 +156,7 @@ private fun SearchField(modifier: Modifier) {
     var fieldWidth by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
 
-    Box(modifier.onSizeChanged { fieldWidth = it.width }) {
+    Box(modifier.onSizeChanged { fieldWidth = it.width }.hoverableFlag { fieldHover = it }) {
         // Como no YouTube: o campo arredondado e, colado nele à direita, o botão de pesquisar.
         Row(Modifier.fillMaxWidth().height(42.dp)) {
             Row(
@@ -165,6 +179,7 @@ private fun SearchField(modifier: Modifier) {
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = { submit() }),
                         modifier = Modifier.fillMaxWidth()
+                            .focusRequester(searchFocus)
                             .onFocusChanged { focused = it.isFocused; app.ui.typing = it.isFocused }
                             .onPreviewKeyEvent {
                                 if (it.type == KeyEventType.KeyDown && it.key == Key.Enter) { submit(); true } else false

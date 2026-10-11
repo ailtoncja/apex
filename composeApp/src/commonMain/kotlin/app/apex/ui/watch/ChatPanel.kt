@@ -35,8 +35,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.SpanStyle
@@ -62,12 +69,13 @@ import app.apex.chat.YouTubeChat
 import app.apex.model.Media
 import app.apex.model.Platform
 import app.apex.theme.ApexColors
+import app.apex.theme.readableOn
 import app.apex.ui.components.IconBtn
 import kotlinx.coroutines.launch
 
 /** O chat de uma live (ao vivo). */
 @Composable
-fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
+fun ChatPanel(media: Media, modifier: Modifier = Modifier, onHide: (() -> Unit)? = null) {
     val app = LocalApp.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val client: ChatClient = remember(media.key) {
@@ -76,6 +84,7 @@ fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
                 app.scope, media.id,
                 token = { app.twitch.authToken },
                 accountLogin = { app.data.account(Platform.Twitch)?.displayName },
+                history = { app.twitch.recentChatMessages(media.id) },
             )
             Platform.Kick -> KickChat(app.scope, media.id, app.kick)
             Platform.YouTube -> YouTubeChat(app.scope, media.id, app.youtube)
@@ -88,15 +97,18 @@ fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
     val messages by client.messages.collectAsState()
     val status by client.status.collectAsState()
     var text by remember(media.key) { mutableStateOf("") }
+    // Enter na página da live (ver App.kt) leva o cursor para cá.
+    val inputFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(app.ui.focusChatTick) { if (app.ui.focusChatTick > 0) runCatching { inputFocus.requestFocus() } }
 
     fun submit() {
         val t = text.trim()
         if (t.isEmpty() || !client.canSend) return
         text = ""
-        scope.launch { if (!client.send(t)) app.toast("Não foi possível enviar a mensagem") }
+        scope.launch { if (!client.send(t)) app.toast(client.lastSendError ?: "Não foi possível enviar a mensagem") }
     }
 
-    ChatSurface("Chat da live", status == "Chat ao vivo", status, messages, modifier) {
+    ChatSurface("Chat da live", status == "Chat ao vivo", status, messages, modifier, onHide) {
         Row(
             Modifier.fillMaxWidth().background(ApexColors.SurfaceHigh).padding(10.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -104,7 +116,7 @@ fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
             Box(Modifier.weight(1f).clip(RoundedCornerShape(50)).background(ApexColors.Background).padding(horizontal = 14.dp, vertical = 9.dp)) {
                 if (text.isEmpty()) {
                     Text(
-                        if (client.canSend) "Enviar mensagem" else "Entre na conta para escrever no chat",
+                        if (client.canSend) "Enviar mensagem" else client.sendHint,
                         color = ApexColors.Faint, fontSize = 14.sp, maxLines = 1,
                     )
                 }
@@ -114,7 +126,10 @@ fun ChatPanel(media: Media, modifier: Modifier = Modifier) {
                     cursorBrush = SolidColor(ApexColors.Accent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { submit() }),
-                    modifier = Modifier.fillMaxWidth().onFocusChanged { app.ui.typing = it.isFocused },
+                    modifier = Modifier.fillMaxWidth().focusRequester(inputFocus).onFocusChanged { app.ui.typing = it.isFocused }.onPreviewKeyEvent {
+                        // Enter envia (a ação "enviar" do teclado nem sempre dispara no desktop).
+                        if (it.type == KeyEventType.KeyDown && it.key == Key.Enter) { submit(); true } else false
+                    },
                 )
             }
             IconBtn(Icons.Rounded.Send, "Enviar", { submit() }, size = 36.dp, iconSize = 18.dp, tint = if (client.canSend) ApexColors.Accent else ApexColors.Faint)
@@ -170,7 +185,8 @@ internal fun ReplayChatPanel(source: ReplaySource, key: Any, position: () -> Lon
 /** A moldura do chat (ao vivo ou gravado): título, estado, a lista de mensagens que desce sozinha e o rodapé de cada um. */
 @Composable
 private fun ChatSurface(
-    title: String, active: Boolean, status: String, messages: List<ChatMessage>, modifier: Modifier, footer: @Composable () -> Unit,
+    title: String, active: Boolean, status: String, messages: List<ChatMessage>, modifier: Modifier, onHide: (() -> Unit)? = null,
+    footer: @Composable () -> Unit,
 ) {
     val app = LocalApp.current
     val listState = rememberLazyListState()
@@ -194,7 +210,7 @@ private fun ChatSurface(
                 maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.End,
             )
             // Oculta o chat inteiro (e para de ler as mensagens); "Mostrar chat" volta pela coluna ao lado do vídeo.
-            IconBtn(Icons.Rounded.VisibilityOff, "Ocultar o chat", { app.data.updateSettings { it.copy(showChat = false) } }, size = 28.dp, iconSize = 18.dp)
+            IconBtn(Icons.Rounded.VisibilityOff, "Ocultar o chat", onHide ?: { app.data.updateSettings { it.copy(showChat = false) } }, Modifier.testTag("chat-hide"), size = 28.dp, iconSize = 18.dp)
         }
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
@@ -205,7 +221,7 @@ private fun ChatSurface(
             items(messages, key = { it.id }) { m ->
                 Text(
                     buildAnnotatedString {
-                        withStyle(SpanStyle(color = Color(m.color ?: 0xFFFFFFFF), fontWeight = FontWeight.Bold)) { append(m.author) }
+                        withStyle(SpanStyle(color = authorColor(m.color), fontWeight = FontWeight.Bold)) { append(m.author) }
                         append("  ")
                         append(m.text)
                     },
@@ -216,3 +232,6 @@ private fun ChatSurface(
         footer()
     }
 }
+
+/** O nome de quem escreveu tem a cor que a pessoa escolheu na plataforma, ajustada para ler bem sobre o fundo do chat (em qualquer tema). */
+private fun authorColor(argb: Long?): Color = readableOn(if (argb != null) Color(argb) else ApexColors.OnSurface, ApexColors.Surface)

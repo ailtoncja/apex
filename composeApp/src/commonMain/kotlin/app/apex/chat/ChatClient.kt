@@ -1,5 +1,8 @@
 package app.apex.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import app.apex.model.ChatMessage
 import app.apex.source.Http
 import app.apex.source.KickSource
@@ -24,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.put
 import kotlin.math.abs
 
@@ -39,7 +43,19 @@ abstract class ChatClient(protected val scope: CoroutineScope) {
 
     abstract val canSend: Boolean
 
+    /** O que o campo de escrever diz quando não dá para escrever. */
+    open val sendHint: String get() = "Entre na conta para escrever no chat"
+
+    /** Por que o último [send] não foi (quando a plataforma disse); `null` = sem motivo conhecido. */
+    var lastSendError: String? = null
+        protected set
+
     private var job: Job? = null
+
+    /** As mensagens já mostradas, pelo id: o histórico e o chat ao vivo trazem as mesmas nos primeiros segundos, e cada uma aparece uma vez só. */
+    private val seen: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val counter = java.util.concurrent.atomic.AtomicInteger()
+    private var historyLoaded = false
 
     fun start() {
         if (job != null) return
@@ -68,8 +84,30 @@ abstract class ChatClient(protected val scope: CoroutineScope) {
         job = null
     }
 
-    protected fun push(message: ChatMessage) {
+    /** Mostra [message], se ainda não apareceu; `false` quando é repetida (mesmo id). */
+    protected fun push(message: ChatMessage): Boolean {
+        if (!seen.add(message.id)) return false
         _messages.update { (it + message).takeLast(300) }
+        return true
+    }
+
+    /** Um id para a mensagem que veio sem o seu; nunca se repete, mesmo com o chat cheio. */
+    protected fun localId(prefix: String) = "$prefix-${counter.incrementAndGet()}"
+
+    /**
+     * As mensagens que já estavam no chat antes de entrar (cada plataforma entrega as últimas dezenas): aparecem na primeira conexão, antes
+     * do chat ao vivo; numa reconexão o chat continua de onde estava. Falhar ou demorar em buscá-las não impede o chat.
+     */
+    protected suspend fun loadHistory(fetch: suspend () -> List<ChatMessage>) {
+        if (historyLoaded) return
+        historyLoaded = true
+        val history = runCatching { withTimeoutOrNull(HISTORY_TIMEOUT_MS) { fetch() } }.getOrNull().orEmpty()
+        app.apex.util.Timing.mark("chat: ${history.size} mensagens de antes de entrar")
+        history.forEach { push(it) }
+    }
+
+    private companion object {
+        const val HISTORY_TIMEOUT_MS = 6_000L
     }
 
     protected abstract suspend fun connect()
@@ -95,12 +133,15 @@ class TwitchChat(
     private val http: HttpClient = Http.client,
     private val token: () -> String?,
     private val accountLogin: () -> String?,
+    /** As últimas mensagens do chat, de antes de entrar (a Twitch só as entrega com a conta; ver [app.apex.source.TwitchSource.recentChatMessages]). */
+    private val history: suspend () -> List<ChatMessage> = { emptyList() },
 ) : ChatClient(scope) {
     private var session: DefaultClientWebSocketSession? = null
 
     override val canSend: Boolean get() = token() != null && accountLogin() != null
 
     override suspend fun connect() {
+        loadHistory(history)
         http.webSocket("wss://irc-ws.chat.twitch.tv:443") {
             session = this
             val oauth = token()
@@ -133,7 +174,7 @@ class TwitchChat(
                 if (text.startsWith("\u0001ACTION ")) text = text.removePrefix("\u0001ACTION ").removeSuffix("\u0001")
                 push(
                     ChatMessage(
-                        id = irc.tags["id"] ?: "${name.hashCode()}${text.hashCode()}${_messages.value.size}",
+                        id = irc.tags["id"] ?: localId("irc"),
                         author = name,
                         text = text,
                         color = parseHexColor(irc.tags["color"]) ?: colorFromName(name),
@@ -150,7 +191,7 @@ class TwitchChat(
         if (!canSend) return false
         s.send(Frame.Text("PRIVMSG #${login.lowercase()} :$text"))
         val me = accountLogin().orEmpty()
-        push(ChatMessage("me${text.hashCode()}${_messages.value.size}", me, text, colorFromName(me)))
+        push(ChatMessage(localId("me"), me, text, colorFromName(me)))
         return true
     }
 }
@@ -186,7 +227,14 @@ class YouTubeChat(
     private val videoId: String,
     private val youtube: app.apex.source.YouTubeSource,
 ) : ChatClient(scope) {
-    override val canSend: Boolean get() = false
+    /** O código de envio do chat desta live; só aparece com a conta logada e o chat aberto para ela. */
+    private var sendParams by mutableStateOf<String?>(null)
+    private var restriction by mutableStateOf<String?>(null)
+
+    override val canSend: Boolean get() = youtube.tube.loggedIn && sendParams != null
+
+    override val sendHint: String
+        get() = if (youtube.tube.loggedIn) restriction ?: "O chat desta live não está aberto para você escrever" else super.sendHint
 
     override suspend fun connect() {
         var continuation = when (val start = youtube.liveChat(videoId)) {
@@ -194,15 +242,16 @@ class YouTubeChat(
             is app.apex.source.LiveChatStart.Unavailable -> throw ChatUnavailable(start.message)
         }
         _status.value = "Chat ao vivo"
-        val seen = HashSet<String>()
         while (true) {
             val resp = youtube.tube.call("live_chat/get_live_chat") { put("continuation", continuation) } ?: error("Sem resposta do chat")
             val live = resp.path("continuationContents", "liveChatContinuation")
+            if (live != null) {
+                youtube.chatSendParams(live)?.let { sendParams = it }
+                youtube.chatRestriction(live)?.let { restriction = it }
+            }
             live["actions"].list().forEach { action ->
                 val item = action.path("addChatItemAction", "item", "liveChatTextMessageRenderer") ?: return@forEach
-                val message = parseYoutubeChatItem(item) ?: return@forEach
-                if (!seen.add(message.id)) return@forEach
-                push(message)
+                push(parseYoutubeChatItem(item) ?: return@forEach)
             }
             val next = live["continuations"][0]
             val data = next["timedContinuationData"] ?: next["invalidationContinuationData"] ?: next["reloadContinuationData"] ?: error("Chat encerrado")
@@ -211,7 +260,16 @@ class YouTubeChat(
         }
     }
 
-    override suspend fun send(text: String): Boolean = false
+    override suspend fun send(text: String): Boolean {
+        lastSendError = null
+        val params = sendParams ?: run { lastSendError = sendHint; return false }
+        val sent = runCatching { youtube.sendChatMessage(params, text) }.getOrNull()
+        if (sent == null) { lastSendError = "Sem conexão com o YouTube."; return false }
+        if (sent.result != app.apex.source.PostResult.Posted) { lastSendError = sent.reason; return false }
+        // A mensagem volta na resposta: aparece já, e o chat (que a traz de novo daqui a alguns segundos) a ignora.
+        sent.message?.let { push(it) }
+        return true
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -222,10 +280,15 @@ class KickChat(
     private val kick: KickSource,
     private val http: HttpClient = Http.client,
 ) : ChatClient(scope) {
-    override val canSend: Boolean get() = false
+    /** A sala do chat do canal (conhecida depois que conectou). */
+    @Volatile private var chatroom: Long? = null
+
+    override val canSend: Boolean get() = kick.sessionToken != null
 
     override suspend fun connect() {
-        val chatroom = kick.chatroomId(slug) ?: error("Chat da Kick indisponível")
+        val chatroom = (chatroom ?: kick.chatroomId(slug)) ?: error("Chat da Kick indisponível")
+        this.chatroom = chatroom
+        loadHistory { kick.recentChat(slug) }
         http.webSocket("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false") {
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
@@ -241,7 +304,7 @@ class KickChat(
                         val color = parseHexColor(data.path("sender", "identity", "color").str()) ?: colorFromName(name)
                         push(
                             ChatMessage(
-                                id = data["id"].str() ?: "${name.hashCode()}${_messages.value.size}",
+                                id = data["id"].str() ?: localId("kick"),
                                 author = name,
                                 text = cleanKickText(data["content"].str().orEmpty()),
                                 color = color,
@@ -254,7 +317,14 @@ class KickChat(
         }
     }
 
-    override suspend fun send(text: String): Boolean = false
+    override suspend fun send(text: String): Boolean {
+        lastSendError = null
+        val room = chatroom ?: kick.chatroomId(slug)?.also { chatroom = it }
+        if (room == null) { lastSendError = "O chat da Kick ainda não conectou."; return false }
+        val reason = runCatching { kick.sendChat(room, text) }.getOrElse { "Sem conexão com a Kick." }
+        lastSendError = reason
+        return reason == null
+    }
 }
 
 /** As figurinhas da Kick vêm como `[emote:1234:nome]`; deixa só o nome. */

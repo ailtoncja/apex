@@ -68,7 +68,20 @@ class UiState {
     /** F11: a janela sem barra de título e sem a barra de tarefas, com o app inteiro visível. */
     var windowFullscreen by mutableStateOf(false)
     var miniPlayerHidden by mutableStateOf(false)
+
+    /** O chat ao lado das lives do Multi. */
+    var multiChat by mutableStateOf(true)
+
+    /** Sobe a cada clique em qualquer lugar da janela: as listas de sugestões fecham quando o clique cai fora delas. */
+    var pressTick by androidx.compose.runtime.mutableIntStateOf(0)
     var typing by mutableStateOf(false)
+
+    /** Pedidos de foco feitos pelos atalhos (cada aumento leva o cursor ao campo): "/" e Ctrl+K na pesquisa, Enter no chat da live. */
+    var focusSearchTick by androidx.compose.runtime.mutableIntStateOf(0)
+    var focusChatTick by androidx.compose.runtime.mutableIntStateOf(0)
+
+    /** A lista de atalhos (tecla "?" ou F1). */
+    var shortcutsOpen by mutableStateOf(false)
     var chatVisible by mutableStateOf(true)
     var toast by mutableStateOf<String?>(null)
 
@@ -82,15 +95,28 @@ class AppContainer(
     val data: UserData,
     val extractor: Extractor,
     val player: PlayerController,
+    /** Um player novo para cada live do Multi (no Windows, um VlcPlayerController a mais). */
+    val newPlayer: () -> PlayerController,
+    /** O cliente de rede do YouTube (os testes põem um de mentira). */
+    youtubeHttp: io.ktor.client.HttpClient = app.apex.source.Http.client,
+    /** Abrir os vídeos do YouTube pela via rápida (sem o yt-dlp). Os testes desligam, para não falarem com o YouTube de verdade. */
+    fastYoutube: Boolean = true,
+    /** O preparo das lives do Multi; `null` = o mesmo da sessão (os testes põem um de mentira). */
+    tileResolve: (suspend (Media) -> app.apex.model.Resolved)? = null,
 ) {
-    val tube = InnerTube()
+    val tube = InnerTube(youtubeHttp)
     val youtube = YouTubeSource(tube)
     val twitch = TwitchSource()
     val kick = KickSource()
 
     val nav = Navigator()
     val ui = UiState()
-    val session = PlaybackSession(scope, player, extractor, twitch, kick, data)
+    val session = PlaybackSession(scope, player, extractor, twitch, kick, data, if (fastYoutube) app.apex.source.YouTubeFast(tube)::resolve else null)
+    /** Várias lives ao mesmo tempo. Ao começar, para o player principal: dois sons ao mesmo tempo não dá. */
+    val multi = app.apex.multi.MultiStream(scope, data, newPlayer, tileResolve ?: { session.resolve(it) }, beforeStart = {
+        if (session.current.value != null) session.close()
+        ui.miniPlayerHidden = true
+    })
     val cloud = CloudAccount(scope, data, app.apex.source.Http.client)
     /** Quem a pessoa segue está ao vivo: conferido sozinho, em segundo plano (antes das telas, que leem daqui). */
     val liveWatcher = app.apex.state.LiveWatcher(this)
@@ -234,10 +260,81 @@ class AppContainer(
         }
     }
 
+    /** Põe [medias] no Multi (as que couberem) e abre a tela dele. */
+    fun openMulti(medias: List<Media> = emptyList()) {
+        var full = false
+        for (m in medias) if (!multi.add(m) && multi.isFull) full = true
+        if (full) toast("O Multi comporta até ${app.apex.multi.MultiStream.MAX} lives.")
+        nav.goRoot(Route.Multi)
+    }
+
+    /** Põe [media] no Multi, avisando o que aconteceu. `true` se entrou. */
+    fun addToMulti(media: Media): Boolean {
+        val name = media.channel?.name ?: media.id
+        return when {
+            multi.medias.any { it.key == media.key } -> { toast("$name já está no Multi"); false }
+            multi.isFull -> { toast("O Multi comporta até ${app.apex.multi.MultiStream.MAX} lives."); false }
+            else -> { multi.add(media); toast("$name entrou no Multi"); true }
+        }
+    }
+
+    /**
+     * O campo do Multi: um link (de qualquer plataforma, inclusive multitwitch/multikick e a página de um canal do YouTube) ou o nome de um
+     * canal da [platform] (no YouTube, o @handle ou o nome; a live dele é procurada em segundo plano). `true` quando entrou ou está a caminho.
+     */
+    fun addToMulti(text: String, platform: Platform): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return false
+        val medias = when (val target = app.apex.source.parseLink(t)) {
+            is app.apex.source.LinkTarget.Play -> listOf(target.media)
+            is app.apex.source.LinkTarget.Multi -> target.medias
+            is app.apex.source.LinkTarget.YouTubeChannel -> { addYoutubeChannelLive(target.ref); return true }
+            is app.apex.source.LinkTarget.YouTubeClip -> { toast("Clipes não entram no Multi."); return false }
+            null -> when {
+                platform == Platform.YouTube -> { addYoutubeChannelLive(t); return true }
+                else -> listOf(app.apex.source.liveFromName(t, platform) ?: run { toast("Digite o nome de um canal da ${platform.label}, ou cole um link."); return false })
+            }
+        }
+        return medias.count { addToMulti(it) } > 0
+    }
+
+    /**
+     * Um canal seguido, escolhido nas sugestões do Multi: entra a live dele se está no ar; senão o próprio canal (na Twitch e na Kick o quadro
+     * avisa que está offline; no YouTube a live é procurada).
+     */
+    fun addChannelToMulti(channel: Channel): Boolean {
+        liveWatcher.live.value.firstOrNull { it.channel?.key == channel.key }?.let { return addToMulti(it) }
+        return when (channel.platform) {
+            Platform.YouTube -> addToMulti(channel.id, Platform.YouTube)
+            else -> app.apex.source.liveFromName(channel.id, channel.platform)?.let { addToMulti(it.copy(title = channel.name, channel = channel)) } ?: false
+        }
+    }
+
+    /** Procura a live de um canal do YouTube ([ref]: @handle, nome ou id) e põe no Multi; avisa se o canal não existe ou não está ao vivo. */
+    private fun addYoutubeChannelLive(ref: String) {
+        val shown = ref.trim()
+        toast("Procurando a live de $shown no YouTube…")
+        scope.launch {
+            val id = runCatching { youtube.findChannelId(shown) }.getOrNull()
+            if (id == null) return@launch toast("Não achei o canal \"$shown\" no YouTube.")
+            val live = runCatching { youtube.channelLive(id) }.getOrNull()
+            if (live == null) return@launch toast("$shown não está ao vivo no YouTube agora.")
+            addToMulti(live)
+        }
+    }
+
     /** Se [text] é um link de vídeo, live, VOD ou clipe, abre direto e devolve `true`. */
     fun openLink(text: String): Boolean {
         when (val target = app.apex.source.parseLink(text) ?: return false) {
             is app.apex.source.LinkTarget.Play -> openMedia(target.media)
+            is app.apex.source.LinkTarget.Multi -> openMulti(target.medias)
+            is app.apex.source.LinkTarget.YouTubeChannel -> {
+                scope.launch {
+                    val id = runCatching { youtube.findChannelId(target.ref) }.getOrNull()
+                    if (id == null) toast("Não achei o canal \"${target.ref}\" no YouTube.")
+                    else openChannel(app.apex.model.Channel(Platform.YouTube, id, target.ref.removePrefix("@"), url = "https://www.youtube.com/channel/$id"))
+                }
+            }
             is app.apex.source.LinkTarget.YouTubeClip -> {
                 toast("Abrindo o clipe…")
                 scope.launch {
@@ -254,6 +351,23 @@ class AppContainer(
         if (openLink(query)) return
         data.addSearchHistory(query)
         nav.push(Route.Search(query.trim(), filters))
+    }
+
+    /** O volume máximo agora: 200% com o reforço ligado (Ajustes), 100% sem ele. */
+    val maxVolume: Int get() = app.apex.player.maxVolume(data.settings.value.volumeBoost)
+
+    /** Muda o volume e guarda nos ajustes: o próximo vídeo e as lives do Multi já abrem com ele. */
+    fun setVolume(percent: Int) {
+        val v = percent.coerceIn(0, maxVolume)
+        app.apex.util.Timing.mark("volume: pedido $percent -> $v (estado ${player.state.value.volume}, máximo $maxVolume)")
+        player.setVolume(v)
+        data.updateSettings { it.copy(volume = v) }
+    }
+
+    /** Liga ou desliga o volume acima de 100%; desligando, um volume que passava de 100% desce para 100% na hora. */
+    fun setVolumeBoost(on: Boolean) {
+        data.updateSettings { it.copy(volumeBoost = on) }
+        if (!on && data.settings.value.volume > app.apex.player.NORMAL_VOLUME) setVolume(app.apex.player.NORMAL_VOLUME)
     }
 
     fun toast(message: String) {

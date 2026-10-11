@@ -1,6 +1,19 @@
 package app.apex.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Dialog
+import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -88,5 +101,68 @@ fun FilterTextField(value: String, onChange: (String) -> Unit, placeholder: Stri
                 modifier = Modifier.size(16.dp).clip(CircleShape).clickable { onChange("") },
             )
         }
+    }
+}
+
+
+/** O botão "Filtros" do canto direito, como o do YouTube (com quantos filtros estão ligados). */
+@Composable
+fun FiltersButton(count: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    Row(
+        modifier.clip(RoundedCornerShape(50)).hoverable(source)
+            .background(if (hovered) ApexColors.SurfaceHighest else ApexColors.SurfaceHigh)
+            .clickable(interactionSource = source, indication = null, onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(Icons.Rounded.Tune, null, Modifier.size(18.dp), tint = ApexColors.OnSurface)
+        Text(if (count > 0) "Filtros ($count)" else "Filtros", style = MaterialTheme.typography.labelLarge, color = ApexColors.OnSurface)
+    }
+}
+
+/**
+ * A janela de filtros, como a do YouTube: o [title], os botões "Limpar tudo" (só se há algo ligado) e "Concluído", e embaixo as colunas
+ * ([FilterColumn]) que a tela mandar em [content].
+ */
+@Composable
+fun FiltersSheet(title: String, anyActive: Boolean, onClear: () -> Unit, onClose: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(shape = RoundedCornerShape(18.dp), color = ApexColors.SurfaceHigh, modifier = Modifier.widthIn(max = 940.dp).padding(24.dp)) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    if (anyActive) {
+                        ActionButton("Limpar tudo", onClear)
+                        Box(Modifier.width(8.dp))
+                    }
+                    ActionButton("Concluído", onClose, primary = true)
+                }
+                content()
+            }
+        }
+    }
+}
+
+/** Uma coluna da janela de filtros: o nome do grupo em cima e as opções embaixo. */
+@Composable
+fun FilterColumn(title: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(title.uppercase(), style = MaterialTheme.typography.labelMedium, color = ApexColors.Muted, modifier = Modifier.padding(bottom = 6.dp))
+        content()
+    }
+}
+
+/** Uma opção da coluna, com o visto quando está ligada. */
+@Composable
+fun FilterOption(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 7.dp, horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(Modifier.width(18.dp)) { if (selected) Icon(Icons.Rounded.Check, null, tint = ApexColors.Accent, modifier = Modifier.width(18.dp)) }
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = if (selected) ApexColors.OnSurface else ApexColors.OnSurface.copy(alpha = 0.8f), maxLines = 1)
     }
 }

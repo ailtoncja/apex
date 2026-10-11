@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.runtime.Composable
@@ -47,11 +49,13 @@ import app.apex.theme.color
 import app.apex.ui.components.ApexChip
 import app.apex.ui.components.ApexGrid
 import app.apex.ui.components.CategoryCard
+import app.apex.ui.components.ChipBar
 import app.apex.ui.components.EmptyState
 import app.apex.ui.components.ErrorBox
 import app.apex.ui.components.MediaRow
 import app.apex.ui.components.OnNearEnd
 import app.apex.ui.components.SectionTitle
+import app.apex.ui.components.ScrollRow
 import app.apex.ui.components.fullSpan
 import app.apex.ui.components.skeletons
 import app.apex.ui.components.videoItems
@@ -82,12 +86,9 @@ fun LiveScreen(initial: LiveFilter) {
     ApexGrid(state) {
         fullSpan("filters") {
             // Dá para ligar duas plataformas ao mesmo tempo (YouTube + Twitch, por exemplo); "Tudo" desliga os filtros.
-            FlowRow(
-                Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ApexChip("Tudo", platforms.isEmpty(), { live.platforms = emptySet() })
-                Platform.entries.forEach { p -> ApexChip(p.label, p in platforms, { live.platforms = platforms.toggled(p) }, dot = p.color()) }
+            ChipBar(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                item(key = "all") { ApexChip("Tudo", platforms.isEmpty(), { live.platforms = emptySet() }) }
+                items(Platform.entries, key = { it.name }) { p -> ApexChip(p.label, p in platforms, { live.platforms = platforms.toggled(p) }, dot = p.color()) }
             }
         }
 
@@ -149,7 +150,7 @@ internal fun CategoryRowContent(
     }
     Column {
         SectionTitle(title, Modifier.padding(bottom = 12.dp))
-        LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        ScrollRow(arrowCenterY = 68.dp) {
             items(cats, key = { it.id + it.name }) { c -> CategoryCard(c, { onOpen(c) }, Modifier.width(136.dp)) }
         }
     }
@@ -204,7 +205,7 @@ private fun YouTubeCategoryRow(title: String, games: Boolean) {
     }
     Column {
         SectionTitle(title, Modifier.padding(bottom = 12.dp))
-        LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        ScrollRow(arrowCenterY = 68.dp) {
             items(cats, key = { it.id }) { c -> CategoryCard(c, { app.nav.push(Route.Category(Platform.YouTube, c)) }, Modifier.width(136.dp)) }
         }
     }
@@ -240,20 +241,20 @@ fun CategoryScreen(platform: Platform, category: app.apex.model.LiveCategory) {
             )
         }
         fullSpan("filters") {
-            FlowRow(
-                Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (platform == Platform.YouTube) CategoryTab.entries.forEach { t -> ApexChip(t.label, cat.tab == t, { cat.selectTab(t) }) }
-                if (cat.hasLanguage) {
-                    ChipMenu("Idioma", CATEGORY_LANGUAGES, cat.language, { it.label }) { cat.selectLanguage(it) }
-                    ChipMenu("Ordem", ViewerSort.entries, cat.sort, { it.label }) { cat.selectSort(it) }
-                }
-                if (videosTab) {
-                    ChipMenu("Ordenar", listOf(SearchSort.Relevance, SearchSort.UploadDate, SearchSort.Views, SearchSort.Rating), cat.videoSort, { it.label }) { cat.selectVideoSort(it) }
-                    ChipMenu("Data", SearchDate.entries, cat.videoDate, { it.label }) { cat.selectVideoDate(it) }
-                } else {
-                    ChipMenu("Público", ViewerRange.entries, cat.range, { it.label }) { cat.range = it }
+            // Os filtros andam pelas setinhas; a caixa de busca fica fixa à direita.
+            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChipBar(Modifier.weight(1f)) {
+                    if (platform == Platform.YouTube) items(CategoryTab.entries, key = { "t-" + it.name }) { t -> ApexChip(t.label, cat.tab == t, { cat.selectTab(t) }) }
+                    if (cat.hasLanguage) {
+                        item(key = "lang") { ChipMenu("Idioma", CATEGORY_LANGUAGES, cat.language, { it.label }) { cat.selectLanguage(it) } }
+                        item(key = "order") { ChipMenu("Ordem", ViewerSort.entries, cat.sort, { it.label }) { cat.selectSort(it) } }
+                    }
+                    if (videosTab) {
+                        item(key = "vsort") { ChipMenu("Ordenar", listOf(SearchSort.Relevance, SearchSort.UploadDate, SearchSort.Views, SearchSort.Rating), cat.videoSort, { it.label }) { cat.selectVideoSort(it) } }
+                        item(key = "vdate") { ChipMenu("Data", SearchDate.entries, cat.videoDate, { it.label }) { cat.selectVideoDate(it) } }
+                    } else {
+                        item(key = "range") { ChipMenu("Público", ViewerRange.entries, cat.range, { it.label }) { cat.range = it } }
+                    }
                 }
                 FilterTextField(cat.query, { cat.query = it }, "Buscar nesta categoria", Modifier.width(260.dp))
             }

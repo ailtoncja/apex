@@ -4,6 +4,7 @@ import kotlinx.serialization.json.buildJsonObject
 import app.apex.model.ReplayMessage
 import app.apex.model.CLIP_PREFIX
 import app.apex.model.Channel
+import app.apex.model.ChannelSort
 import app.apex.model.Media
 import app.apex.model.Platform
 import app.apex.util.currentTimeMillis
@@ -83,15 +84,31 @@ data class SearchFilters(
         get() = listOf(sort != SearchSort.Relevance, date != SearchDate.Any, duration != SearchDuration.Any, liveOnly, type != SearchType.Any).count { it } + features.size
 }
 
+/** Parâmetro do `browse` da busca dentro de um canal (o mesmo para todos; o texto vai no campo `query`). */
+private const val CHANNEL_SEARCH_TAB = "EgZzZWFyY2jyBgQKAloA"
+
 /** Parâmetro do `browse` que abre a aba "Playlists" de um canal (o mesmo para todos os canais). */
 private const val PLAYLISTS_TAB = "EglwbGF5bGlzdHPyBgQKAkIA"
 
-enum class ChannelTab(val prefix: String) { Videos("UULF"), Lives("UULV") }
+/** As abas do canal: o prefixo da lista de envios do YouTube (`UULF…` = vídeos, `UULV…` = transmissões) e o parâmetro que abre a aba. */
+enum class ChannelTab(val prefix: String, val params: String) {
+    Videos("UULF", "EgZ2aWRlb3PyBgQKAjoA"),
+    Lives("UULV", "EgdzdHJlYW1z8gYECgJ6AA=="),
+}
+
+/** Quem consegue publicar comentários num vídeo (separado para os testes trocarem por um falso). */
+interface CommentPoster {
+    suspend fun commentParams(videoId: String): String?
+    suspend fun postComment(params: String, text: String): PostResult
+}
+
+/** O que aconteceu ao publicar: o YouTube confirmou, recusou, ou respondeu de um jeito que não dá para saber (pode ter publicado). */
+enum class PostResult { Posted, Rejected, Unclear }
 
 /** A conta salva deixou de valer na plataforma (a pessoa precisa entrar de novo). */
 class SessionExpiredException(message: String) : Exception(message)
 
-class YouTubeSource(val tube: InnerTube) {
+class YouTubeSource(val tube: InnerTube) : CommentPoster {
     private val gate = Semaphore(6)
 
     // ---------- busca ----------
@@ -141,10 +158,46 @@ class YouTubeSource(val tube: InnerTube) {
 
     // ---------- canais ----------
 
-    suspend fun channelVideos(channelId: String, tab: ChannelTab = ChannelTab.Videos, continuation: String? = null): VideoPage {
+    /**
+     * Os vídeos (ou as transmissões) de um canal. Do mais novo para o mais velho vem da lista de envios do canal (100 por página); "Mais vistos"
+     * e "Mais antigos" são as ordens que o próprio YouTube oferece na aba do canal (30 por página), pedidas pelo token de cada uma.
+     */
+    suspend fun channelVideos(
+        channelId: String, tab: ChannelTab = ChannelTab.Videos, continuation: String? = null, sort: ChannelSort = ChannelSort.Recent,
+    ): VideoPage {
+        var token = continuation
+        if (token == null && sort != ChannelSort.Recent) {
+            token = channelSortToken(channelId, tab, sort)
+                ?: error("O YouTube não deixou ordenar por \"${sort.label.lowercase()}\" agora. Tente de novo mais tarde.")
+        }
+        val root = tube.call("browse") {
+            if (token != null) put("continuation", token)
+            else put("browseId", "VL" + tab.prefix + channelId.removePrefix("UC"))
+        } ?: return VideoPage(emptyList(), null)
+        return VideoPage(parseVideos(root), root.continuationToken())
+    }
+
+    /** O token que abre a lista do canal na ordem [sort] (o YouTube o dá na própria aba, junto das ordens "Mais recentes", "Em alta" e "Mais antigos"). */
+    private suspend fun channelSortToken(channelId: String, tab: ChannelTab, sort: ChannelSort): String? {
+        val root = tube.call("browse") {
+            put("browseId", channelId)
+            put("params", tab.params)
+        } ?: return null
+        return sortTokens(root).getOrNull(sort.ordinal)
+    }
+
+    /**
+     * Procura [query] nos vídeos do canal inteiro (a busca do próprio YouTube dentro do canal, que acha vídeos de qualquer época, não só os
+     * já carregados na aba). As páginas seguintes vêm pela [continuation].
+     */
+    suspend fun channelSearch(channelId: String, query: String, continuation: String? = null): VideoPage {
         val root = tube.call("browse") {
             if (continuation != null) put("continuation", continuation)
-            else put("browseId", "VL" + tab.prefix + channelId.removePrefix("UC"))
+            else {
+                put("browseId", channelId)
+                put("params", CHANNEL_SEARCH_TAB)
+                put("query", query)
+            }
         } ?: return VideoPage(emptyList(), null)
         return VideoPage(parseVideos(root), root.continuationToken())
     }
@@ -152,6 +205,27 @@ class YouTubeSource(val tube: InnerTube) {
     /** A live no ar neste momento no canal, se houver. */
     suspend fun channelLive(channelId: String): Media? =
         channelVideos(channelId, ChannelTab.Lives).items.firstOrNull { it.isLive }
+
+    /** O id (UC…) do canal com este @handle; `null` se não existe. */
+    suspend fun channelIdByHandle(handle: String): String? {
+        val root = tube.call("navigation/resolve_url") { put("url", "https://www.youtube.com/@${handle.trim().removePrefix("@")}") } ?: return null
+        return root.path("endpoint", "browseEndpoint", "browseId").str()?.takeIf { isChannelId(it) }
+    }
+
+    /**
+     * O id do canal a partir do que a pessoa escreveu: o próprio id (UC…), um @handle, ou um nome (aí vale o primeiro canal que a busca acha).
+     * `null` se não há canal assim.
+     */
+    suspend fun findChannelId(ref: String): String? {
+        val r = ref.trim()
+        if (isChannelId(r)) return r
+        val handle = r.removePrefix("@")
+        if (HANDLE.matches(handle)) channelIdByHandle(handle)?.let { return it }
+        if (r.startsWith("@")) return null
+        return search(r, SearchFilters(channelsOnly = true)).channels.firstOrNull()?.id
+    }
+
+    private fun isChannelId(s: String) = s.length == 24 && s.startsWith("UC")
 
     // ---------- relacionados ----------
 
@@ -431,6 +505,52 @@ class YouTubeSource(val tube: InnerTube) {
         } != null
     }
 
+    // ---------- comentar ----------
+
+    /**
+     * O que o YouTube exige para aceitar um comentário novo neste vídeo (`createCommentParams`), ou `null` se a conta não está logada ou o vídeo
+     * tem os comentários desligados. O código vem do cabeçalho da seção de comentários: a página do vídeo só traz a continuação dela.
+     */
+    override suspend fun commentParams(videoId: String): String? {
+        if (!tube.loggedIn) return null
+        val watch = tube.call("next") { put("videoId", videoId) } ?: return null
+        val token = commentsContinuation(watch) ?: return null
+        val header = tube.call("next") { put("continuation", token) } ?: return null
+        return createCommentParams(header)
+    }
+
+    internal fun commentsContinuation(watchRoot: JsonElement): String? =
+        watchRoot.collect("itemSectionRenderer").map { it.second }
+            .firstOrNull { it["sectionIdentifier"].str() == "comment-item-section" }
+            ?.continuationToken()
+
+    internal fun createCommentParams(headerRoot: JsonElement): String? =
+        headerRoot.collect("createCommentEndpoint").firstNotNullOfOrNull { it.second["createCommentParams"].str() }
+
+    /** Publica um comentário (de primeiro nível) como a conta logada. */
+    override suspend fun postComment(params: String, text: String): PostResult {
+        if (!tube.loggedIn || text.isBlank()) return PostResult.Rejected
+        val root = tube.call("comment/create_comment") {
+            put("commentText", text)
+            put("createCommentParams", params)
+        } ?: return PostResult.Rejected
+        return classifyPostResponse(root)
+    }
+
+    /**
+     * A criação bem-sucedida traz a ação `createCommentAction` (com o comentário novo) ou o status de sucesso; erro e status de falha são recusa.
+     * Qualquer outra forma de resposta fica como [PostResult.Unclear]: pode ter publicado, e repetir o envio duplicaria o comentário.
+     */
+    internal fun classifyPostResponse(root: JsonElement): PostResult {
+        if (root["error"] != null) return PostResult.Rejected
+        val status = root["actionResult"]["status"].str()
+        return when {
+            root.collect("createCommentAction").isNotEmpty() || status == "STATUS_SUCCEEDED" -> PostResult.Posted
+            status != null -> PostResult.Rejected
+            else -> PostResult.Unclear
+        }
+    }
+
     /** Ponto de partida do chat de uma live do YouTube, ou o motivo de não haver chat. */
     suspend fun liveChat(videoId: String): LiveChatStart {
         val root = tube.call("next") { put("videoId", videoId) } ?: return LiveChatStart.Unavailable("Chat indisponível.")
@@ -442,6 +562,44 @@ class YouTubeSource(val tube: InnerTube) {
             it.second.path("availabilityMessage", "messageRenderer", "text", "runs", 0, "text").str()
         }
         return LiveChatStart.Unavailable(reason ?: "Esta live não tem chat.")
+    }
+
+    /** O que deu o envio de uma mensagem no chat de uma live: [result] e, quando o YouTube a devolveu, a própria [message]. */
+    class ChatSend(val result: PostResult, val message: app.apex.model.ChatMessage?, val reason: String?)
+
+    /**
+     * O código que o YouTube exige para escrever no chat desta live (`sendLiveChatMessageEndpoint`). Vem no painel de envio da primeira
+     * resposta do chat e só existe com a conta logada e o chat aberto para ela.
+     */
+    internal fun chatSendParams(liveChatContinuation: JsonElement): String? =
+        liveChatContinuation.collect("sendLiveChatMessageEndpoint").firstNotNullOfOrNull { it.second["params"].str() }
+
+    /** Quando o chat limita quem escreve (só inscritos, só membros…), o YouTube troca o campo por um aviso: devolve o texto dele. */
+    internal fun chatRestriction(liveChatContinuation: JsonElement): String? =
+        liveChatContinuation.collect("liveChatRestrictedParticipationRenderer").firstNotNullOfOrNull { (_, n) ->
+            n["message"]["runs"].list().joinToString("") { it["text"].str().orEmpty() }.trim().takeIf { it.isNotEmpty() }
+        }
+
+    /** Escreve [text] no chat da live com o código [params]. A mensagem volta junto na resposta (o chat só a mostraria alguns segundos depois). */
+    suspend fun sendChatMessage(params: String, text: String): ChatSend {
+        if (!tube.loggedIn || text.isBlank()) return ChatSend(PostResult.Rejected, null, "Entre na conta do YouTube para escrever no chat.")
+        val root = tube.call("live_chat/send_message") {
+            put("params", params)
+            put("clientMessageId", "apex-" + currentTimeMillis() + "-" + (0..99_999).random())
+            put("richMessage", kotlinx.serialization.json.buildJsonObject {
+                put("textSegments", kotlinx.serialization.json.buildJsonArray {
+                    add(kotlinx.serialization.json.buildJsonObject { put("text", text) })
+                })
+            })
+        } ?: return ChatSend(PostResult.Rejected, null, "Sem resposta do YouTube.")
+        return classifyChatSend(root)
+    }
+
+    internal fun classifyChatSend(root: JsonElement): ChatSend {
+        if (root["error"] != null) return ChatSend(PostResult.Rejected, null, root["error"]["message"].str() ?: "O YouTube recusou a mensagem.")
+        val item = root.collect("addChatItemAction").firstNotNullOfOrNull { it.second["item"]["liveChatTextMessageRenderer"] }
+        if (item != null) return ChatSend(PostResult.Posted, app.apex.chat.parseYoutubeChatItem(item), null)
+        return ChatSend(PostResult.Unclear, null, "O YouTube não confirmou a mensagem (modo lento, chat só para inscritos ou mensagem bloqueada).")
     }
 
     /** O que o YouTube devolveu do chat gravado: as mensagens e o código da página seguinte (`null` = acabou). */
@@ -476,6 +634,17 @@ class YouTubeSource(val tube: InnerTube) {
     }
 
     // ---------- leitura ----------
+
+    /**
+     * Os tokens das ordens da aba de um canal, na ordem do YouTube (mais recentes, mais vistos, mais antigos). Na aba de vídeos elas ficam num menu
+     * (`listItemViewModel`); na de transmissões, em botões soltos (`chipViewModel`). Cada um traz um `continuationCommand` com o token.
+     */
+    internal fun sortTokens(root: JsonElement): List<String> {
+        fun firstToken(node: JsonElement): String? = node.collect("continuationCommand").firstNotNullOfOrNull { it.second["token"].str() }
+        val fromMenu = root.collect("listItemViewModel").mapNotNull { firstToken(it.second) }
+        if (fromMenu.size >= 2) return fromMenu
+        return root.collect("chipViewModel").mapNotNull { firstToken(it.second) }
+    }
 
     private fun parseVideos(root: JsonElement): List<Media> {
         val now = currentTimeMillis()
@@ -533,8 +702,9 @@ class YouTubeSource(val tube: InnerTube) {
         val title = meta["title"]["content"].str() ?: return null
         val rows = meta["metadata"]["contentMetadataViewModel"]["metadataRows"].list()
             .map { row -> row["metadataParts"].list().mapNotNull { it["text"]["content"].str() } }
-        val channelName = rows.getOrNull(0)?.firstOrNull()
-        val rest = rows.drop(1).flatten()
+        // Dentro da página de um canal o cartão não repete o nome do canal: a primeira linha já é "visualizações • há tantos dias".
+        val channelName = rows.getOrNull(0)?.firstOrNull()?.takeIf { !looksLikeAge(it) && !looksLikeViews(it) }
+        val rest = (if (channelName != null) rows.drop(1) else rows).flatten()
         val published = rest.firstOrNull { looksLikeAge(it) }
         val views = rest.firstOrNull { it != published && it.any(Char::isDigit) }
         val avatar = meta["image"]["decoratedAvatarViewModel"]["avatar"]["avatarViewModel"]["image"]["sources"][0]["url"].str().httpsUrl()
@@ -563,6 +733,11 @@ class YouTubeSource(val tube: InnerTube) {
             ?: sources.firstOrNull { it.second >= 320 }?.first
             ?: sources.lastOrNull()?.first
             ?: "https://i.ytimg.com/vi/$id/mqdefault.jpg"
+}
+
+private fun looksLikeViews(s: String): Boolean {
+    val t = s.lowercase()
+    return t.contains("visualiza") || t.contains(" view") || t.contains("assistindo") || t.contains("watching")
 }
 
 private fun looksLikeAge(s: String): Boolean {
@@ -646,3 +821,6 @@ internal fun parseActiveMemberships(root: JsonElement, known: List<Channel>): Li
     }
     return out.values.toList()
 }
+
+/** Um @handle do YouTube (sem o @): letras, números, ponto, traço e sublinhado, de 3 a 30 caracteres. */
+private val HANDLE = Regex("""^[A-Za-z0-9._-]{3,30}$""")

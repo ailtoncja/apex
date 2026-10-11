@@ -176,6 +176,7 @@ class YtDlpExtractor(
             userAgent = info["http_headers"]["User-Agent"].str(),
             tags = info["tags"].list().mapNotNull { it.str() },
             isLive = live,
+            fileUrls = if (live) emptyList() else info["formats"].list().filter { isDirect(it) }.mapNotNull { it["url"].str() },
         )
     }
 

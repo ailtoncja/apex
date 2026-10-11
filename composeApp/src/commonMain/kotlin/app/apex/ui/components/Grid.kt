@@ -22,6 +22,9 @@ import app.apex.model.Media
 
 val GridMinWidth = 290.dp
 
+/** A largura máxima do conteúdo de uma página de lista (biblioteca, pesquisa): em janelas bem largas ele para aqui, encostado à esquerda. */
+val PAGE_MAX_WIDTH = 1500.dp
+
 @Composable
 fun ApexGrid(state: LazyGridState, modifier: Modifier = Modifier, content: LazyGridScope.() -> Unit) {
     LazyVerticalGrid(
@@ -61,14 +64,25 @@ fun LazyGridScope.skeletons(count: Int = 8) {
 @Composable
 fun MediaRow(list: List<Media>, modifier: Modifier = Modifier, cardWidth: androidx.compose.ui.unit.Dp = 290.dp) {
     val unique = list.distinctBy { it.key }
-    LazyRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+    // As setas ficam no meio da miniatura (16:9).
+    ScrollRow(modifier, arrowCenterY = cardWidth * 9 / 32, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
         items(unique, key = { it.key }) { VideoCard(it, Modifier.width(cardWidth), upNext = unique.filter { m -> m.key != it.key }) }
     }
 }
 
+/**
+ * A fileira de opções (assuntos, abas, ordens). Com [arrows], é a barra de uma linha como a do YouTube, com as setinhas nas pontas quando não
+ * cabe ([ChipBar]); sem elas, a fileira simples de sempre (a do Início), que anda com Shift + roda do mouse e com o touchpad.
+ */
 @Composable
-fun ChipRow(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    LazyRow(modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(labels.size) { i -> ApexChip(labels[i], selected == i, { onSelect(i) }) }
+fun ChipRow(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, arrows: Boolean = true) {
+    if (arrows) {
+        ChipBar(modifier.padding(vertical = 10.dp)) {
+            items(labels.size) { i -> ApexChip(labels[i], selected == i, { onSelect(i) }) }
+        }
+    } else {
+        LazyRow(modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(labels.size) { i -> ApexChip(labels[i], selected == i, { onSelect(i) }) }
+        }
     }
 }

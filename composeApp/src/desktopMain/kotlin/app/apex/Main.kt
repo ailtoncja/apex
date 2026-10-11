@@ -62,6 +62,7 @@ import coil3.network.ktor3.KtorNetworkFetcherFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okio.Path.Companion.toOkioPath
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
@@ -98,7 +99,7 @@ private fun StartupProblem(error: Throwable) {
                 Spacer(Modifier.height(20.dp))
                 Button(
                     onClick = { runCatching { Desktop.getDesktop().browse(URI("https://www.videolan.org/vlc/")) } },
-                    colors = ButtonDefaults.buttonColors(containerColor = ApexColors.Accent, contentColor = Color.White),
+                    colors = ButtonDefaults.buttonColors(containerColor = ApexColors.Accent, contentColor = ApexColors.OnAccent),
                 ) { Text("Baixar o VLC") }
             }
             Spacer(Modifier.height(24.dp))
@@ -151,6 +152,13 @@ private fun selfTest(updateRehearsal: Boolean = false): Nothing {
 }
 
 fun main(args: Array<String>) {
+    // `APEX_TIMING=1`: grava em `timing.txt` (na pasta de dados) os tempos de cada etapa ao abrir um vídeo.
+    // `APEX_FRAMES=1`: grava em `frames.txt` a fluidez (quadros, GC, CPU, vídeo) a cada 2 s.
+    if (System.getenv("APEX_FRAMES") == "1") app.apex.util.FrameMeter.enabled = true
+    if (System.getenv("APEX_TIMING") == "1") {
+        val file = File(System.getenv("APEX_DATA") ?: ".", "timing.txt")
+        app.apex.util.Timing.sink = { line -> runCatching { file.appendText(line + System.lineSeparator()) } }
+    }
     // No Windows o Java usa um soquete interno (AF_UNIX) numa pasta temporária para cada Selector (rede, Ktor). Em alguns PCs a pasta
     // padrão (AppData\Local\Temp) não aceita isso e a rede inteira dá "Connect timeout". Uma pasta simples só do Apex resolve.
     // Precisa ser definido antes de qualquer uso de rede.
@@ -159,6 +167,8 @@ fun main(args: Array<String>) {
         System.setProperty("java.io.tmpdir", it.absolutePath)
     }
     runCatching { app.apex.source.CookieJar.deleteStale() }
+    // A silhueta do carro dos temas Subaru, se a pessoa pôs uma imagem (ver RallyArt).
+    runCatching { app.apex.ui.shell.RallyArt.silhouette = app.apex.ui.shell.loadRallySilhouette() }
     when (System.getenv("APEX_SELFTEST")) {
         "1" -> selfTest()
         "update" -> selfTest(updateRehearsal = true)
@@ -179,7 +189,13 @@ fun main(args: Array<String>) {
 private fun runApp() = application {
     val dataDir = remember { FileStore.defaultDir() }
     val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
-    val windowState = rememberWindowState(size = DpSize(1360.dp, 820.dp), position = WindowPosition.Aligned(Alignment.Center))
+    // `-Dapex.train=1` (só o Apex.cmd usa): abre numa janela fora da tela, passeia pelas telas e fecha sozinho, para o JVM aprender como o app
+    // roda e montar o cache de inicialização (veja o Apex.cmd). Não mexe nos dados da pessoa: o Apex.cmd aponta `apex.data` para uma pasta à parte.
+    val training = remember { System.getProperty("apex.train") == "1" }
+    val windowState = rememberWindowState(
+        size = DpSize(1360.dp, 820.dp),
+        position = if (training) WindowPosition(-30000.dp, 0.dp) else WindowPosition.Aligned(Alignment.Center),
+    )
 
     setSingletonImageLoaderFactory { context ->
         // Baixa várias imagens ao mesmo tempo (o padrão é 8) e guarda mais no disco: a primeira entrega do Kick e da Twitch demora quase 1 s.
@@ -199,7 +215,7 @@ private fun runApp() = application {
             val bins = Binaries(File(dataDir, "bin"))
             val accounts = DesktopAccounts(dataDir)
             val updater = DesktopUpdater(
-                scope, File(dataDir, "updates"), autoDownload = { data.settings.value.autoUpdate },
+                scope, File(dataDir, "updates"), autoDownload = { data.settings.value.autoUpdate && !training },
                 feedUrl = updateFeed(), trustedPrefix = updatePrefix(),
             )
             val system = DesktopSystem(accounts, updater)
@@ -210,7 +226,8 @@ private fun runApp() = application {
                 data.flush()
                 player.release()
             }
-            AppContainer(scope, system, data, extractor, player).also { navigateFromEnv(it) }
+            AppContainer(scope, system, data, extractor, player, newPlayer = { VlcPlayerController(hardwareDecode = data.settings.value.preferHardwareDecode) })
+                .also { navigateFromEnv(it) }
         }
     }
 
@@ -221,6 +238,21 @@ private fun runApp() = application {
     // Atalho para testes: `APEX_FULLSCREEN=1` abre já em tela cheia (F11), `player` na tela cheia do player; `cycle` entra e, depois de alguns segundos, sai.
     LaunchedEffect(Unit) {
         val app = boot.getOrNull() ?: return@LaunchedEffect
+        if (training) {
+            launch {
+                trainWarmup(app)
+                app.data.flush()
+                app.player.release()
+                exitApplication()
+            }
+        }
+        // `APEX_SEEK=1800@15`: 15 s depois de abrir, pula o vídeo para os 1800 s (para ensaiar o salto na barra de progresso).
+        System.getenv("APEX_SEEK")?.takeIf { it.isNotBlank() }?.let { spec ->
+            launch {
+                kotlinx.coroutines.delay((spec.substringAfter('@', "15").toLongOrNull() ?: 15) * 1_000)
+                spec.substringBefore('@').toLongOrNull()?.let { app.player.seekTo(it * 1_000) }
+            }
+        }
         when (System.getenv("APEX_FULLSCREEN")) {
             "1" -> app.toggleWindowFullscreen()
             "player" -> {
@@ -249,6 +281,9 @@ private fun runApp() = application {
         state = windowState,
     ) {
         LaunchedEffect(requested) { fullscreenController.apply(window, requested) }
+        if (app.apex.util.FrameMeter.enabled) LaunchedEffect(Unit) {
+            app.apex.util.FrameMeter.run(File(FileStore.defaultDir(), "frames.txt"))
+        }
         boot.fold(
             onSuccess = { app ->
                 // Voltou para a janela (de outro programa): confere na hora quem entrou ao vivo enquanto a pessoa estava fora.
@@ -259,6 +294,25 @@ private fun runApp() = application {
             onFailure = { StartupProblem(it) },
         )
     }
+}
+
+/** A volta pelas telas que o treino do cache de inicialização faz (ver `-Dapex.train`). */
+private suspend fun trainWarmup(app: AppContainer) {
+    kotlinx.coroutines.delay(4_000)
+    val steps = listOf(
+        Route.Live(LiveFilter.All), Route.Subscriptions, Route.Library(LibraryTab.History), Route.Library(LibraryTab.WatchLater),
+        Route.Library(LibraryTab.Liked), Route.Library(LibraryTab.Clips), Route.Library(LibraryTab.Playlists), Route.Settings, Route.Home,
+    )
+    for (route in steps) {
+        app.nav.goRoot(route)
+        kotlinx.coroutines.delay(1_800)
+    }
+    app.screens.home.selected = 2
+    kotlinx.coroutines.delay(1_500)
+    app.search("rally")
+    kotlinx.coroutines.delay(5_000)
+    app.nav.goRoot(Route.Home)
+    kotlinx.coroutines.delay(1_000)
 }
 
 /** Atalho para testes: `APEX_START=search:rally`, `watch:ID`, `link:URL`, `live`, `channel:UC…`, `library`, `settings`. */
@@ -283,7 +337,9 @@ private fun navigateFromEnv(app: AppContainer) {
             app.search(query, filters)
         }
         "watch" -> app.openMedia(Media(Platform.YouTube, arg, "Carregando…", url = "https://www.youtube.com/watch?v=$arg"))
+        "ytlive" -> app.openMedia(Media(Platform.YouTube, arg, arg, isLive = true, url = "https://www.youtube.com/watch?v=$arg"))
         "twitch" -> app.openMedia(Media(Platform.Twitch, arg, arg, isLive = true, url = "https://www.twitch.tv/$arg"))
+        "multi" -> app.nav.goRoot(Route.Multi)
         "kick" -> app.openMedia(Media(Platform.Kick, arg, arg, isLive = true, url = "https://kick.com/$arg"))
         // `live` ou `live:youtube,twitch` (já com essas plataformas ligadas).
         "live" -> {
@@ -291,7 +347,12 @@ private fun navigateFromEnv(app: AppContainer) {
             app.nav.goRoot(Route.Live(LiveFilter.All))
         }
         // `channel:UC…` abre o canal do YouTube; `channel:UC…:2` já na aba 2 (Playlists).
-        "channel" -> app.nav.push(Route.ChannelPage(Channel(Platform.YouTube, arg.substringBefore(':'), arg.substringBefore(':')), arg.substringAfter(':', "0").toIntOrNull() ?: 0))
+        // `channel:UC…:2:rock` abre o canal na aba 2 já com "rock" no campo de pesquisar.
+        "channel" -> {
+            val channel = Channel(Platform.YouTube, arg.substringBefore(':'), arg.substringBefore(':'))
+            arg.split(':').getOrNull(2)?.takeIf { it.isNotBlank() }?.let { app.screens.channel(channel).updateQuery(it) }
+            app.nav.push(Route.ChannelPage(channel, arg.split(':').getOrNull(1)?.toIntOrNull() ?: 0))
+        }
         "library" -> app.nav.goRoot(Route.Library(LibraryTab.History))
         "clips" -> app.nav.goRoot(Route.Library(LibraryTab.Clips))
         "playlist" -> app.nav.push(Route.RemotePlaylist(arg, "Playlist"))

@@ -43,6 +43,7 @@ class FileStore(val dir: File) : KeyValueStore {
 
         fun defaultDir(): File {
             System.getenv("APEX_DATA")?.takeIf { it.isNotBlank() }?.let { return File(it) }
+            System.getProperty("apex.data")?.takeIf { it.isNotBlank() }?.let { return File(it) }
             val base = System.getenv("APPDATA") ?: System.getProperty("user.home")
             return File(base, "Apex")
         }

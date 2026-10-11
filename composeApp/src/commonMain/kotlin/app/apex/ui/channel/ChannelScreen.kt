@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.OpenInBrowser
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.MaterialTheme
@@ -31,8 +32,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
 import app.apex.model.Channel
+import app.apex.model.ChannelSort
 import app.apex.model.ClipSort
 import app.apex.model.Platform
+import app.apex.ui.components.FilterTextField
+import androidx.compose.foundation.layout.width
+import app.apex.state.matchesWords
+import app.apex.state.searchWords
 import app.apex.state.withoutBlocked
 import app.apex.theme.ApexColors
 import app.apex.ui.components.ActionButton
@@ -67,27 +73,57 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     var tab by remember(seed.key) { mutableIntStateOf(initialTab) }
     val tabs = if (isYt) listOf("Vídeos", "Transmissões", "Playlists", "Sobre") else listOf("Ao vivo", "VODs", "Clipes", "Sobre")
 
+    // A ordem de cada aba (o YouTube oferece mais recentes, mais vistos e mais antigos; a Twitch e a Kick, nos VODs, mais recentes e mais vistos).
+    val sortOptions = when {
+        isYt && (tab == 0 || tab == 1) -> ChannelSort.entries
+        !isYt && tab == 1 -> listOf(ChannelSort.Recent, ChannelSort.Popular)
+        else -> emptyList()
+    }
+    val sort = when {
+        isYt && tab == 0 -> st.videoSort
+        isYt && tab == 1 -> st.liveSort
+        !isYt && tab == 1 -> st.vodSort
+        else -> ChannelSort.Recent
+    }
     val list = when {
-        isYt && tab == 0 -> st.videos
-        isYt && tab == 1 -> st.pastLives
-        !isYt && tab == 1 -> st.vods
+        isYt && tab == 0 -> st.videosBy(st.videoSort)
+        isYt && tab == 1 -> st.pastLivesBy(st.liveSort)
+        !isYt && tab == 1 -> st.vodsBy(st.vodSort)
         !isYt && tab == 2 -> st.clips
         else -> null
     }
-    val playlists by st.playlists.items.collectAsState()
+    val allPlaylists by st.playlists.items.collectAsState()
     val playlistsLoading by st.playlists.loading.collectAsState()
     val playlistsError by st.playlists.error.collectAsState()
-    LaunchedEffect(tab, st) {
-        if (isYt && tab == 2) st.playlists.loadIfNeeded()
-        if (isYt && tab == 1) st.pastLives.loadIfNeeded()
-        if (!isYt && tab == 1) st.vods.loadIfNeeded()
-        if (!isYt && tab == 2) st.clips.loadIfNeeded()
+
+    // Pesquisar no canal: na aba "Vídeos" a busca é a do YouTube dentro do canal inteiro; nas outras abas filtra pelo nome o que a aba lista.
+    val words = remember(st.query) { searchWords(st.query) }
+    val searching = words.isNotEmpty()
+    val channelSearch = if (isYt && tab == 0 && st.searchedQuery.isNotEmpty() && searching) remember(st.searchedQuery) { st.searchPaged(st.searchedQuery) } else null
+    LaunchedEffect(channelSearch) { channelSearch?.loadIfNeeded() }
+    LaunchedEffect(tab, searching, st, list) {
+        if (!searching) return@LaunchedEffect
+        when {
+            isYt && tab == 2 -> { st.playlists.loadIfNeeded(); st.loadAll(st.playlists) }
+            // Na aba "Vídeos" a busca é a do YouTube; nas outras filtra pelo nome a lista inteira (na ordem que está na tela).
+            tab != 0 && list != null -> { list.loadIfNeeded(); st.loadAll(list) }
+        }
     }
-    val items by (list?.items ?: st.videos.items).collectAsState()
-    val loading by (list?.loading ?: st.videos.loading).collectAsState()
-    val error by (list?.error ?: st.videos.error).collectAsState()
+    val playlists = if (searching) allPlaylists.filter { matchesWords(words, it.title) } else allPlaylists
+    val activeList = channelSearch ?: list
+    LaunchedEffect(tab, st, list) {
+        if (isYt && tab == 2) st.playlists.loadIfNeeded()
+        list?.loadIfNeeded()
+    }
+    val loadedItems by (activeList?.items ?: st.videos.items).collectAsState()
+    val loading by (activeList?.loading ?: st.videos.loading).collectAsState()
+    val error by (activeList?.error ?: st.videos.error).collectAsState()
+    // O resultado da busca do YouTube já vem filtrado; as demais listas são filtradas aqui.
+    val items = if (searching && channelSearch == null) loadedItems.filter { matchesWords(words, it.title, it.category) } else loadedItems
     val state = rememberLazyGridState()
-    OnNearEnd(state) { if (isYt && tab == 2) st.playlists.loadMore() else list?.loadMore() }
+    // Trocar de ordem recomeça a lista: volta para o topo.
+    LaunchedEffect(list) { state.scrollToItem(0) }
+    OnNearEnd(state) { if (isYt && tab == 2) st.playlists.loadMore() else activeList?.loadMore() }
 
     ApexGrid(state) {
         fullSpan("header") {
@@ -121,12 +157,23 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                         SubscribeButton(channel)
                     }
                 }
-                ChipRow(tabs, tab, { tab = it })
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(Modifier.weight(1f)) { ChipRow(tabs, tab, { tab = it }) }
+                    val placeholder = when {
+                        isYt && tab == 0 -> "Pesquisar neste canal"
+                        isYt && tab == 1 -> "Pesquisar nas transmissões"
+                        isYt && tab == 2 -> "Pesquisar nas playlists"
+                        !isYt && tab == 1 -> "Pesquisar nos VODs"
+                        !isYt && tab == 2 -> "Pesquisar nos clipes"
+                        else -> null
+                    }
+                    if (placeholder != null) FilterTextField(st.query, st::updateQuery, placeholder, Modifier.width(300.dp))
+                }
             }
         }
 
         liveNow?.let { live ->
-            if (tab == 0) {
+            if (tab == 0 && !searching) {
                 fullSpan("live-now") {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Ao vivo agora", style = MaterialTheme.typography.titleLarge)
@@ -137,6 +184,15 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
         }
 
         val aboutTab = 3
+        if (sortOptions.isNotEmpty() && !searching) fullSpan("sort") {
+            ChipRow(sortOptions.map { it.label }, sortOptions.indexOf(sort), { i ->
+                when {
+                    isYt && tab == 0 -> st.videoSort = sortOptions[i]
+                    isYt && tab == 1 -> st.liveSort = sortOptions[i]
+                    else -> st.vodSort = sortOptions[i]
+                }
+            })
+        }
         if (!isYt && tab == 2) fullSpan("clip-sort") {
             val sort by st.clipSort.collectAsState()
             ChipRow(ClipSort.entries.map { it.label }, sort.ordinal, { st.setClipSort(ClipSort.entries[it]) })
@@ -158,6 +214,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
             isYt && tab == 2 -> when {
                 playlists.isNotEmpty() -> playlistItems(playlists)
                 playlistsLoading -> skeletons(6)
+                searching && allPlaylists.isNotEmpty() -> fullSpan("pl-nomatch") { NoMatch(st.query) }
                 playlistsError != null -> fullSpan("pl-err") { ErrorBox(playlistsError.orEmpty(), { st.playlists.refresh() }) }
                 else -> fullSpan("pl-none") { EmptyState(Icons.Rounded.VideoLibrary, "Sem playlists", "${channel.name} não tem playlists públicas.") }
             }
@@ -171,7 +228,8 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                 m.copy(channel = (m.channel ?: channel).copy(avatarUrl = m.channel?.avatarUrl ?: channel.avatarUrl))
             })
             loading -> skeletons(8)
-            error != null -> fullSpan("err") { ErrorBox(error.orEmpty(), { list?.refresh() }) }
+            error != null -> fullSpan("err") { ErrorBox(error.orEmpty(), { activeList?.refresh() }) }
+            searching && (channelSearch != null || loadedItems.isNotEmpty()) -> fullSpan("nomatch") { NoMatch(st.query) }
             else -> fullSpan("none") {
                 when {
                     !isYt && tab == 1 -> EmptyState(Icons.Rounded.VideoLibrary, "Sem VODs", "${channel.name} não tem transmissões passadas salvas (ou guarda os VODs só para inscritos).")
@@ -183,4 +241,10 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
         if (loading && items.isNotEmpty() && tab != aboutTab && !(isYt && tab == 2)) skeletons(4)
         if (isYt && tab == 2 && playlistsLoading && playlists.isNotEmpty()) skeletons(3)
     }
+}
+
+/** Nada na lista combina com o que a pessoa digitou no campo de pesquisar do canal. */
+@Composable
+private fun NoMatch(query: String) {
+    EmptyState(Icons.Rounded.Search, "Nada encontrado", "Nenhum resultado para “${query.trim()}” aqui. Confira o texto ou procure em outra aba.")
 }

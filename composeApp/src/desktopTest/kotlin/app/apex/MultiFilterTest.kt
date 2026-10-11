@@ -1,8 +1,14 @@
 package app.apex
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
@@ -170,6 +176,9 @@ class MultiFilterTest {
     fun tela_inicial_guarda_varios_filtros_ligados_ao_mesmo_tempo() = runComposeUiTest {
         val (container, _) = newTestApp()
         setContent { CompositionLocalProvider(LocalApp provides container) { HomeScreen() } }
+        // O botão "Filtros" (como o da pesquisa) abre a janela com as opções.
+        onAllNodesWithText("Filtros", substring = true).onFirst().performClick()
+        waitForIdle()
         onAllNodesWithText("Inscrições").onFirst().performClick()
         onAllNodesWithText("Twitch").onFirst().performClick()
         waitForIdle()
@@ -185,11 +194,45 @@ class MultiFilterTest {
         assertEquals(setOf("Subs", "Live"), settings.homeSources.toSet())
         assertEquals(setOf("Twitch", "Kick"), settings.homePlatforms.toSet())
 
-        // "Limpar" volta ao padrão.
-        onAllNodesWithText("Limpar").onFirst().performClick()
+        // "Limpar tudo" volta ao padrão.
+        onAllNodesWithText("Limpar tudo").onFirst().performClick()
         waitForIdle()
         settings = container.data.settings.value
         assertTrue(settings.homeSources.isEmpty() && settings.homePlatforms.isEmpty())
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun tela_inicial_mostra_os_filtros_ligados_embaixo_da_barra_e_o_x_tira() = runComposeUiTest {
+        val (container, _) = newTestApp()
+        container.data.updateSettings { it.copy(homeSources = listOf("Subs"), homePlatforms = listOf("Twitch")) }
+        setContent { CompositionLocalProvider(LocalApp provides container) { HomeScreen() } }
+        waitForIdle()
+        // O botão diz quantos filtros há; cada um aparece como um chip com ✕.
+        onAllNodesWithText("Filtros (2)").onFirst().assertIsDisplayed()
+        onAllNodesWithText("Inscrições  ✕").onFirst().assertIsDisplayed()
+        onAllNodesWithText("Twitch  ✕").onFirst().performClick()
+        waitForIdle()
+        assertEquals(listOf("Subs"), container.data.settings.value.homeSources)
+        assertTrue(container.data.settings.value.homePlatforms.isEmpty())
+        assertEquals(0, onAllNodesWithText("Twitch  ✕").fetchSemanticsNodes().size)
+        onAllNodesWithText("Filtros (1)").onFirst().assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun tela_inicial_tem_a_barra_de_assuntos_de_sempre_sem_setinha_e_o_botao_filtros() = runComposeUiTest {
+        val (container, _) = newTestApp()
+        // Mesmo numa janela estreita, em que os assuntos não cabem, a barra do Início é a simples de sempre: sem as setinhas nas pontas.
+        setContent {
+            CompositionLocalProvider(LocalApp provides container) {
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.requiredSize(500.dp, 800.dp)) { HomeScreen() }
+            }
+        }
+        waitForIdle()
+        assertEquals(0, onAllNodesWithContentDescription("Rolar para a direita").fetchSemanticsNodes().size)
+        onAllNodesWithText("Tudo").onFirst().assertIsDisplayed()
+        onAllNodesWithText("Filtros").onFirst().assertIsDisplayed()
     }
 
     // ------------------------------------------------------------------ inscrições

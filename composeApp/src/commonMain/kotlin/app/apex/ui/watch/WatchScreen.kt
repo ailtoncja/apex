@@ -280,6 +280,7 @@ private fun Comments(media: Media) {
             ApexChip("Mais relevantes", !watch.newestFirst, { if (watch.newestFirst) { watch.newestFirst = false; watch.loadComments(media) } })
             ApexChip("Mais recentes", watch.newestFirst, { if (!watch.newestFirst) { watch.newestFirst = true; watch.loadComments(media) } })
         }
+        CommentComposer(media)
         if (loading && comments.isEmpty()) {
             repeat(4) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

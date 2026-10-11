@@ -19,9 +19,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Home
@@ -30,7 +33,6 @@ import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Subscriptions
 import androidx.compose.material.icons.rounded.ThumbUp
-import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -73,24 +75,13 @@ fun Sidebar(expanded: Boolean) {
         NavItem(Icons.Rounded.Sensors, "Ao vivo", route is Route.Live || route is Route.Category, expanded) {
             app.nav.goRoot(Route.Live(LiveFilter.All))
         }
+        NavItem(Icons.Rounded.GridView, "Multi", route is Route.Multi, expanded) { app.nav.goRoot(Route.Multi) }
         NavItem(Icons.Rounded.Subscriptions, "Inscrições", route is Route.Subscriptions, expanded) { app.nav.goRoot(Route.Subscriptions) }
 
         if (expanded) {
             Spacer(Modifier.height(6.dp)); Divider(); Spacer(Modifier.height(6.dp))
-            NavItem(Icons.Rounded.History, "Histórico", route is Route.Library && route.tab == LibraryTab.History, true) {
-                app.nav.goRoot(Route.Library(LibraryTab.History))
-            }
-            NavItem(Icons.Rounded.WatchLater, "Assistir depois", route is Route.Library && route.tab == LibraryTab.WatchLater, true) {
-                app.nav.goRoot(Route.Library(LibraryTab.WatchLater))
-            }
-            NavItem(Icons.Rounded.ThumbUp, "Curtidos", route is Route.Library && route.tab == LibraryTab.Liked, true) {
-                app.nav.goRoot(Route.Library(LibraryTab.Liked))
-            }
-            NavItem(Icons.Rounded.ContentCut, "Clipes", route is Route.Library && route.tab == LibraryTab.Clips, true) {
-                app.nav.goRoot(Route.Library(LibraryTab.Clips))
-            }
-            NavItem(Icons.Rounded.PlaylistPlay, "Playlists", route is Route.Library && route.tab == LibraryTab.Playlists || route is Route.PlaylistPage, true) {
-                app.nav.goRoot(Route.Library(LibraryTab.Playlists))
+            LibraryTab.entries.forEach { t ->
+                NavItem(t.icon(), t.label, isLibraryRoute(route, t), true) { app.nav.goRoot(Route.Library(t)) }
             }
             Spacer(Modifier.height(6.dp)); Divider(); Spacer(Modifier.height(6.dp))
             // Os canais ficam separados por plataforma (quem está ao vivo e quem a pessoa apoia aparece primeiro em cada grupo).
@@ -151,17 +142,34 @@ fun Sidebar(expanded: Boolean) {
                 }
             }
         } else {
-            NavItem(Icons.Rounded.VideoLibrary, "Biblioteca", route is Route.Library || route is Route.PlaylistPage, false) {
-                app.nav.goRoot(Route.Library(LibraryTab.History))
+            // Recolhida: os mesmos destinos da biblioteca, só com o ícone e um nome curto (as páginas não têm mais uma barra de abas).
+            Spacer(Modifier.height(4.dp)); Divider(); Spacer(Modifier.height(4.dp))
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                LibraryTab.entries.forEach { t ->
+                    NavItem(t.icon(), t.label, isLibraryRoute(route, t), false, text = t.shortLabel) { app.nav.goRoot(Route.Library(t)) }
+                }
             }
-            Spacer(Modifier.weight(1f))
         }
         NavItem(Icons.Rounded.Settings, "Ajustes", route is Route.Settings, expanded) { app.nav.goRoot(Route.Settings) }
     }
 }
 
+private fun LibraryTab.icon(): ImageVector = when (this) {
+    LibraryTab.History -> Icons.Rounded.History
+    LibraryTab.WatchLater -> Icons.Rounded.WatchLater
+    LibraryTab.Liked -> Icons.Rounded.ThumbUp
+    LibraryTab.Clips -> Icons.Rounded.ContentCut
+    LibraryTab.Playlists -> Icons.Rounded.PlaylistPlay
+}
+
+/** O nome que cabe embaixo do ícone na barra recolhida (76 dp de largura). */
+private val LibraryTab.shortLabel: String get() = if (this == LibraryTab.WatchLater) "Depois" else label
+
+private fun isLibraryRoute(route: Route, tab: LibraryTab) =
+    route is Route.Library && route.tab == tab || tab == LibraryTab.Playlists && (route is Route.PlaylistPage || route is Route.RemotePlaylist)
+
 @Composable
-private fun NavItem(icon: ImageVector, label: String, selected: Boolean, expanded: Boolean, onClick: () -> Unit) {
+private fun NavItem(icon: ImageVector, label: String, selected: Boolean, expanded: Boolean, text: String = label, onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
     val bg = when {
@@ -190,7 +198,7 @@ private fun NavItem(icon: ImageVector, label: String, selected: Boolean, expande
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Icon(icon, label, tint = if (selected) ApexColors.Accent else tint, modifier = Modifier.size(22.dp))
-            Text(label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
+            Text(text, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
         }
     }
 }

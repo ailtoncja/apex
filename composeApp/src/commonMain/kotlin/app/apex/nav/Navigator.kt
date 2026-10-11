@@ -26,6 +26,9 @@ sealed interface Route {
     data class PlaylistPage(val id: String) : Route
     data class RemotePlaylist(val id: String, val title: String, val coverUrl: String? = null, val countText: String? = null) : Route
     data object Settings : Route
+
+    /** Várias lives ao mesmo tempo (o Multi). */
+    data object Multi : Route
 }
 
 class Navigator {
@@ -35,25 +38,42 @@ class Navigator {
 
     val canGoBack: Boolean get() = stack.size > 1
 
+    /** As telas de que a pessoa voltou, para o "avançar" (Alt+→ ou o botão do mouse); qualquer navegação nova as esquece. */
+    private val forwardStack = mutableListOf<Route>()
+
+    val canGoForward: Boolean get() = forwardStack.isNotEmpty()
+
     fun push(route: Route) {
         if (route == current) return
         if (route is Route.Watch && current is Route.Watch) return
+        forwardStack.clear()
         stack += route
         if (stack.size > 60) stack.removeAt(0)
     }
 
     /** Troca só a tela de cima (mudar filtros da busca sem empilhar). */
     fun replaceTop(route: Route) {
+        forwardStack.clear()
         stack[stack.lastIndex] = route
     }
 
     /** Troca a pilha inteira (itens do menu lateral). */
     fun goRoot(route: Route) {
+        forwardStack.clear()
         stack.clear()
         stack += route
     }
 
     fun back() {
-        if (stack.size > 1) stack.removeAt(stack.lastIndex)
+        if (stack.size > 1) {
+            val left = stack.removeAt(stack.lastIndex)
+            // A página do vídeo depende do que está tocando: não dá para "avançar" até ela depois.
+            if (left !is Route.Watch) forwardStack += left
+        }
+    }
+
+    fun forward() {
+        val next = forwardStack.removeLastOrNull() ?: return
+        stack += next
     }
 }

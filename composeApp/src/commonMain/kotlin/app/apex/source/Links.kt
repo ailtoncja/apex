@@ -12,6 +12,12 @@ sealed interface LinkTarget {
 
     /** Clipe do YouTube: é preciso ler a página dele para saber de qual vídeo e qual trecho. */
     data class YouTubeClip(val clipId: String) : LinkTarget
+
+    /** Várias lives de uma vez (um link do multitwitch.tv ou do multikick.com): abrem no Multi. */
+    data class Multi(val medias: List<Media>) : LinkTarget
+
+    /** Um canal do YouTube (`youtube.com/@handle`, `/@handle/live`, `/channel/UC…`): [ref] é o @handle, o id ou o nome, para resolver depois. */
+    data class YouTubeChannel(val ref: String) : LinkTarget
 }
 
 private val LINK = Regex("""^(?:https?://)?([a-z0-9.-]+)(/[^?#]*)?(?:\?([^#]*))?""", RegexOption.IGNORE_CASE)
@@ -42,11 +48,15 @@ fun parseLink(text: String): LinkTarget? {
 
     return when (host) {
         "youtu.be" -> youtube(segments.firstOrNull())
-        "youtube.com", "music.youtube.com", "youtube-nocookie.com" -> when (segments.firstOrNull()) {
+        "youtube.com", "music.youtube.com", "youtube-nocookie.com" -> when (val first = segments.firstOrNull()) {
             "watch" -> youtube(param("v"))
             "live", "embed", "v" -> youtube(segments.getOrNull(1))
             "clip" -> segments.getOrNull(1)?.takeIf { it.length >= 10 }?.let { LinkTarget.YouTubeClip(it) }
-            else -> null
+            // A página de um canal (com ou sem /live no fim): quem resolve o canal e acha a live é quem abre.
+            "channel" -> segments.getOrNull(1)?.takeIf { it.startsWith("UC") && it.length == 24 }?.let { LinkTarget.YouTubeChannel(it) }
+            "c", "user" -> segments.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { LinkTarget.YouTubeChannel(it) }
+            null -> null
+            else -> if (first.startsWith("@") && first.length > 1) LinkTarget.YouTubeChannel(first) else null
         }
         "twitch.tv" -> when {
             segments.size == 2 && segments[0] == "videos" -> twitchVod(segments[1])
@@ -59,6 +69,9 @@ fun parseLink(text: String): LinkTarget? {
             else -> null
         }
         "clips.twitch.tv" -> segments.firstOrNull()?.let { twitchClip(it) }
+        // multitwitch.tv/a/b/c e multikick.com/a/b: cada trecho do caminho é um canal.
+        "multitwitch.tv", "multistre.am" -> segments.mapNotNull { liveFromName(it, Platform.Twitch) }.distinctBy { it.key }.takeIf { it.isNotEmpty() }?.let { LinkTarget.Multi(it) }
+        "multikick.com" -> segments.mapNotNull { liveFromName(it, Platform.Kick) }.distinctBy { it.key }.takeIf { it.isNotEmpty() }?.let { LinkTarget.Multi(it) }
         "kick.com" -> when {
             segments.size >= 3 && segments[1] == "videos" -> kickVod(segments[0], segments[2])
             segments.size >= 3 && segments[1] == "clips" -> kickClip(segments[0], segments[2])
@@ -87,4 +100,14 @@ private fun kickVod(channel: String, uuid: String): LinkTarget? =
 
 private fun kickClip(channel: String, id: String): LinkTarget? = id.takeIf { Regex("""^clip_[A-Za-z0-9]+$""").matches(it) }?.let {
     LinkTarget.Play(Media(Platform.Kick, CLIP_PREFIX + it, "Carregando…", url = "https://kick.com/$channel/clips/$it"))
+}
+
+/** A live de um canal da Twitch ou da Kick a partir do nome dele (como a pessoa digita no Multi); `null` se o nome não serve. */
+fun liveFromName(name: String, platform: Platform): Media? {
+    val n = name.trim().removePrefix("@").lowercase()
+    return when (platform) {
+        Platform.Twitch -> n.takeIf { TWITCH_LOGIN.matches(it) && it !in TWITCH_RESERVED }?.let { Media(Platform.Twitch, it, it, isLive = true, url = "https://www.twitch.tv/$it") }
+        Platform.Kick -> n.takeIf { KICK_SLUG.matches(it) }?.let { Media(Platform.Kick, it, it, isLive = true, url = "https://kick.com/$it") }
+        Platform.YouTube -> null
+    }
 }

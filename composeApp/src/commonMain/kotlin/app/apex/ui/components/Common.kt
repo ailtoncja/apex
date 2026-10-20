@@ -151,11 +151,11 @@ fun ApexChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Mo
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
     val bg = when {
-        selected -> ApexColors.OnSurface
+        selected -> ApexColors.Selected
         hovered -> ApexColors.SurfaceHighest
         else -> ApexColors.SurfaceHigh
     }
-    val fg = if (selected) ApexColors.Background else ApexColors.OnSurface
+    val fg = if (selected) ApexColors.OnSelected else ApexColors.OnSurface
     Row(
         modifier.clip(RoundedCornerShape(50)).hoverable(source).background(bg)
             .clickable(interactionSource = source, indication = null, onClick = onClick)
@@ -205,10 +205,10 @@ fun ActionButton(
     val hovered by source.collectIsHoveredAsState()
     val bg = when {
         primary -> if (hovered) ApexColors.AccentPressed else ApexColors.Accent
-        active -> if (hovered) ApexColors.OnSurface.copy(alpha = 0.85f) else ApexColors.OnSurface
+        active -> if (hovered) ApexColors.Selected.copy(alpha = 0.85f) else ApexColors.Selected
         else -> if (hovered) ApexColors.SurfaceHighest else ApexColors.SurfaceHigh
     }
-    val fg = if (primary) ApexColors.OnAccent else if (active) ApexColors.Background else ApexColors.OnSurface
+    val fg = if (primary) ApexColors.OnAccent else if (active) ApexColors.OnSelected else ApexColors.OnSurface
     Row(
         modifier.clip(RoundedCornerShape(50)).hoverable(source).background(bg)
             .clickable(interactionSource = source, indication = null, onClick = onClick)

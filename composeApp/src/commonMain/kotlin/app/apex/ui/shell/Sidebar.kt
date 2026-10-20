@@ -57,6 +57,7 @@ import app.apex.nav.Route
 import app.apex.theme.ApexColors
 import app.apex.theme.color
 import app.apex.ui.components.Avatar
+import app.apex.ui.components.newTabClick
 import app.apex.ui.components.Divider
 
 @Composable
@@ -129,10 +130,10 @@ fun Sidebar(expanded: Boolean) {
                             ) {
                                 // Ao vivo: a foto e a bolinha entram direto na live; o nome abre o canal.
                                 val isLive = ch.key in liveKeys
-                                Avatar(ch.avatarUrl, ch.name, 26.dp, if (isLive) Modifier.clip(CircleShape).clickable { app.openLive(ch) } else Modifier)
+                                Avatar(ch.avatarUrl, ch.name, 26.dp, if (isLive) Modifier.clip(CircleShape).newTabClick { app.openLiveInNewTab(ch) }.clickable { app.openLive(ch) } else Modifier)
                                 Text(ch.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (isLive) {
-                                    Box(Modifier.size(22.dp).clip(CircleShape).clickable { app.openLive(ch) }, contentAlignment = Alignment.Center) {
+                                    Box(Modifier.size(22.dp).clip(CircleShape).newTabClick { app.openLiveInNewTab(ch) }.clickable { app.openLive(ch) }, contentAlignment = Alignment.Center) {
                                         Box(Modifier.size(8.dp).background(ApexColors.Live, CircleShape))
                                     }
                                 } else if (ch.support != null) Box(Modifier.size(6.dp).background(ApexColors.Support, CircleShape))

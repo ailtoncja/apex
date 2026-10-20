@@ -49,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -306,15 +307,40 @@ fun NamePlaylistDialog(title: String, initial: String, onDismiss: () -> Unit, on
 @Composable
 fun AddToPlaylistDialog(media: Media, onDismiss: () -> Unit) {
     val app = LocalApp.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val playlists by app.data.playlists.collectAsState()
     val accounts by app.data.accounts.collectAsState()
     val ytLogged = accounts.containsKey(Platform.YouTube.name) && media.platform == Platform.YouTube && !media.isClip
     var creating by remember { mutableStateOf(false) }
     var creatingRemote by remember { mutableStateOf(false) }
     var remote by remember { mutableStateOf<List<app.apex.source.PlaylistOption>?>(null) }
-    LaunchedEffect(media.key, ytLogged) {
-        if (ytLogged) remote = runCatching { app.youtube.playlistOptions(media.id) }.getOrDefault(emptyList())
+    // Por que a lista do YouTube não veio (em vez de mostrar "nenhuma playlist" quando na verdade o pedido falhou).
+    var remoteError by remember { mutableStateOf<String?>(null) }
+    var attempt by remember { mutableStateOf(0) }
+    LaunchedEffect(media.key, ytLogged, attempt) {
+        if (!ytLogged) return@LaunchedEffect
+        remote = null
+        remoteError = null
+        try {
+            remote = app.withYouTubeSession { app.youtube.playlistOptions(media.id) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            remoteError = if (e is app.apex.source.SessionExpiredException) e.message else "Não foi possível carregar suas playlists do YouTube."
+        }
+    }
+    // Marca na hora e confirma com o YouTube; se ele recusar, desmarca de volta. Roda no escopo do app: fechar o diálogo logo depois
+    // de marcar não cancela o pedido no meio do caminho.
+    fun toggleRemote(opt: app.apex.source.PlaylistOption, add: Boolean) {
+        remote = remote?.map { if (it.id == opt.id) it.copy(contains = add) else it }
+        app.scope.launch {
+            val ok = runCatching { app.withYouTubeSession { app.youtube.editPlaylist(opt.id, media.id, add) } }.getOrDefault(false)
+            if (ok) {
+                app.toast(if (add) "Salvo em “${opt.title}” no YouTube" else "Removido de “${opt.title}” no YouTube")
+            } else {
+                remote = remote?.map { if (it.id == opt.id) it.copy(contains = !add) else it }
+                app.toast("O YouTube não aceitou a mudança em “${opt.title}”")
+            }
+        }
     }
     if (creating) {
         NamePlaylistDialog("Nova playlist", "", { creating = false }) { name ->
@@ -328,11 +354,11 @@ fun AddToPlaylistDialog(media: Media, onDismiss: () -> Unit) {
     if (creatingRemote) {
         NamePlaylistDialog("Nova playlist no YouTube", "", { creatingRemote = false }) { name ->
             creatingRemote = false
-            scope.launch {
-                val id = runCatching { app.youtube.createPlaylist(name, media.id) }.getOrNull()
-                app.toast(if (id != null) "Salvo em “$name” no YouTube" else "Não foi possível criar a playlist")
-                onDismiss()
+            app.scope.launch {
+                val id = runCatching { app.withYouTubeSession { app.youtube.createPlaylist(name, media.id) } }.getOrNull()
+                app.toast(if (id != null) "Salvo em “$name” no YouTube" else "Não foi possível criar a playlist no YouTube")
             }
+            onDismiss()
         }
         return
     }
@@ -357,20 +383,23 @@ fun AddToPlaylistDialog(media: Media, onDismiss: () -> Unit) {
                 if (ytLogged) {
                     Text("No YouTube", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.labelLarge, color = ApexColors.Muted)
                     val options = remote
-                    if (options == null) Text("Carregando…", color = ApexColors.Muted)
+                    val error = remoteError
+                    when {
+                        error != null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(error, Modifier.weight(1f), color = ApexColors.Muted)
+                            TextButton({ attempt++ }) { Text("Tentar de novo") }
+                        }
+                        options == null -> Text("Carregando…", color = ApexColors.Muted)
+                        options.isEmpty() -> Text("Nenhuma playlist na conta.", color = ApexColors.Muted)
+                    }
                     options?.forEach { opt ->
                         Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).padding(vertical = 6.dp, horizontal = 4.dp),
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { toggleRemote(opt, !opt.contains) }
+                                .padding(vertical = 6.dp, horizontal = 4.dp).testTag("yt-playlist-${opt.id}"),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            androidx.compose.material3.Checkbox(checked = opt.contains, onCheckedChange = { v ->
-                                remote = remote?.map { if (it.id == opt.id) it.copy(contains = v) else it }
-                                scope.launch {
-                                    val ok = runCatching { app.youtube.editPlaylist(opt.id, media.id, v) }.getOrDefault(false)
-                                    if (!ok) app.toast("Não foi possível atualizar a playlist")
-                                }
-                            })
+                            androidx.compose.material3.Checkbox(checked = opt.contains, onCheckedChange = { v -> toggleRemote(opt, v) })
                             Text(opt.title, Modifier.weight(1f), maxLines = 1)
                         }
                     }

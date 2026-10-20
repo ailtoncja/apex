@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,6 +35,8 @@ import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
@@ -60,6 +63,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
@@ -72,6 +76,8 @@ import app.apex.nav.Route
 import app.apex.player.LoadState
 import app.apex.theme.ApexColors
 import app.apex.ui.components.ActionButton
+import app.apex.ui.components.Avatar
+import app.apex.ui.components.ContextMenuHost
 import app.apex.ui.components.IconBtn
 import app.apex.ui.components.LiveTag
 import app.apex.ui.components.RemoteImage
@@ -79,7 +85,7 @@ import app.apex.util.currentTimeMillis
 import app.apex.util.formatClock
 import kotlinx.coroutines.delay
 
-private enum class PlayerMenu { Main, Quality, Speed, Subtitles }
+internal enum class PlayerMenu { Main, Quality, Speed, Subtitles }
 
 
 /** Vídeo + controles. Usado na página do vídeo e em tela cheia. */
@@ -108,7 +114,8 @@ fun PlayerView(modifier: Modifier = Modifier, fullscreen: Boolean = false) {
         }
     }
 
-    Box(
+    // O botão direito abre o menu de opções do player, onde o cursor estiver (o clique esquerdo continua pausando e o duplo, a tela cheia).
+    ContextMenuHost(
         modifier.background(Color.Black)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -124,7 +131,9 @@ fun PlayerView(modifier: Modifier = Modifier, fullscreen: Boolean = false) {
                     onTap = { if (menu != null) menu = null else player.togglePause() },
                     onDoubleTap = { app.setPlayerFullscreen(!fullscreen) },
                 )
-            },
+            }
+            .testTag("player"),
+        menu = { dismiss -> PlayerContextMenu(fullscreen, onPanel = { menu = it }, onDismiss = dismiss) },
     ) {
         player.Video(Modifier.fillMaxSize())
 
@@ -139,7 +148,11 @@ fun PlayerView(modifier: Modifier = Modifier, fullscreen: Boolean = false) {
             }
             is LoadState.Error -> {
                 Box(Modifier.fillMaxSize().background(Color(0xE6000000)))
-                Column(
+                if (l.offline) {
+                    OfflineChannel(l.channel ?: current?.channel, current?.channel?.name ?: current?.title.orEmpty(), Modifier.align(Alignment.Center)) {
+                        current?.let { session.open(it) }
+                    }
+                } else Column(
                     Modifier.align(Alignment.Center).padding(24.dp).widthMax(520),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
@@ -172,7 +185,8 @@ fun PlayerView(modifier: Modifier = Modifier, fullscreen: Boolean = false) {
                         Text(current?.title.orEmpty(), color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                     }
                 }
-                Controls(fullscreen, isLive, menu) { menu = it }
+                // Sem vídeo (erro, canal offline) os controles só mostrariam 0:00 / 0:00.
+                if (load !is LoadState.Error) Controls(fullscreen, isLive, menu) { menu = it }
                 if (menu != null) {
                     SettingsPanel(menu!!, onMenu = { menu = it })
                 }
@@ -183,6 +197,32 @@ fun PlayerView(modifier: Modifier = Modifier, fullscreen: Boolean = false) {
 
 private fun Modifier.widthMax(dp: Int) = this.then(Modifier.width(dp.dp))
 
+/**
+ * A live não está no ar: o canal, o que isso quer dizer e o caminho mais provável (os vídeos dele). "Tentar de novo" fica como segunda
+ * opção, para quem sabe que a live acabou de começar.
+ */
+@Composable
+private fun OfflineChannel(channel: app.apex.model.Channel?, name: String, modifier: Modifier, onRetry: () -> Unit) {
+    val app = LocalApp.current
+    Column(
+        modifier.padding(24.dp).testTag("player-offline"),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Avatar(channel?.avatarUrl, channel?.name ?: name, 72.dp)
+        Text("${channel?.name ?: name} está offline", color = Color.White, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        Text(
+            "A live terminou ou ainda não começou. Quando ela começar, o canal aparece em Ao vivo.",
+            Modifier.widthIn(max = 420.dp), color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
+        )
+        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (channel != null && channel.id.isNotBlank()) {
+                ActionButton("Ver vídeos do canal", { app.openChannel(channel) }, Modifier.testTag("player-offline-channel"), primary = true)
+            }
+            ActionButton("Tentar de novo", onRetry, Modifier.testTag("player-offline-retry"))
+        }
+    }
+}
+
 @Composable
 private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: PlayerMenu?, setMenu: (PlayerMenu?) -> Unit) {
     val app = LocalApp.current
@@ -192,6 +232,7 @@ private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: Player
     val load by session.load.collectAsState()
     val subtitle by session.subtitle.collectAsState()
     val upNext by session.upNext.collectAsState()
+    val loop by session.loop.collectAsState()
     val resolved = (load as? LoadState.Ready)?.resolved
 
     Column(
@@ -206,6 +247,13 @@ private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: Player
             if (session.hasPrevious) PlayerBtn(Icons.Rounded.SkipPrevious, "Anterior") { session.previous() }
             PlayerBtn(if (ps.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (ps.playing) "Pausar" else "Reproduzir") { player.togglePause() }
             if (upNext.isNotEmpty()) PlayerBtn(Icons.Rounded.SkipNext, "Próximo") { session.next() }
+            if (!isLive) {
+                PlayerBtn(
+                    if (loop) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
+                    if (loop) "Repetir: ligado (R)" else "Repetir o vídeo (R)",
+                    tint = if (loop) ApexColors.Accent else Color.White,
+                ) { session.setLoop(!loop) }
+            }
 
             VolumeControl()
 

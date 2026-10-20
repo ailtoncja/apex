@@ -85,7 +85,7 @@ import kotlinx.coroutines.delay
 fun TopBar(onToggleSidebar: () -> Unit) {
     val app = LocalApp.current
     Row(
-        Modifier.fillMaxWidth().height(62.dp).padding(horizontal = 12.dp),
+        Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {

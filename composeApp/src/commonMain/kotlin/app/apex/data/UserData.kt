@@ -135,6 +135,10 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
     private val _multiStreams = MutableStateFlow(load<List<Media>>("multistream", emptyList()))
     val multiStreams: StateFlow<List<Media>> = _multiStreams.asStateFlow()
 
+    /** As abas de vídeo (ver [app.apex.tabs.VideoTabs]): os vídeos abertos agora, na ordem da faixa. */
+    private val _tabs = MutableStateFlow(load<List<Media>>("tabs", emptyList()))
+    val tabs: StateFlow<List<Media>> = _tabs.asStateFlow()
+
     private val _feed = MutableStateFlow(load("feed", FeedCache()))
     val feed: StateFlow<FeedCache> = _feed.asStateFlow()
 
@@ -156,6 +160,7 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
         persist("reactions", _reactions)
         persist("liked", _liked)
         persist("multistream", _multiStreams)
+        persist("tabs", _tabs)
         persist("feed", _feed)
         persist("accounts", _accounts)
         persist("cloud", _cloud)
@@ -173,6 +178,8 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
     fun updateSettings(change: (AppSettings) -> AppSettings) = _settings.update(change)
 
     fun setMultiStreams(list: List<Media>) { _multiStreams.value = list }
+
+    fun setTabs(list: List<Media>) { _tabs.value = list }
 
     fun addSearchHistory(query: String) {
         val q = query.trim()
@@ -209,6 +216,26 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
     fun addSubscriptions(channels: List<Channel>) = _subscriptions.update { list ->
         val known = list.map { it.key }.toSet()
         list + channels.filter { it.key !in known }
+    }
+
+    /**
+     * Deixa as inscrições de [platform] iguais à lista da conta: entra quem faltava e, com [removeMissing], sai quem a pessoa deixou de
+     * seguir lá (as outras plataformas não mudam). Devolve (quantos entraram, quantos saíram).
+     */
+    fun syncSubscriptions(platform: Platform, channels: List<Channel>, removeMissing: Boolean, keep: Set<String> = emptySet()): Pair<Int, Int> {
+        var added = 0
+        var removed = 0
+        _subscriptions.update { list ->
+            val known = list.map { it.key }.toSet()
+            // Os de [keep] ficam como estão no app: nem entram nem saem por causa da lista da plataforma.
+            val fresh = channels.filter { it.platform == platform && it.key !in known && it.key !in keep }
+            val keys = channels.map { it.key }.toSet()
+            val kept = if (removeMissing) list.filter { it.platform != platform || it.key in keys || it.key in keep } else list
+            added = fresh.size
+            removed = list.size - kept.size
+            kept + fresh
+        }
+        return added to removed
     }
 
     // ---------- histórico ----------

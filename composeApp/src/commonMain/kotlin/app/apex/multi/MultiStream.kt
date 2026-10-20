@@ -132,6 +132,12 @@ class MultiStream(
         _tiles.value.forEach { play(it) }
     }
 
+    /** Tenta abrir de novo a live [key] (que estava offline ou deu erro), sem mexer nas outras. */
+    fun retry(key: String) {
+        if (!active) return
+        _tiles.value.firstOrNull { it.key == key }?.let { play(it) }
+    }
+
     /** A tela do Multi fechou: para tudo; os players ficam, para voltar rápido. */
     fun stop() {
         if (!active) return
@@ -180,6 +186,8 @@ class MultiStream(
                     tile._load.value = LoadState.Ready(resolved)
                 } catch (e: CancellationException) {
                     throw e
+                } catch (e: app.apex.source.ChannelOfflineException) {
+                    tile._load.value = LoadState.Error(e.message ?: "", offline = true, channel = e.channel ?: tile.media.channel)
                 } catch (e: Exception) {
                     tile._load.value = LoadState.Error(e.message ?: "Não foi possível abrir esta live.")
                 }

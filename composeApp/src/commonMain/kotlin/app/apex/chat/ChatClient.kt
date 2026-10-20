@@ -43,6 +43,10 @@ abstract class ChatClient(protected val scope: CoroutineScope) {
 
     abstract val canSend: Boolean
 
+    protected val _extensionEmotes = MutableStateFlow(ChannelEmotes.Empty)
+    /** Os emotes da 7TV, BetterTTV e FrankerFaceZ deste canal (só na Twitch; vazio enquanto carrega ou quando estão desligados nos Ajustes). */
+    val extensionEmotes: StateFlow<ChannelEmotes> = _extensionEmotes.asStateFlow()
+
     /** O que o campo de escrever diz quando não dá para escrever. */
     open val sendHint: String get() = "Entre na conta para escrever no chat"
 
@@ -135,7 +139,19 @@ class TwitchChat(
     private val accountLogin: () -> String?,
     /** As últimas mensagens do chat, de antes de entrar (a Twitch só as entrega com a conta; ver [app.apex.source.TwitchSource.recentChatMessages]). */
     private val history: suspend () -> List<ChatMessage> = { emptyList() },
+    /** Os emotes das extensões para o canal de id dado (o número do canal chega pelo próprio chat); `null` = desligados. */
+    private val extensions: (suspend (String) -> ChannelEmotes)? = null,
 ) : ChatClient(scope) {
+    @Volatile private var roomId: String? = null
+
+    /** O número do canal chegou (na entrada no chat, ou em cada mensagem): busca os emotes das extensões dele, uma vez. */
+    private fun room(id: String?) {
+        if (id.isNullOrBlank() || roomId != null) return
+        roomId = id
+        val load = extensions ?: return
+        scope.launch { runCatching { load(id) }.getOrNull()?.let { _extensionEmotes.value = it } }
+    }
+
     private var session: DefaultClientWebSocketSession? = null
 
     override val canSend: Boolean get() = token() != null && accountLogin() != null
@@ -168,7 +184,9 @@ class TwitchChat(
         when (irc.command) {
             "PING" -> send(Frame.Text("PONG :tmi.twitch.tv"))
             "JOIN" -> _status.value = "Chat ao vivo"
+            "ROOMSTATE" -> room(irc.tags["room-id"])
             "PRIVMSG" -> {
+                room(irc.tags["room-id"])
                 val name = irc.tags["display-name"].orEmpty().ifBlank { irc.prefix.substringBefore('!') }
                 var text = irc.trailing
                 if (text.startsWith("\u0001ACTION ")) text = text.removePrefix("\u0001ACTION ").removeSuffix("\u0001")
@@ -179,6 +197,7 @@ class TwitchChat(
                         text = text,
                         color = parseHexColor(irc.tags["color"]) ?: colorFromName(name),
                         badges = irc.tags["badges"].orEmpty().split(',').filter { it.isNotBlank() }.map { it.substringBefore('/') },
+                        emotes = parseTwitchEmotesTag(irc.tags["emotes"], text),
                     ),
                 )
             }
@@ -302,13 +321,15 @@ class KickChat(
                         val data = parseJson(json["data"].str().orEmpty()) ?: continue
                         val name = data["sender"]["username"].str() ?: continue
                         val color = parseHexColor(data.path("sender", "identity", "color").str()) ?: colorFromName(name)
+                        val (text, emotes) = parseKickEmotes(data["content"].str().orEmpty())
                         push(
                             ChatMessage(
                                 id = data["id"].str() ?: localId("kick"),
                                 author = name,
-                                text = cleanKickText(data["content"].str().orEmpty()),
+                                text = text,
                                 color = color,
                                 badges = data.path("sender", "identity", "badges").list().mapNotNull { it["type"].str() },
+                                emotes = emotes,
                             ),
                         )
                     }
@@ -328,8 +349,7 @@ class KickChat(
 }
 
 /** As figurinhas da Kick vêm como `[emote:1234:nome]`; deixa só o nome. */
-internal fun cleanKickText(raw: String): String =
-    Regex("""\[emote:\d+:([^\]]+)]""").replace(raw) { it.groupValues[1] }
+internal fun cleanKickText(raw: String): String = parseKickEmotes(raw).first
 
 /** Uma mensagem de texto do chat do YouTube (ao vivo ou gravado). */
 internal fun parseYoutubeChatItem(item: JsonElement): ChatMessage? {

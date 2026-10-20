@@ -27,7 +27,10 @@ import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Tab
 import androidx.compose.material.icons.rounded.PlaylistAdd
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -44,6 +47,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
@@ -143,6 +147,12 @@ fun MediaMenu(media: Media, expanded: Boolean, onDismiss: () -> Unit) {
             leadingIcon = { Icon(Icons.Rounded.PlayArrow, null) },
             onClick = { app.openMedia(media); onDismiss() },
         )
+        // Como no navegador: abre numa aba, sem interromper o que está tocando (o botão do meio do mouse faz o mesmo).
+        DropdownMenuItem(
+            text = { Text("Abrir em nova aba") },
+            leadingIcon = { Icon(Icons.Rounded.Tab, null) },
+            onClick = { app.openInNewTab(media); onDismiss() },
+        )
         // Só faz sentido com algo tocando: o que está na fila passa depois deste.
         if (app.session.current.value != null && app.session.current.value?.key != media.key) {
             DropdownMenuItem(
@@ -169,6 +179,19 @@ fun MediaMenu(media: Media, expanded: Boolean, onDismiss: () -> Unit) {
                 text = { Text("Adicionar à playlist…") },
                 leadingIcon = { Icon(Icons.Rounded.PlaylistAdd, null) },
                 onClick = { app.ui.playlistTarget = media; onDismiss() },
+            )
+        }
+        // Só o som, junto com o vídeo da página (a música de fundo); com música tocando, dá para pôr na fila dela.
+        DropdownMenuItem(
+            text = { Text("Ouvir em segundo plano") },
+            leadingIcon = { Icon(Icons.Rounded.Headphones, null) },
+            onClick = { app.playInBackground(media); onDismiss() },
+        )
+        if (app.background.active && app.background.current?.key != media.key) {
+            DropdownMenuItem(
+                text = { Text("Pôr na fila da música de fundo") },
+                leadingIcon = { Icon(Icons.Rounded.QueueMusic, null) },
+                onClick = { app.background.enqueue(media); onDismiss() },
             )
         }
         if (media.isLive) {
@@ -220,6 +243,7 @@ fun VideoCard(media: Media, modifier: Modifier = Modifier, upNext: List<Media>? 
         modifier.clip(RoundedCornerShape(12.dp)).hoverable(source)
             .clickable(interactionSource = source, indication = null) { app.openMedia(media, upNext) },
         menu = { dismiss -> MediaMenu(media, true, dismiss) },
+        onMiddleClick = { app.openInNewTab(media) },
     ) {
     Column(
         Modifier.fillMaxWidth(),
@@ -227,14 +251,7 @@ fun VideoCard(media: Media, modifier: Modifier = Modifier, upNext: List<Media>? 
     ) {
         Box {
             MediaThumbnail(media, Modifier.fillMaxWidth(), progress, radius = if (hovered) 4.dp else 12.dp)
-            if (hovered && !media.isLive) {
-                IconBtn(
-                    Icons.Rounded.WatchLater, "Assistir depois",
-                    onClick = { app.data.toggleWatchLater(media); app.toast("Salvo em Assistir depois") },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp), size = 32.dp, iconSize = 18.dp,
-                    background = Color(0xB3000000), hoverColor = Color(0xE6000000),
-                )
-            }
+            if (hovered) CardHoverActions(media, Modifier.align(Alignment.TopEnd).padding(6.dp))
         }
         Row(Modifier.padding(horizontal = 2.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             media.channel?.let { ch ->
@@ -271,6 +288,45 @@ fun VideoCard(media: Media, modifier: Modifier = Modifier, upNext: List<Media>? 
     }
 }
 
+/**
+ * Os atalhos que aparecem no canto da capa com o mouse em cima: o que antes só existia no botão direito e no botão do meio (nova aba,
+ * segundo plano, Multi). Cada um mostra o nome ao passar o mouse nele.
+ */
+@Composable
+private fun CardHoverActions(media: Media, modifier: Modifier) {
+    val app = LocalApp.current
+    val later by app.data.watchLater.collectAsState()
+    Column(modifier, horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (!media.isLive) {
+            val isLater = later.any { it.key == media.key }
+            HoverAction(Icons.Rounded.WatchLater, if (isLater) "Remover de Assistir depois" else "Assistir depois", "card-later") {
+                app.data.toggleWatchLater(media)
+                app.toast(if (isLater) "Removido de Assistir depois" else "Salvo em Assistir depois")
+            }
+        }
+        HoverAction(Icons.Rounded.Tab, "Abrir em nova aba", "card-new-tab") { app.openInNewTab(media) }
+        HoverAction(Icons.Rounded.Headphones, "Ouvir em segundo plano", "card-background") { app.playInBackground(media) }
+        if (media.isLive) HoverAction(Icons.Rounded.GridView, "Pôr no Multi", "card-multi") { app.addToMulti(media) }
+    }
+}
+
+/** Um botão redondo escuro sobre a capa; com o mouse em cima ele se abre e mostra o nome da ação. */
+@Composable
+private fun HoverAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tag: String, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    Row(
+        Modifier.height(32.dp).clip(RoundedCornerShape(50)).hoverable(source)
+            .background(if (hovered) Color(0xF0000000) else Color(0xB3000000))
+            .clickable(interactionSource = source, indication = null, onClick = onClick)
+            .padding(horizontal = 7.dp).testTag(tag),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (hovered) Text(label, color = Color.White, style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.padding(start = 4.dp))
+        Icon(icon, label, tint = Color.White, modifier = Modifier.size(18.dp))
+    }
+}
+
 /** Cartão horizontal (busca, relacionados, biblioteca). */
 @Composable
 fun VideoRow(
@@ -294,6 +350,7 @@ fun VideoRow(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).hoverable(source)
             .clickable(interactionSource = source, indication = null) { onClick?.invoke() ?: app.openMedia(media, upNext) },
         menu = { dismiss -> MediaMenu(media, true, dismiss) },
+        onMiddleClick = { app.openInNewTab(media) },
     ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -360,7 +417,7 @@ fun SubscribeButton(channel: Channel, modifier: Modifier = Modifier) {
 fun ChannelRow(channel: Channel, modifier: Modifier = Modifier, live: Boolean = false, subtitle: String? = null, liveMedia: Media? = null) {
     val app = LocalApp.current
     // Com o canal ao vivo, a foto e a etiqueta "AO VIVO" entram direto na live; o resto da linha abre o canal.
-    val openLive = Modifier.clip(CircleShape).clickable { app.openLive(channel, liveMedia) }
+    val openLive = Modifier.clip(CircleShape).newTabClick { app.openLiveInNewTab(channel, liveMedia) }.clickable { app.openLive(channel, liveMedia) }
     Row(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { app.openChannel(channel) }.padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -379,7 +436,7 @@ fun ChannelRow(channel: Channel, modifier: Modifier = Modifier, live: Boolean = 
                 channel.followers?.let { "${formatCount(it)} ${if (channel.platform == Platform.YouTube) "inscritos" else "seguidores"}" },
             ).joinToString(" • ")
             if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, maxLines = 1)
-            if (live) LiveTag(Modifier.padding(top = 4.dp).clip(RoundedCornerShape(4.dp)).clickable { app.openLive(channel, liveMedia) })
+            if (live) LiveTag(Modifier.padding(top = 4.dp).clip(RoundedCornerShape(4.dp)).newTabClick { app.openLiveInNewTab(channel, liveMedia) }.clickable { app.openLive(channel, liveMedia) })
         }
         SubscribeButton(channel)
     }

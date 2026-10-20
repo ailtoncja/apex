@@ -42,6 +42,9 @@ import app.apex.state.searchWords
 import app.apex.state.withoutBlocked
 import app.apex.theme.ApexColors
 import app.apex.ui.components.ActionButton
+import app.apex.ui.components.newTabClick
+import app.apex.ui.components.LinkedText
+import app.apex.ui.components.SelectableText
 import app.apex.ui.components.ApexGrid
 import app.apex.ui.components.Avatar
 import app.apex.ui.components.ChipRow
@@ -134,12 +137,12 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
                     Avatar(
                         channel.avatarUrl, channel.name, 96.dp,
-                        liveNow?.let { live -> Modifier.clip(CircleShape).clickable { app.openLive(channel, live) } } ?: Modifier,
+                        liveNow?.let { live -> Modifier.clip(CircleShape).newTabClick { app.openLiveInNewTab(channel, live) }.clickable { app.openLive(channel, live) } } ?: Modifier,
                         ring = if (liveNow != null) ApexColors.Live else null,
                     )
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(channel.name, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            SelectableText(channel.name, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             if (channel.verified) VerifiedMark(Modifier.padding(top = 4.dp))
                             PlatformTag(channel.platform)
                         }
@@ -149,7 +152,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                         ).joinToString(" • ")
                         if (meta.isNotEmpty()) Text(meta, style = MaterialTheme.typography.bodyMedium, color = ApexColors.Muted)
                         details?.description?.takeIf { it.isNotBlank() }?.let {
-                            Text(it, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            LinkedText(it, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -201,7 +204,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
             tab == aboutTab -> fullSpan("about") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 4.dp)) {
                     Text("Sobre", style = MaterialTheme.typography.titleLarge)
-                    Text(
+                    LinkedText(
                         details?.description?.takeIf { it.isNotBlank() } ?: "Este canal não tem descrição.",
                         style = MaterialTheme.typography.bodyMedium, color = ApexColors.OnSurface,
                     )

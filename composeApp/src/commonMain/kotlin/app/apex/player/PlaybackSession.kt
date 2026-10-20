@@ -26,7 +26,8 @@ sealed interface LoadState {
     data object Idle : LoadState
     data object Loading : LoadState
     data class Ready(val resolved: Resolved) : LoadState
-    data class Error(val message: String) : LoadState
+    /** [offline]: a live não está no ar (não é falha); [channel] é o canal dela, quando a plataforma respondeu. */
+    data class Error(val message: String, val offline: Boolean = false, val channel: app.apex.model.Channel? = null) : LoadState
 }
 
 /** O que está tocando agora: resolve o endereço, escolhe a qualidade, guarda histórico e encadeia o próximo. */
@@ -59,6 +60,17 @@ class PlaybackSession(
     private var job: Job? = null
     private var played: List<Media> = emptyList()
 
+    /**
+     * Repetir o vídeo: quando ele acaba, recomeça do início (do trecho, num clipe) em vez de ir para o próximo. Vale para o vídeo aberto, como
+     * no YouTube: abrir outro desliga.
+     */
+    private val _loop = MutableStateFlow(false)
+    val loop: StateFlow<Boolean> = _loop.asStateFlow()
+
+    fun setLoop(on: Boolean) {
+        _loop.value = on
+    }
+
     /** O preparo dos vídeos do YouTube (o mais lento da abertura) fica guardado e pode ser feito antes do clique. */
     private val resolved = ResolveCache(scope, { media -> resolveNow(media) })
 
@@ -87,6 +99,21 @@ class PlaybackSession(
     /** O endereço de [media] para quem toca fora desta sessão (o Multi): usa o preparo guardado quando há. */
     suspend fun resolve(media: Media): Resolved = if (cacheable(media)) resolved.get(media).await() else resolveNow(media)
 
+    /**
+     * Título, canal e capa de [media] sem preparar o vídeo (sem o yt-dlp), para as abas guardadas que ficaram "Carregando…". O YouTube pelo
+     * pedido rápido do player (uns 0,2 s); a Twitch e a Kick pelo preparo de sempre, que já é só um pedido à API delas.
+     */
+    suspend fun describe(media: Media): Media? = runCatching {
+        when (media.platform) {
+            Platform.YouTube -> {
+                val found = fastYoutube?.invoke(media)?.media ?: media
+                if (found.thumbnailUrl != null || found.id.length != 11) found
+                else found.copy(thumbnailUrl = "https://i.ytimg.com/vi/${found.id}/mqdefault.jpg")
+            }
+            else -> resolveNow(media).media
+        }
+    }.getOrNull()
+
     /** Prepara um vídeo ou live antes de a pessoa abrir (ao passar o mouse, ou o próximo da fila), para abrir na hora. */
     fun prefetch(media: Media) {
         if (cacheable(media)) resolved.prefetch(media)
@@ -99,7 +126,12 @@ class PlaybackSession(
         scope.launch {
             player.state.map { it.ended }.distinctUntilChanged().collect { ended ->
                 val live = (_load.value as? LoadState.Ready)?.resolved?.isLive == true
-                if (ended && !live && data.settings.value.autoplayNext) next()
+                if (!ended || live) return@collect
+                when {
+                    // Recomeçar depois do fim abre o vídeo de novo do início (ver PlayerController.resume).
+                    _loop.value -> { Timing.mark("repetir: recomeçando"); player.resume() }
+                    data.settings.value.autoplayNext -> next()
+                }
             }
         }
         scope.launch {
@@ -116,10 +148,12 @@ class PlaybackSession(
         if (s.hasMedia && s.positionMs > 0) data.recordHistory(media, s.positionMs, s.durationMs)
     }
 
-    fun open(media: Media, upNext: List<Media>? = null) {
+    /** Abre [media]; [startAtMs] (ponto do arquivo) começa dali em vez de onde a pessoa tinha parado (vale só para vídeo gravado). */
+    fun open(media: Media, upNext: List<Media>? = null, startAtMs: Long? = null) {
         Timing.start("abrir ${media.platform} ${media.id.take(30)}")
         saveProgress()
         _current.value?.let { prev -> if (prev.key != media.key) played = (played + prev).takeLast(30) }
+        if (_current.value?.key != media.key) _loop.value = false
         if (upNext != null) _upNext.value = upNext
         _current.value = media
         _load.value = LoadState.Loading
@@ -136,7 +170,7 @@ class PlaybackSession(
                 _load.value = LoadState.Ready(resolved)
                 val settings = data.settings.value
                 // A posição salva tem de ser lida ANTES de registrar a abertura no histórico, senão ela já viria zerada.
-                val start = startPosition(resolved, settings.rememberPosition)
+                val start = startAtMs?.takeIf { !resolved.isLive } ?: startPosition(resolved, settings.rememberPosition)
                 data.touchHistory(resolved.media)
                 val chosen = pickDefaultQuality(resolved.qualities, settings.defaultQuality)
                 startPlayback(resolved, chosen, start)
@@ -150,6 +184,8 @@ class PlaybackSession(
                 if (!resolved.complete) complete(resolved)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
+            } catch (e: app.apex.source.ChannelOfflineException) {
+                _load.value = LoadState.Error(e.message ?: "", offline = true, channel = e.channel ?: media.channel)
             } catch (e: Exception) {
                 _load.value = LoadState.Error(e.message ?: "Não foi possível abrir este vídeo.")
             }
@@ -167,6 +203,7 @@ class PlaybackSession(
             val result = lite.pendingFull?.await() ?: runCatching { extractor.resolve(lite.media) }
             if (_current.value?.key != lite.media.key) return@launch
             val full = result.getOrNull()
+            Timing.mark(if (full != null) "yt-dlp: pronto (${full.fileUrls.size} endereços diretos)" else "yt-dlp falhou: ${result.exceptionOrNull()?.message?.take(200)}")
             if (full == null) {
                 val failure = result.exceptionOrNull()
                 if (lite.rangeBridge && failure !is kotlinx.coroutines.CancellationException) {
@@ -231,7 +268,7 @@ class PlaybackSession(
 
 
     private fun startPlayback(resolved: Resolved, quality: Quality, startMs: Long) {
-        Timing.mark("player.play (${quality.label}, volume ${data.settings.value.volume})")
+        Timing.mark("player.play (${quality.label}, volume ${data.settings.value.volume}, a partir de ${startMs / 1000} s)")
         _quality.value = quality
         player.setVolume(data.settings.value.volume)
         player.play(

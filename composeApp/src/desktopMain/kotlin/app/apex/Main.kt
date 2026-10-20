@@ -30,6 +30,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
+import app.apex.player.ViewingWatch
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -188,13 +190,21 @@ fun main(args: Array<String>) {
 
 private fun runApp() = application {
     val dataDir = remember { FileStore.defaultDir() }
+    // Se a interface travar (a janela "não responde"), o que cada thread fazia fica em travamentos.txt, na pasta de dados.
+    remember { app.apex.util.FreezeWatch.start(File(dataDir, "travamentos.txt")) }
     val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
     // `-Dapex.train=1` (só o Apex.cmd usa): abre numa janela fora da tela, passeia pelas telas e fecha sozinho, para o JVM aprender como o app
     // roda e montar o cache de inicialização (veja o Apex.cmd). Não mexe nos dados da pessoa: o Apex.cmd aponta `apex.data` para uma pasta à parte.
     val training = remember { System.getProperty("apex.train") == "1" }
+    // `APEX_BACKGROUND=1` (só para ensaio): janela fora da tela e sem tomar o foco, para medir sem atrapalhar quem usa o computador.
+    val background = remember { training || System.getenv("APEX_BACKGROUND") == "1" }
+    // `APEX_INVISIBLE=1` (só para ensaio): a janela fica na tela, mas totalmente transparente, sem receber cliques nem o foco, para ensaiar
+    // o que só acontece no monitor (maximizar) sem atrapalhar quem usa o computador. `APEX_MAXIMIZED=1`: abre maximizada.
+    val invisible = remember { System.getenv("APEX_INVISIBLE") == "1" }
     val windowState = rememberWindowState(
+        placement = if (System.getenv("APEX_MAXIMIZED") == "1") WindowPlacement.Maximized else WindowPlacement.Floating,
         size = DpSize(1360.dp, 820.dp),
-        position = if (training) WindowPosition(-30000.dp, 0.dp) else WindowPosition.Aligned(Alignment.Center),
+        position = if (background && !invisible) WindowPosition(-30000.dp, 0.dp) else WindowPosition.Aligned(Alignment.Center),
     )
 
     setSingletonImageLoaderFactory { context ->
@@ -233,7 +243,7 @@ private fun runApp() = application {
 
     // Tela cheia como o F11 (sem barra de título nem bordas, cobrindo o monitor): ver WindowsFullscreen.
     val requested = boot.getOrNull()?.system?.fullscreen?.collectAsState()?.value ?: false
-    val fullscreenController = remember { FullscreenController(windowState) }
+    val fullscreenController = remember { FullscreenController(windowState, offscreen = background) }
 
     // Atalho para testes: `APEX_FULLSCREEN=1` abre já em tela cheia (F11), `player` na tela cheia do player; `cycle` entra e, depois de alguns segundos, sai.
     LaunchedEffect(Unit) {
@@ -246,11 +256,33 @@ private fun runApp() = application {
                 exitApplication()
             }
         }
-        // `APEX_SEEK=1800@15`: 15 s depois de abrir, pula o vídeo para os 1800 s (para ensaiar o salto na barra de progresso).
+        // `APEX_SEEK=1800@15`: 15 s depois de abrir, pula o vídeo para os 1800 s (para ensaiar o salto na barra de progresso). Vários, separados
+        // por vírgula, saem na ordem: `1800@15,+10@30,-60@40` (com sinal, o pulo é relativo à posição, como as setas); `loop@3` liga o repetir.
         System.getenv("APEX_SEEK")?.takeIf { it.isNotBlank() }?.let { spec ->
             launch {
-                kotlinx.coroutines.delay((spec.substringAfter('@', "15").toLongOrNull() ?: 15) * 1_000)
-                spec.substringBefore('@').toLongOrNull()?.let { app.player.seekTo(it * 1_000) }
+                val opened = System.currentTimeMillis()
+                for (step in spec.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
+                    val atMs = (step.substringAfter('@', "15").toDoubleOrNull() ?: 15.0) * 1_000
+                    kotlinx.coroutines.delay((opened + atMs.toLong() - System.currentTimeMillis()).coerceAtLeast(0))
+                    val target = step.substringBefore('@')
+                    if (target == "loop") { app.session.setLoop(true); continue } // `loop@3`: liga o "repetir"
+                    // `bg:ID@5`: toca o vídeo ID do YouTube como música de fundo; `bgmove@5`: passa o vídeo da página para o fundo.
+                    if (target.startsWith("bg:")) {
+                        val id = target.removePrefix("bg:")
+                        app.playInBackground(Media(Platform.YouTube, id, "Carregando…", url = "https://www.youtube.com/watch?v=$id"))
+                        continue
+                    }
+                    if (target == "bgmove") { app.moveToBackground(); continue }
+                    // `fs@5`, `nofs@6`: tela cheia do player liga e desliga; `f11@7`: o F11 (tela cheia da janela).
+                    if (target == "fs") { app.setPlayerFullscreen(true); continue }
+                    if (target == "nofs") { app.setPlayerFullscreen(false); continue }
+                    if (target == "f11") { app.toggleWindowFullscreen(); continue }
+                    // `bgwatch@20`: volta a assistir o que toca no fundo (o clique no título da barra).
+                    if (target == "bgwatch") { app.background.current?.let { app.watchFromBackground(it.key) }; continue }
+                    if (target == "end") { app.player.seekTo((app.player.state.value.durationMs - 3_000).coerceAtLeast(0)); continue } // 3 s antes do fim
+                    val seconds = target.toLongOrNull() ?: continue
+                    if (target.startsWith("+") || target.startsWith("-")) app.player.seekBy(seconds * 1_000) else app.player.seekTo(seconds * 1_000)
+                }
             }
         }
         when (System.getenv("APEX_FULLSCREEN")) {
@@ -273,14 +305,25 @@ private fun runApp() = application {
         onCloseRequest = {
             // Grava o que ainda estava esperando (as mudanças dos últimos instantes).
             boot.getOrNull()?.data?.flush()
+            boot.getOrNull()?.background?.close()
             boot.getOrNull()?.player?.release()
             exitApplication()
         },
         title = "Apex",
         icon = AppIcon,
         state = windowState,
+        focusable = !background && !invisible,
     ) {
+        if (invisible) LaunchedEffect(Unit) { WindowsFullscreen.makeInvisible(window) }
+        // Quanto o vídeo é visto (minimizado, atrás de um jogo…): os players poupam o PC quando ninguém vê (ver ViewingWatch).
+        LaunchedEffect(Unit) {
+            boot.getOrNull()?.let { container -> ViewingWatch.enabled = { container.data.settings.value.saveWhileGaming } }
+            ViewingWatch.start(window)
+        }
         LaunchedEffect(requested) { fullscreenController.apply(window, requested) }
+        // A barra de título do Windows nas cores do tema (troca junto com o tema).
+        val themeId = boot.getOrNull()?.data?.settings?.collectAsState()?.value?.theme
+        LaunchedEffect(themeId) { TitleBarColors.apply(window, app.apex.theme.Themes.byId(themeId)) }
         if (app.apex.util.FrameMeter.enabled) LaunchedEffect(Unit) {
             app.apex.util.FrameMeter.run(File(FileStore.defaultDir(), "frames.txt"))
         }
@@ -288,7 +331,12 @@ private fun runApp() = application {
             onSuccess = { app ->
                 // Voltou para a janela (de outro programa): confere na hora quem entrou ao vivo enquanto a pessoa estava fora.
                 val focused = LocalWindowInfo.current.isWindowFocused
-                LaunchedEffect(focused) { if (focused) app.liveWatcher.refreshIfStale(5_000) }
+                LaunchedEffect(focused) {
+                    if (focused) {
+                        app.liveWatcher.refreshIfStale(5_000)
+                        app.syncFollowsIfStale(10 * 60_000L)
+                    }
+                }
                 CompositionLocalProvider(LocalApp provides app) { ApexApp() }
             },
             onFailure = { StartupProblem(it) },

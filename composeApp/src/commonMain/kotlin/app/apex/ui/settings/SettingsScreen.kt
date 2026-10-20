@@ -1,6 +1,15 @@
 package app.apex.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,23 +72,31 @@ fun SettingsScreen() {
     val engineState by app.extractor.state.collectAsState()
     var engineMessage by remember { mutableStateOf("") }
 
-    // No canto esquerdo da página, como as outras telas.
-    Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopStart) {
+    val scroll = rememberScrollState()
+    // Onde cada seção começa na coluna (para o índice ao lado pular até ela e marcar a que está na tela).
+    val anchors = remember { mutableStateMapOf<String, Int>() }
+
+    // No canto esquerdo da página, como as outras telas; o índice fica à direita quando a janela tem espaço.
+    BoxWithConstraints(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.TopStart) {
+      val wide = maxWidth >= 1080.dp
+      Row(Modifier.fillMaxHeight()) {
+      CompositionLocalProvider(LocalSectionAnchors provides anchors) {
         Column(
-            Modifier.widthIn(max = 880.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp),
+            Modifier.widthIn(max = 880.dp).fillMaxWidth(if (wide) 0.78f else 1f).verticalScroll(scroll).padding(horizontal = 24.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             Text("Ajustes", style = MaterialTheme.typography.headlineMedium)
 
-            Section("Conta do Apex", "Sincroniza inscrições, histórico, playlists e ajustes em todos os seus aparelhos.") {
-                CloudSection()
-            }
-
+            // As contas das plataformas primeiro: são elas que enchem o app (inscrições, curtidas, chat). A Conta do Apex só sincroniza.
             Section("Contas das plataformas", "Entre para importar suas inscrições, curtir, comentar e escrever no chat.") {
                 Platform.entries.forEach { p ->
                     AccountRow(p, accounts[p.name])
                     if (p != Platform.entries.last()) Divider()
                 }
+            }
+
+            Section("Conta do Apex", "Opcional: sincroniza inscrições, histórico, playlists e ajustes em todos os seus aparelhos.") {
+                CloudSection()
             }
 
             Section("Aparência", "As cores do app. A escolha vale na hora e fica guardada.") {
@@ -124,8 +141,17 @@ fun SettingsScreen() {
                 Setting("Decodificação por hardware", "Usa a placa de vídeo. Vale na próxima vez que abrir o app") {
                     Toggle(settings.preferHardwareDecode) { v -> app.data.updateSettings { it.copy(preferHardwareDecode = v) } }
                 }
+                Setting(
+                    "Poupar o PC durante jogos",
+                    "Com o Apex minimizado ou atrás de um jogo em tela cheia, a imagem do vídeo para (o som continua); com o jogo em outro monitor, o vídeo vai a até 30 quadros por segundo",
+                ) {
+                    Toggle(settings.saveWhileGaming) { v -> app.data.updateSettings { it.copy(saveWhileGaming = v) } }
+                }
                 Setting("Chat nas lives", "Mostra o chat ao lado da transmissão") {
                     Toggle(settings.showChat) { v -> app.data.updateSettings { it.copy(showChat = v) } }
+                }
+                Setting("Emotes das extensões no chat", "Os da 7TV, BetterTTV e FrankerFaceZ aparecem como imagem no chat da Twitch, como no navegador com as extensões") {
+                    Toggle(settings.chatExtensionEmotes) { v -> app.data.updateSettings { it.copy(chatExtensionEmotes = v) } }
                 }
             }
 
@@ -223,13 +249,53 @@ fun SettingsScreen() {
             }
             Text("Apex • feito para assistir", color = ApexColors.Faint, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 32.dp))
         }
+      }
+      if (wide) SettingsIndex(anchors, scroll) { y -> scope.launch { scroll.animateScrollTo(y) } }
+      }
+    }
+}
+
+/** As seções dos ajustes, na ordem da página, com o nome curto que aparece no índice. */
+private val SECTIONS = listOf(
+    "Contas das plataformas" to "Contas",
+    "Conta do Apex" to "Conta do Apex",
+    "Aparência" to "Aparência",
+    "Reprodução" to "Reprodução",
+    "Lives" to "Lives",
+    "Canais ocultos" to "Canais ocultos",
+    "Atualizações do Apex" to "Atualizações",
+    "Mecanismo de vídeo (yt-dlp)" to "Mecanismo de vídeo",
+    "Dados" to "Dados",
+    "Atalhos do teclado" to "Atalhos",
+)
+
+private val LocalSectionAnchors = compositionLocalOf<MutableMap<String, Int>?> { null }
+
+/** O índice dos ajustes: pula para a seção e marca a que está no topo da tela. */
+@Composable
+private fun SettingsIndex(anchors: Map<String, Int>, scroll: androidx.compose.foundation.ScrollState, onJump: (Int) -> Unit) {
+    val current = SECTIONS.lastOrNull { (title, _) -> (anchors[title] ?: Int.MAX_VALUE) <= scroll.value + 40 }?.first ?: SECTIONS.first().first
+    Column(Modifier.padding(top = 64.dp, end = 24.dp).width(190.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SECTIONS.forEach { (title, label) ->
+            val selected = title == current
+            Text(
+                label,
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                    .background(if (selected) ApexColors.SurfaceHighest else Color.Transparent)
+                    .clickable { anchors[title]?.let(onJump) }
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                style = MaterialTheme.typography.bodyMedium, color = if (selected) ApexColors.OnSurface else ApexColors.Muted, maxLines = 1,
+            )
+        }
     }
 }
 
 @Composable
 private fun Section(title: String, subtitle: String? = null, content: @Composable () -> Unit) {
+    val anchors = LocalSectionAnchors.current
     Column(
-        Modifier.fillMaxWidth().background(ApexColors.Surface, RoundedCornerShape(16.dp)).padding(20.dp),
+        Modifier.fillMaxWidth().onGloballyPositioned { anchors?.set(title, it.positionInParent().y.toInt()) }
+            .background(ApexColors.Surface, RoundedCornerShape(16.dp)).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {

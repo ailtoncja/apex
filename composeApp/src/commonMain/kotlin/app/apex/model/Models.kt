@@ -141,7 +141,12 @@ data class ChatMessage(
     val text: String,
     val color: Long? = null,
     val badges: List<String> = emptyList(),
+    /** Os emotes que a plataforma marcou no texto (os das extensões entram na hora de mostrar, ver [app.apex.chat.withExtensionEmotes]). */
+    val emotes: List<ChatEmote> = emptyList(),
 )
+
+/** Um emote no texto de uma mensagem: [start] até [end] (sem incluir) do texto vira a imagem [url], com largura/altura [ratio]. */
+data class ChatEmote(val start: Int, val end: Int, val name: String, val url: String, val ratio: Float = 1f)
 
 @Serializable
 data class HistoryEntry(
@@ -167,6 +172,15 @@ data class AppSettings(
     val volume: Int = 100,
     /** Deixa o volume passar de 100% (até 200%, amplificando o som; pode distorcer). Desligado, o volume vai até 100%. */
     val volumeBoost: Boolean = true,
+    /** O volume da música de fundo (o segundo player, só de som), de 0 a 100; separado do volume do vídeo. */
+    val backgroundVolume: Int = 50,
+    /** Mostrar no chat os emotes da 7TV, da BetterTTV e da FrankerFaceZ (as extensões que a comunidade da Twitch usa). */
+    val chatExtensionEmotes: Boolean = true,
+    /**
+     * Poupar o PC durante jogos: com o Apex minimizado ou atrás de um programa em tela cheia, a imagem do vídeo é desligada (o som continua);
+     * com um jogo em tela cheia em outro monitor, o vídeo vai a até 30 quadros por segundo.
+     */
+    val saveWhileGaming: Boolean = true,
     val rememberPosition: Boolean = true,
     val showChat: Boolean = true,
     val hideMature: Boolean = true,
@@ -191,4 +205,9 @@ data class AppSettings(
     val lowLatencyLive: Boolean = true,
     /** O tema das cores (id de [app.apex.theme.Themes]): escuro, claro ou um dos dois Subaru. */
     val theme: String = "dark",
+    /**
+     * Canais (chaves `Plataforma:id`) cujo seguir ou deixar de seguir vale só no Apex, porque a plataforma não aceitou ou não permite (a
+     * Twitch não deixa outros apps mudarem isso). A sincronização com a conta não mexe neles até os dois lados concordarem de novo.
+     */
+    val localFollows: List<String> = emptyList(),
 )

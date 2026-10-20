@@ -15,6 +15,12 @@ sealed interface ExtractorState {
 
 class ExtractionException(message: String) : Exception(message)
 
+/**
+ * A live pedida não está no ar (Twitch e Kick). Não é falha: a tela mostra o canal offline com o caminho para os vídeos dele, em vez de
+ * um erro com "Tentar de novo". [channel] traz a foto e o nome quando a plataforma respondeu.
+ */
+class ChannelOfflineException(val name: String, val channel: app.apex.model.Channel? = null) : IllegalStateException("O canal $name está offline.")
+
 /** Resolve os streams e dados pesados do YouTube. Cada plataforma entrega a sua implementação. */
 interface Extractor {
     val state: kotlinx.coroutines.flow.StateFlow<ExtractorState>

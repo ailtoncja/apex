@@ -5,12 +5,20 @@ build/
 *.iml
 local.properties
 .env
+.env.*
+!.env.example
 server/.env
 *.secret
+pgdata/
+node_modules/
 
 # Pacote para distribuir (gerado por Empacotar.cmd)
 dist/
 
 # Chave privada que assina as atualizações: NUNCA no repositório
 *.key
+*.key.enc
+*.pem
+*.p12
+*.pfx
 signing/

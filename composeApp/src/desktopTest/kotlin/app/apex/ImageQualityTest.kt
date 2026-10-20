@@ -10,10 +10,13 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import app.apex.ui.components.RemoteImage
+import app.apex.ui.components.safeImageUrl
 import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 import kotlin.math.sqrt
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** As miniaturas e capas reduzidas para a tela não podem sair serrilhadas ("pixeladas"). */
@@ -25,6 +28,19 @@ class ImageQualityTest {
         val out = java.io.ByteArrayOutputStream()
         ImageIO.write(img, "png", out)
         return "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(out.toByteArray())
+    }
+
+    @Test
+    fun so_enderecos_da_internet_chegam_ao_coil() {
+        assertEquals("https://i.ytimg.com/vi/x/hq.jpg", safeImageUrl("https://i.ytimg.com/vi/x/hq.jpg"))
+        assertEquals("http://static-cdn.jtvnw.net/a.png", safeImageUrl("http://static-cdn.jtvnw.net/a.png"))
+        assertEquals("https://i.ytimg.com/vi/x/hq.jpg", safeImageUrl("//i.ytimg.com/vi/x/hq.jpg"), "sem esquema vira https")
+        assertEquals("data:image/png;base64,AAAA", safeImageUrl("data:image/png;base64,AAAA"))
+        listOf(
+            null, "", "   ", "file:///C:/Windows/win.ini", "FILE:///etc/passwd", "C:\\Users\\x\\a.png", "\\\\servidor\\pasta\\a.png", "//servidor\\pasta",
+            "jar:file:/x.jar!/a.png", "data:text/html,oi", "ftp://x/a.png", "https://", "https:///a.png", "/etc/passwd", "a.png",
+            "https://host/a\\b.png", "https://host/a\nb",
+        ).forEach { assertNull(safeImageUrl(it), "deveria recusar: $it") }
     }
 
     @OptIn(ExperimentalTestApi::class)

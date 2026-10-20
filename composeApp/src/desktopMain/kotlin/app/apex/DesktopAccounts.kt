@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.net.URLDecoder
+import java.nio.file.Files
 import kotlin.coroutines.coroutineContext
 
 class Cookie(val domain: String, val name: String, val value: String, val line: String)
@@ -34,8 +35,25 @@ class DesktopAccounts(
 ) {
     private val browsers: List<InstalledBrowser> by lazy { installedBrowsers() }
 
+    private val loginProfilesRoot = File(dataDir, "login-browser")
+
     init {
         runCatching { deleteLegacyCookieJar() }
+        deleteLeftoverLoginProfiles()
+    }
+
+    /**
+     * Perfis de login de uma execução que não terminou direito (o Apex fechou no meio do login) ainda guardam a sessão do Google: apaga em
+     * segundo plano. Só os de antes de agora; um login novo usa uma pasta nova, criada depois.
+     */
+    private fun deleteLeftoverLoginProfiles() {
+        val startedAt = System.currentTimeMillis()
+        Thread {
+            runCatching {
+                val leftovers = loginProfilesRoot.listFiles()?.filter { it.lastModified() < startedAt }.orEmpty()
+                leftovers.forEach { dir -> repeat(5) { if (!dir.exists() || dir.deleteRecursively()) return@forEach; Thread.sleep(500) } }
+            }
+        }.also { it.isDaemon = true; it.name = "apex-login-cleanup" }.start()
     }
 
     /** Versões antigas guardavam os cookies do YouTube em texto puro neste arquivo; ele não existe mais (o yt-dlp recebe um arquivo temporário). */
@@ -65,7 +83,9 @@ class DesktopAccounts(
     /** Abre o navegador escolhido, espera o usuário entrar e devolve a conta (ou `null` se ele desistiu ou fechou a janela). */
     suspend fun browserLogin(platform: Platform, browserId: String, onStatus: (String) -> Unit): Account? = withContext(Dispatchers.IO) {
         val browser = browsers.firstOrNull { it.id == browserId } ?: return@withContext null
-        withTimeoutOrNull(10 * 60_000L) {
+        // No Chromium a porta de controle fica aberta enquanto o login espera: menos tempo que no Firefox (que não abre porta nenhuma).
+        val timeout = if (browser.engine == BrowserEngine.Chromium) CHROMIUM_LOGIN_TIMEOUT_MS else 10 * 60_000L
+        withTimeoutOrNull(timeout) {
             when (browser.engine) {
                 BrowserEngine.Firefox -> firefoxLogin(platform, browser, onStatus)
                 BrowserEngine.Chromium -> chromiumLogin(platform, browser, onStatus)
@@ -103,7 +123,9 @@ class DesktopAccounts(
 
     private suspend fun chromiumLogin(platform: Platform, browser: InstalledBrowser, onStatus: (String) -> Unit): Account? {
         onStatus("Abrindo o ${browser.label}…")
-        val profile = File(dataDir, "login-browser/${browser.id}")
+        // Sempre uma pasta nova, criada agora pelo Apex (nunca um perfil que já existia).
+        loginProfilesRoot.mkdirs()
+        val profile = Files.createTempDirectory(loginProfilesRoot.toPath(), "${browser.id}-").toFile()
         try {
             ChromiumSession.open(browser.exe, profile, loginUrl(platform)).use { session ->
                 onStatus("Entre na sua conta na janela que abriu. O Apex detecta sozinho e fecha a janela.")
@@ -159,5 +181,10 @@ class DesktopAccounts(
 
     fun signOut(platform: Platform) {
         // O login fica só no Apex (cifrado); nada a apagar no disco além disso.
+    }
+
+    companion object {
+        /** Quanto a janela de login do Chromium (e a porta de controle dela) fica aberta esperando o usuário entrar. */
+        const val CHROMIUM_LOGIN_TIMEOUT_MS = 5 * 60_000L
     }
 }

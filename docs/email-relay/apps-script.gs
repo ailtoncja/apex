@@ -11,7 +11,7 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
 
     // Só o servidor do Apex conhece a senha. Sem isso, qualquer pessoa poderia mandar e-mail em seu nome.
-    if (!secret || !data.secret || data.secret !== secret) return reply({ ok: false, error: 'forbidden' });
+    if (!secret || !data.secret || !same(String(data.secret), String(secret))) return reply({ ok: false, error: 'forbidden' });
 
     var to = String(data.to || '').trim();
     var subject = String(data.subject || '').replace(/[\r\n]+/g, ' ').substring(0, 200);
@@ -29,6 +29,18 @@ function doPost(e) {
   } catch (err) {
     return reply({ ok: false, error: 'failed' });
   }
+}
+
+/**
+ * Compara as senhas em tempo constante: o `!==` para no primeiro caractere diferente, e medir o tempo da resposta
+ * entregaria a senha aos poucos. Percorre sempre o tamanho todo da senha certa.
+ */
+function same(a, b) {
+  var diff = a.length ^ b.length;
+  for (var i = 0; i < b.length; i++) {
+    diff |= (i < a.length ? a.charCodeAt(i) : 0) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 function reply(obj) {

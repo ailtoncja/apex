@@ -43,12 +43,18 @@ data class ServerConfig(
     /** Limites de dados sincronizados por conta (linhas e bytes). */
     val maxRowsPerUser: Long = SyncService.MAX_ROWS_PER_USER,
     val maxBytesPerUser: Long = SyncService.MAX_BYTES_PER_USER,
+    /** Em que endereço o servidor escuta. Por padrão só no próprio computador; no container (Render/Fly) o Dockerfile define `BIND_HOST=0.0.0.0`. */
+    val bindHost: String = DEFAULT_BIND_HOST,
 ) {
     val isProduction: Boolean get() = database != null
 
     companion object {
         /** Onde ficam os downloads do app (a página de Releases do projeto). */
         const val DEFAULT_DOWNLOAD_URL = "https://github.com/ailtoncja/apex/releases/latest"
+
+        const val DEFAULT_BIND_HOST = "127.0.0.1"
+
+        private val LOCAL_HOSTS = setOf("localhost", "127.0.0.1", "::1", "[::1]")
 
         /** Variáveis do sistema; as que faltarem vêm de um arquivo `.env` (na pasta atual ou em `~/.apex-server`). */
         fun load(): ServerConfig {
@@ -96,10 +102,19 @@ data class ServerConfig(
                 maxUsers = env["MAX_USERS"]?.toIntOrNull()?.coerceAtLeast(0) ?: 2000,
                 registerLimitPerHour = env["REGISTER_LIMIT_PER_HOUR"]?.toIntOrNull()?.coerceAtLeast(1) ?: 20,
                 mailLimitPerHour = env["MAIL_LIMIT_PER_HOUR"]?.toIntOrNull()?.coerceAtLeast(1) ?: 10,
+                bindHost = env["BIND_HOST"]?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_BIND_HOST,
             )
         }
 
-        /** Aceita `postgres://usuario:senha@host/banco?sslmode=require` (o formato do Neon) ou um `jdbc:postgresql://…`. */
+        /**
+         * Aceita `postgres://usuario:senha@host/banco?sslmode=require&channel_binding=require` (o formato do Neon) ou um `jdbc:postgresql://…`
+         * (que passa sem mudança, para quem precisa de algo diferente).
+         *
+         * Banco fora da própria máquina: a conexão é sempre criptografada **e** o certificado é conferido (`verify-full`, com os certificados
+         * confiáveis do Java), qualquer que seja o `sslmode` da string. O `sslmode=require` do libpq/Neon não confere o certificado, e no
+         * driver do Java aceitaria qualquer um (um intermediário leria a senha e os dados). O `channel_binding=require` do libpq vira o
+         * `channelBinding=require` do driver do Java. No próprio computador (desenvolvimento, sem TLS) nada disso é imposto.
+         */
         fun parseDatabaseUrl(url: String, env: Map<String, String> = emptyMap()): DbConnection {
             if (url.startsWith("jdbc:")) return DbConnection(url, env["DB_USER"], env["DB_PASSWORD"])
             val uri = URI(url.replaceFirst("postgresql://", "postgres://"))
@@ -108,11 +123,20 @@ data class ServerConfig(
                 URLDecoder.decode(it[0], "UTF-8") to it.getOrNull(1)?.let { p -> URLDecoder.decode(p, "UTF-8") }
             } ?: (null to null)
             val port = if (uri.port > 0) ":${uri.port}" else ""
-            // O Neon manda `channel_binding=require`, que o driver do Java não conhece; sem ele a conexão funciona igual.
-            val parts = uri.rawQuery?.split('&')?.filterNot { it.startsWith("channel_binding=") }.orEmpty().filter { it.isNotEmpty() }.toMutableList()
-            // Banco fora da própria máquina: a conexão é sempre criptografada, mesmo que a string de conexão esqueça do sslmode.
-            val local = uri.host in setOf("localhost", "127.0.0.1", "::1", "[::1]")
-            if (!local && parts.none { it.startsWith("sslmode=") }) parts += "sslmode=require"
+            val local = uri.host in LOCAL_HOSTS
+            val params = uri.rawQuery?.split('&').orEmpty().filter { it.isNotEmpty() }
+            val channelBinding = params.any { it == "channel_binding=require" || it == "channelBinding=require" }
+            val parts = params.filterNot { p ->
+                val key = p.substringBefore('=')
+                // O TLS do banco remoto é decidido aqui embaixo; o que a string pedir não rebaixa a segurança.
+                key == "channel_binding" || key == "channelBinding" || (!local && key in setOf("sslmode", "sslfactory", "ssl"))
+            }.toMutableList()
+            if (!local) {
+                parts += "sslmode=verify-full"
+                parts += "sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory"
+                // Sem TLS (só no próprio computador) não há canal para amarrar: lá o parâmetro é ignorado.
+                if (channelBinding) parts += "channelBinding=require"
+            }
             val query = parts.takeIf { it.isNotEmpty() }?.joinToString("&", prefix = "?") ?: ""
             return DbConnection("jdbc:postgresql://${uri.host}$port${uri.rawPath}$query", user, pass)
         }

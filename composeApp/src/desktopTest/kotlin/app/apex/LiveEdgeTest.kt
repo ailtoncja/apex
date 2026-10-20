@@ -160,6 +160,24 @@ class LiveEdgeTest {
 
             assertEquals(404, fetch(proxy.url.replace("live.m3u8", "outra")).first)
 
+            // O endereço tem um trecho aleatório: sem ele (o endereço antigo, fácil de adivinhar) não serve nada.
+            val port = proxy.url.substringAfter("127.0.0.1:").substringBefore('/').toInt()
+            val token = proxy.url.substringAfter("$port/").substringBefore('/')
+            assertTrue(Regex("[A-Za-z0-9_-]{22}").matches(token), token)
+            assertEquals(404, fetch("http://127.0.0.1:$port/live.m3u8").first)
+
+            // Host de fora (DNS rebinding) é recusado; o do VLC (127.0.0.1:porta) e localhost:porta passam.
+            fun withHost(host: String): String = java.net.Socket("127.0.0.1", port).use { s ->
+                s.soTimeout = 5_000
+                s.getOutputStream().write("GET /$token/live.m3u8 HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray())
+                s.getOutputStream().flush()
+                String(s.getInputStream().readBytes(), Charsets.ISO_8859_1).lineSequence().first()
+            }
+            assertEquals("HTTP/1.1 403 Forbidden", withHost("evil.example:$port"))
+            assertEquals("HTTP/1.1 403 Forbidden", withHost("127.0.0.1"))
+            assertEquals("HTTP/1.1 200 OK", withHost("127.0.0.1:$port"))
+            assertEquals("HTTP/1.1 200 OK", withHost("localhost:$port"))
+
             // a estimativa: o corte tira 2 trechos (4 s) do atraso em relação a começar 3 trechos antes do fim
             val e = proxy.estimate
             assertNotNull(e)

@@ -14,8 +14,11 @@ import androidx.compose.ui.graphics.nativeCanvas
 import app.apex.chat.EmoteRatios
 import app.apex.source.Http
 import app.apex.util.Timing
-import io.ktor.client.request.get
-import io.ktor.client.statement.readRawBytes
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.http.contentLength
+import io.ktor.utils.io.readAvailable
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +72,12 @@ private object EmoteCache {
     private const val MAX_FRAMES = 150
     private const val MAX_SIDE = 256
 
+    /** Teto do arquivo baixado: emote de verdade tem poucas centenas de KB; um endereço de terceiro (7TV, BTTV…) pode mandar qualquer coisa. */
+    private const val MAX_DOWNLOAD_BYTES = 2L * 1024 * 1024
+
+    /** Teto da memória dos quadros decodificados de UM emote (largura × altura × 4 × quadros), conferido antes de decodificar. */
+    private const val MAX_DECODED_BYTES = 64L * 1024 * 1024
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val entries = LinkedHashMap<String, Deferred<EmoteFrames?>>(64, 0.75f, true)
     private val sizes = HashMap<String, Long>()
@@ -91,11 +100,27 @@ private object EmoteCache {
     }
 
     private suspend fun load(url: String): EmoteFrames? = runCatching {
-        val bytes = Http.client.get(url).readRawBytes()
+        val bytes = download(url) ?: error("passou de ${MAX_DOWNLOAD_BYTES / 1024} KB")
         decode(bytes)
     }.onFailure { Timing.mark("emote: não abriu $url (${it.message})") }.getOrNull()
         ?.also { if (Timing.enabled && it.frames.size > 1) Timing.mark("emote: animado com ${it.frames.size} quadros (${it.loopMs} ms) $url") }
         ?.also { f -> f.frames.firstOrNull()?.let { EmoteRatios.known[url] = it.width.toFloat() / it.height.coerceAtLeast(1) } }
+
+    /** Baixa [url] até [MAX_DOWNLOAD_BYTES]; `null` se o arquivo passa disso (nem chega a ser lido inteiro). */
+    private suspend fun download(url: String): ByteArray? = Http.client.prepareGet(url).execute { response ->
+        if ((response.contentLength() ?: 0L) > MAX_DOWNLOAD_BYTES) return@execute null
+        val channel = response.bodyAsChannel()
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        while (true) {
+            val n = channel.readAvailable(buffer, 0, buffer.size)
+            if (n < 0) break
+            if (n == 0) continue
+            out.write(buffer, 0, n)
+            if (out.size() > MAX_DOWNLOAD_BYTES) return@execute null
+        }
+        out.toByteArray()
+    }
 
     /**
      * Decodifica todos os quadros (até [MAX_FRAMES]). Cada quadro de um GIF ou WebP animado pode depender de um anterior (só a parte que
@@ -107,6 +132,10 @@ private object EmoteCache {
         val info = codec.imageInfo.withColorAlphaType(ColorAlphaType.PREMUL)
         if (info.width <= 0 || info.height <= 0 || info.width > MAX_SIDE * 4 || info.height > MAX_SIDE * 4) return null
         val count = codec.frameCount.coerceIn(1, MAX_FRAMES)
+        if (info.width.toLong() * info.height * 4 * count > MAX_DECODED_BYTES) {
+            Timing.mark("emote: grande demais para decodificar (${info.width}x${info.height}, $count quadros)")
+            return null
+        }
         if (count == 1) {
             val bitmap = Bitmap().apply { allocPixels(info) }
             codec.readPixels(bitmap, 0)

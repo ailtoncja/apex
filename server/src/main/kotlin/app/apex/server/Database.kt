@@ -2,7 +2,6 @@ package app.apex.server
 
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
-import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.flywaydb.core.Flyway
@@ -14,9 +13,21 @@ import java.sql.Types
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
+import java.util.ServiceLoader
 import java.util.UUID
 
-class Database(private val ds: HikariDataSource, private val embedded: EmbeddedPostgres? = null) : AutoCloseable {
+/** Banco já rodando no modo desenvolvimento, e como desligá-lo. */
+class DevDatabase(val connection: DbConnection, val closer: AutoCloseable)
+
+/**
+ * Sobe o banco embutido do modo desenvolvimento. A implementação (PostgreSQL embutido) fica no conjunto "dev" do Gradle, que só entra
+ * no `:server:run` e nos testes: a imagem de produção não a tem e, sem DATABASE_URL, recusa subir.
+ */
+interface DevDatabaseProvider {
+    fun start(dataDir: File): DevDatabase
+}
+
+class Database(private val ds: HikariDataSource, private val embedded: AutoCloseable? = null) : AutoCloseable {
     /** Roda [block] numa transação; se der erro, desfaz tudo. */
     fun <T> tx(block: (Connection) -> T): T = ds.connection.use { c ->
         c.autoCommit = false
@@ -38,15 +49,15 @@ class Database(private val ds: HikariDataSource, private val embedded: EmbeddedP
     companion object {
         /** Conecta (ou sobe o banco embutido em desenvolvimento) e aplica as migrações. */
         fun open(config: ServerConfig): Database {
-            val embedded: EmbeddedPostgres?
+            val embedded: AutoCloseable?
             val conn: DbConnection
             if (config.database != null) {
                 embedded = null
                 conn = config.database
             } else {
-                val pg = startEmbedded(File(config.devDataDir, "pgdata"))
-                embedded = pg
-                conn = DbConnection(pg.getJdbcUrl("postgres", "postgres"), "postgres", "postgres")
+                val dev = startEmbedded(File(config.devDataDir, "pgdata"))
+                embedded = dev.closer
+                conn = dev.connection
             }
             val hikari = HikariConfig().apply {
                 jdbcUrl = conn.jdbcUrl
@@ -60,12 +71,10 @@ class Database(private val ds: HikariDataSource, private val embedded: EmbeddedP
             return Database(ds, embedded)
         }
 
-        private fun startEmbedded(dir: File): EmbeddedPostgres {
-            dir.mkdirs()
-            return EmbeddedPostgres.builder()
-                .setDataDirectory(dir)
-                .setCleanDataDirectory(false)
-                .start()
+        private fun startEmbedded(dir: File): DevDatabase {
+            val provider = ServiceLoader.load(DevDatabaseProvider::class.java).firstOrNull()
+                ?: throw ConfigException("Defina DATABASE_URL: este pacote não traz o banco embutido de desenvolvimento.")
+            return provider.start(dir)
         }
     }
 }

@@ -134,6 +134,38 @@ class BrowserLoginTest {
     }
 
     @Test
+    fun le_a_porta_e_o_caminho_que_o_chromium_grava_no_perfil() {
+        assertEquals(51234 to "/devtools/browser/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0", ChromiumSession.parseActivePort("51234\n/devtools/browser/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0\n"))
+        assertEquals(9222 to "/devtools/browser/abc", ChromiumSession.parseActivePort("9222\r\n/devtools/browser/abc"))
+        // Arquivo ainda sendo escrito, ou com outra coisa: espera / recusa.
+        assertNull(ChromiumSession.parseActivePort(""))
+        assertNull(ChromiumSession.parseActivePort("51234"))
+        assertNull(ChromiumSession.parseActivePort("51234\n"))
+        assertNull(ChromiumSession.parseActivePort("0\n/devtools/browser/abc"))
+        assertNull(ChromiumSession.parseActivePort("99999\n/devtools/browser/abc"))
+        assertNull(ChromiumSession.parseActivePort("51234\n/devtools/page/abc"))
+        assertNull(ChromiumSession.parseActivePort("51234\n/devtools/browser/abc?x=@evil.example"))
+    }
+
+    @Test
+    fun so_abre_o_chromium_numa_pasta_de_perfil_nova_e_vazia() = runBlocking {
+        val used = tempDir().also { File(it, "Default").mkdirs() }
+        val error = runCatching { ChromiumSession.open(File("nao-existe.exe"), used, "about:blank", headless = true) }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException, "recusa um perfil que já tem coisa: $error")
+    }
+
+    @Test
+    fun apaga_perfis_de_login_que_sobraram_de_uma_execucao_anterior() {
+        val dataDir = tempDir()
+        val leftover = File(dataDir, "login-browser/chrome-123").also { File(it, "Default").mkdirs(); File(it, "Default/Cookies").writeText("x") }
+        leftover.setLastModified(System.currentTimeMillis() - 60_000)
+        DesktopAccounts(dataDir, installedBrowsers = { emptyList() })
+        val end = System.currentTimeMillis() + 5_000
+        while (leftover.exists() && System.currentTimeMillis() < end) Thread.sleep(50)
+        assertTrue(!leftover.exists(), "o perfil com a sessão do Google não fica no disco")
+    }
+
+    @Test
     fun limpa_cookies_que_fazem_o_youtube_recusar_o_pedido() {
         // Como no perfil real: ~100 cookies "ST-…" de 1,5 KB, que sozinhos passam de 100 KB (o YouTube responde 413 acima de ~16 KB).
         val noise = (1..95).joinToString("; ") { "ST-abc$it=" + "x".repeat(1_500) }

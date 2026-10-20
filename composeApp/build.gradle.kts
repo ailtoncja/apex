@@ -62,6 +62,8 @@ kotlin {
                 implementation(libs.ktor.client.cio)
                 implementation(libs.vlcj)
                 implementation(libs.sqlite.jdbc)
+                // Confere a assinatura OpenPGP (SHA2-256SUMS.sig) dos lançamentos do yt-dlp antes de instalar.
+                implementation(libs.bouncycastle.pgp)
             }
         }
     }

@@ -17,20 +17,16 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
-import java.net.ServerSocket
 import java.net.URI
 import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.net.http.WebSocket
-import java.time.Duration
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Um navegador Chromium (Chrome, Edge, Brave…) aberto num perfil só do Apex, com uma porta local de controle.
+ * Um navegador Chromium (Chrome, Edge, Brave, Vivaldi, Opera…) aberto num perfil só do Apex, com uma porta local de controle.
  * O Apex pede os cookies pelo protocolo de depuração do próprio navegador, então não precisa decifrar nada.
  */
 class ChromiumSession private constructor(
@@ -71,14 +67,26 @@ class ChromiumSession private constructor(
     }
 
     companion object {
-        /** Abre o navegador em [startUrl] com o perfil de [profileDir] e espera a porta de controle responder. */
+        /** O arquivo que o Chromium grava no perfil dizendo em que porta e caminho a depuração abriu. */
+        const val ACTIVE_PORT_FILE = "DevToolsActivePort"
+
+        /** Quanto esperar o navegador abrir a porta de controle. */
+        private const val START_TIMEOUT_MS = 30_000L
+
+        /**
+         * Abre o navegador em [startUrl] com o perfil de [profileDir] (uma pasta nova e vazia, criada pelo Apex) e conecta na porta de controle.
+         *
+         * A porta é escolhida pelo próprio navegador (`--remote-debugging-port=0`) e lida do [ACTIVE_PORT_FILE] que ele grava no perfil, com o
+         * caminho exato da conexão: escolher uma porta livre e passá-la ao navegador deixava um outro programa ocupá-la antes e se passar por ele.
+         * (O `--remote-debugging-pipe` evitaria a porta, mas no Windows exige herdar descritores que o Java não passa ao processo.)
+         */
         suspend fun open(exe: File, profileDir: File, startUrl: String, headless: Boolean = false): ChromiumSession = withContext(Dispatchers.IO) {
             profileDir.mkdirs()
-            val port = ServerSocket(0).use { it.localPort }
+            require(profileDir.isDirectory && profileDir.list().isNullOrEmpty()) { "O perfil do navegador precisa ser uma pasta nova e vazia." }
             val args = buildList {
                 add(exe.absolutePath)
                 add("--user-data-dir=${profileDir.absolutePath}")
-                add("--remote-debugging-port=$port")
+                add("--remote-debugging-port=0")
                 add("--no-first-run")
                 add("--no-default-browser-check")
                 if (headless) add("--headless=new")
@@ -86,26 +94,30 @@ class ChromiumSession private constructor(
             }
             val process = ProcessBuilder(args).redirectErrorStream(true).also { it.redirectOutput(ProcessBuilder.Redirect.DISCARD) }.start()
             try {
-                val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(1)).build()
-                var wsUrl: String? = null
-                repeat(60) {
-                    if (wsUrl == null) {
-                        wsUrl = runCatching {
-                            val body = http.send(
-                                HttpRequest.newBuilder(URI("http://127.0.0.1:$port/json/version")).timeout(Duration.ofSeconds(1)).build(),
-                                HttpResponse.BodyHandlers.ofString(),
-                            ).body()
-                            parseJson(body)["webSocketDebuggerUrl"].str()
-                        }.getOrNull()
-                        if (wsUrl == null) delay(500)
-                    }
+                val activePort = File(profileDir, ACTIVE_PORT_FILE)
+                val deadline = System.currentTimeMillis() + START_TIMEOUT_MS
+                var endpoint: Pair<Int, String>? = null
+                while (endpoint == null && System.currentTimeMillis() < deadline) {
+                    endpoint = runCatching { if (activePort.isFile) parseActivePort(activePort.readText()) else null }.getOrNull()
+                    if (endpoint == null) delay(200)
                 }
-                val url = wsUrl ?: error("O navegador não respondeu na porta de controle.")
-                ChromiumSession(process, CdpConnection(url))
+                val (port, path) = endpoint ?: error("O navegador não abriu a porta de controle.")
+                ChromiumSession(process, CdpConnection("ws://127.0.0.1:$port$path"))
             } catch (e: Throwable) {
                 process.destroyForcibly()
                 throw e
             }
+        }
+
+        /**
+         * O conteúdo do [ACTIVE_PORT_FILE]: a porta na primeira linha e o caminho do navegador (`/devtools/browser/<id>`) na segunda.
+         * `null` se ainda está incompleto (o navegador escreve o arquivo aos poucos) ou não tem esse formato.
+         */
+        internal fun parseActivePort(text: String): Pair<Int, String>? {
+            val lines = text.lines().map { it.trim() }
+            val port = lines.getOrNull(0)?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
+            val path = lines.getOrNull(1)?.takeIf { Regex("/devtools/browser/[A-Za-z0-9-]+").matches(it) } ?: return null
+            return port to path
         }
     }
 }

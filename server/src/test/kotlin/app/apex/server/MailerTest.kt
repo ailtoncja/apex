@@ -131,6 +131,43 @@ class MailerTest {
         assertEquals("s", ok.mailWebhookSecret)
     }
 
+    @Test
+    fun sem_provedor_em_producao_os_links_nao_vao_para_o_log_nem_para_a_memoria() = runBlocking {
+        val logger = org.slf4j.LoggerFactory.getLogger("mail") as ch.qos.logback.classic.Logger
+        val appender = ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>().also { it.start() }
+        logger.addAppender(appender)
+        try {
+            val prod = LogMailer(production = true)
+            prod.send(mail)
+            assertTrue(prod.outbox.isEmpty())
+            val logged = appender.list.joinToString("\n") { it.formattedMessage }
+            assertTrue(!logged.contains("token=abc") && !logged.contains("pessoa@exemplo.com"), logged)
+            assertTrue(logged.contains("p***@exemplo.com"), logged)
+
+            // No desenvolvimento o link aparece, para você clicar.
+            val dev = LogMailer()
+            dev.send(mail)
+            assertEquals(1, dev.outbox.size)
+            assertTrue(appender.list.last().formattedMessage.contains("token=abc"))
+        } finally {
+            logger.detachAppender(appender)
+        }
+        // Em produção (com DATABASE_URL) e sem provedor, o mailer escolhido é o que não escreve os links.
+        val prodConfig = ServerConfig.fromEnv(mapOf("DATABASE_URL" to "postgres://u:p@h/db", "JWT_SECRET" to "x".repeat(40)))
+        val chosen = mailerFor(prodConfig)
+        assertIs<LogMailer>(chosen)
+        chosen.send(mail)
+        assertTrue(chosen.outbox.isEmpty())
+    }
+
+    @Test
+    fun email_mascarado_nos_logs() {
+        assertEquals("a***@gmail.com", maskEmail("ailton@gmail.com"))
+        assertEquals("x***@exemplo.com.br", maskEmail("x@exemplo.com.br"))
+        assertEquals("***", maskEmail("sem-arroba"))
+        assertEquals("***", maskEmail("@dominio.com"))
+    }
+
     /** Cadastro de verdade no servidor com o relay: o e-mail de confirmação chega ao relay com o link certo. */
     @Test
     fun cadastro_manda_o_email_de_confirmacao_pelo_relay() = testApplication {

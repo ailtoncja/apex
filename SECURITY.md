@@ -18,10 +18,21 @@ Só a versão mais recente da [página de Releases](https://github.com/ailtoncja
 **Servidor** (`server/`)
 - Senhas com Argon2id; tokens de renovação guardados só como hash, girados a cada uso, com detecção de roubo (reuso encerra todas as sessões).
 - Tokens de acesso JWT de 15 minutos, com assinatura, emissor, público e validade conferidos (testado: chave errada, `alg: none`, vencido, adulterado).
-- Limites de uso por IP real (o cabeçalho `X-Forwarded-For` só vale na parte que os nossos proxies acrescentam), barreira de tentativas de login por
-  pessoa e por e-mail, teto de contas, cota de dados por conta e limite de tamanho de pedido.
-- Respostas que não revelam quem tem conta (login, "esqueci a senha"), sem diferença de tempo; links de e-mail de uso único e sem aparecer nos logs.
-- Cabeçalhos de segurança (HSTS, CSP, sem cache nas páginas com token), conexão criptografada com o banco, consultas sempre parametrizadas.
+  Cada token leva a sessão que o gerou (`sid`) e só vale enquanto ela estiver aberta: sair, trocar a senha ou apagar a conta derruba na hora.
+- Limites de uso por IP real (o cabeçalho `X-Forwarded-For` só vale na parte que os nossos proxies acrescentam), barreira de tentativas de senha por
+  pessoa e por e-mail (login, apagar a conta), teto de contas, cota de dados por conta e limite de tamanho de pedido.
+- Respostas que não revelam quem tem conta (login, "esqueci a senha"), sem diferença de tempo; links de e-mail de uso único e sem aparecer nos logs
+  (os logs também não guardam e-mails inteiros, só `a***@dominio`).
+- Cabeçalhos de segurança (HSTS, CSP, sem cache nas páginas com token), consultas sempre parametrizadas. Conexão com o banco por TLS com o
+  certificado conferido (`sslmode=verify-full`, certificados confiáveis do Java) e `channelBinding=require` quando a string de conexão pede.
+- Fora de container, o servidor só escuta em `127.0.0.1` (no container, `BIND_HOST=0.0.0.0`); a imagem de produção não leva o banco embutido
+  de desenvolvimento e usa imagens base presas por digest.
+
+**Risco aceito: cadastro revela se o e-mail já tem conta.** O cadastro entra na conta na hora (o app recebe a sessão na resposta e a confirmação
+do e-mail não é exigida para usar), então não dá para responder igual a quem já tem conta sem redesenhar o fluxo (cadastro só ativo depois de
+confirmar o e-mail). Hoje o `POST /v1/auth/register` responde `409 email_taken` para e-mail já cadastrado. Para conter quem tenta descobrir
+contas em massa, o cadastro tem limite próprio por IP (`REGISTER_LIMIT_PER_HOUR`, padrão 20 por hora) além do limite geral de autenticação
+(30 por minuto por IP).
 - Dependências verificadas contra o banco de vulnerabilidades OSV (Jackson atualizado para 2.22.3; o relay da Vercel usa o nodemailer 10).
 
 **App** (`composeApp/`)

@@ -100,6 +100,9 @@ class DesktopUpdater(
     private var release: Release? = null
     private var ready: File? = null
 
+    /** Hash que a lista assinada (`SHA256SUMS.txt`) dá para o arquivo em [ready]; conferido de novo logo antes de instalar. */
+    private var readyHash: String? = null
+
     init {
         runCatching { cleanOldFiles() }
     }
@@ -173,6 +176,7 @@ class DesktopUpdater(
                 Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
             ready = target
+            readyHash = expected
             _state.value = UpdateState.Ready(info)
         } catch (e: CancellationException) {
             throw e
@@ -186,9 +190,20 @@ class DesktopUpdater(
         val file = ready ?: return
         val exe = InstallMode.currentExe() ?: return
         val script = File(dir, "aplicar-atualizacao.cmd")
-        val unsafe = Regex("[%&^|<>\"]")
+        // '!' também: com DelayedExpansion ligado no cmd, "!x!" vira o valor de uma variável.
+        val unsafe = Regex("[%&^|<>\"!]")
         if (listOf(file, exe, dir).any { unsafe.containsMatchIn(it.path) }) {
             _state.value = UpdateState.Failed("O caminho do app tem caracteres que impedem a atualização automática. Instale a versão nova pelo site.")
+            return
+        }
+        // O instalador ficou parado na pasta desde o download: confere de novo o hash assinado antes de entregá-lo ao msiexec/robocopy.
+        val expected = readyHash
+        val intact = expected != null && runCatching { Checksums.sha256(file).equals(expected, ignoreCase = true) }.getOrDefault(false)
+        if (!intact) {
+            file.delete()
+            ready = null
+            readyHash = null
+            _state.value = UpdateState.Failed("O instalador baixado foi alterado depois do download (o hash não bate com o assinado). Nada foi instalado; tente de novo.")
             return
         }
         val commands = when (mode) {

@@ -56,21 +56,33 @@ object UserRepo {
 sealed interface RotateResult {
     data object Invalid : RotateResult
     data object Reuse : RotateResult
-    data class Ok(val userId: UUID, val newToken: String) : RotateResult
+    data class Ok(val userId: UUID, val session: NewSession) : RotateResult
 }
+
+/** Sessão recém-criada: o id (vai no token de acesso, como `sid`) e o token de renovação (só a pessoa tem; o banco guarda o hash). */
+class NewSession(val id: UUID, val token: String)
+
+/** Uma sessão como aparece na exportação de dados (sem o hash do token). */
+class SessionRow(val device: String?, val createdAt: Instant, val expiresAt: Instant, val revokedAt: Instant?)
 
 object TokenRepo {
     const val REFRESH_TTL_DAYS = 60L
 
     /** Cria uma sessão e devolve o token (só o hash vai para o banco). */
-    fun issue(c: Connection, userId: UUID, device: String?): String {
+    fun issue(c: Connection, userId: UUID, device: String?): NewSession {
         val raw = Tokens.random()
-        c.execute(
-            "insert into refresh_tokens (user_id, token_hash, device, expires_at) values (?, ?, ?, ?)",
+        val id = c.queryOne(
+            "insert into refresh_tokens (user_id, token_hash, device, expires_at) values (?, ?, ?, ?) returning id",
             userId, Tokens.sha256(raw), device?.take(80), Instant.now().plusSeconds(REFRESH_TTL_DAYS * 86_400),
-        )
-        return raw
+        ) { it.uuid("id") }!!
+        return NewSession(id, raw)
     }
+
+    /** A sessão do token de acesso ainda vale (não saiu, não trocou a senha, não apagou a conta)? Busca pela chave primária. */
+    fun isActive(c: Connection, sessionId: UUID, userId: UUID): Boolean =
+        c.queryOne(
+            "select 1 as ok from refresh_tokens where id = ? and user_id = ? and revoked_at is null and expires_at > now()", sessionId, userId,
+        ) { true } ?: false
 
     /**
      * Troca um token de renovação por outro. Se alguém apresentar um token que já foi usado, é sinal de roubo:
@@ -106,6 +118,17 @@ object TokenRepo {
             "select count(*) as n from refresh_tokens where user_id = ? and revoked_at is null and expires_at > now()", userId,
         ) { it.getInt("n") } ?: 0
 
+    /**
+     * Todas as sessões guardadas (inclusive as encerradas, que ficam até 7 dias antes da limpeza), da mais nova para a mais antiga.
+     * Cada renovação cria uma linha nova, então o `createdAt` da sessão aberta é a última vez que o aparelho renovou o acesso.
+     */
+    fun sessions(c: Connection, userId: UUID): List<SessionRow> =
+        c.queryList(
+            "select device, created_at, expires_at, revoked_at from refresh_tokens where user_id = ? order by created_at desc", userId,
+        ) { rs ->
+            SessionRow(rs.getString("device"), rs.instant("created_at"), rs.instant("expires_at"), rs.getObject("revoked_at", OffsetDateTime::class.java)?.toInstant())
+        }
+
     // ---- links de e-mail (confirmar e redefinir senha)
 
     fun createEmailToken(c: Connection, userId: UUID, purpose: String, ttlSeconds: Long): String {
@@ -122,6 +145,13 @@ object TokenRepo {
     fun expireEmailTokens(c: Connection, userId: UUID, purpose: String) {
         c.execute("update email_tokens set used_at = now() where user_id = ? and purpose = ? and used_at is null", userId, purpose)
     }
+
+    /** O link ainda vale (sem gastá-lo)? Serve para não calcular o Argon2 de quem chega com um link inválido. */
+    fun isEmailTokenValid(c: Connection, raw: String, purpose: String): Boolean =
+        c.queryOne(
+            "select 1 as ok from email_tokens where token_hash = ? and purpose = ? and used_at is null and expires_at > now()",
+            Tokens.sha256(raw), purpose,
+        ) { true } ?: false
 
     /** Usa o link (uma vez só). Devolve a quem ele pertence, ou `null` se for inválido, vencido ou já usado. */
     fun consumeEmailToken(c: Connection, raw: String, purpose: String): UUID? =

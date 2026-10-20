@@ -126,4 +126,18 @@ data class ExportDto(
     /** Aparelhos com sessão aberta. */
     val activeSessions: Int = 0,
     val items: List<SyncItem> = emptyList(),
+    /** Sessões guardadas no servidor (abertas e encerradas há pouco), da mais nova para a mais antiga. */
+    val sessions: List<SessionDto> = emptyList(),
+)
+
+/** Uma sessão (um aparelho conectado) na exportação de dados. O token em si nunca sai do servidor. */
+@Serializable
+data class SessionDto(
+    /** Nome do aparelho ou do navegador, como informado no login. */
+    val device: String? = null,
+    /** Quando a sessão foi aberta ou renovada pela última vez (cada renovação gera uma sessão nova). */
+    val createdAt: String,
+    val expiresAt: String,
+    /** Quando a sessão foi encerrada (saiu, trocou a senha ou renovou); `null` se ainda está aberta. */
+    val revokedAt: String? = null,
 )

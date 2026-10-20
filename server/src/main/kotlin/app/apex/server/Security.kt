@@ -79,11 +79,13 @@ class JwtService(secret: String) {
 
     val verifier: JWTVerifier = JWT.require(algorithm).withIssuer(ISSUER).withAudience(AUDIENCE).build()
 
-    fun issue(userId: UUID, now: Instant = Instant.now()): String =
+    /** [sessionId]: a sessão (token de renovação) que gerou este token; quando ela é encerrada, o token de acesso para de valer na hora. */
+    fun issue(userId: UUID, sessionId: UUID, now: Instant = Instant.now()): String =
         JWT.create()
             .withIssuer(ISSUER)
             .withAudience(AUDIENCE)
             .withSubject(userId.toString())
+            .withClaim(SESSION_CLAIM, sessionId.toString())
             .withJWTId(UUID.randomUUID().toString())
             .withIssuedAt(Date.from(now))
             .withExpiresAt(Date.from(now.plusSeconds(ACCESS_TTL_SEC)))
@@ -93,5 +95,6 @@ class JwtService(secret: String) {
         const val ISSUER = "apex"
         const val AUDIENCE = "apex-app"
         const val ACCESS_TTL_SEC = 15 * 60L
+        const val SESSION_CLAIM = "sid"
     }
 }

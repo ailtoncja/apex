@@ -17,7 +17,6 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
 /**
@@ -54,7 +53,6 @@ internal class RangeProxy(
 
     private val server = ServerSocket(0, 16, InetAddress.getLoopbackAddress())
     private val routes = ConcurrentHashMap<String, Route>()
-    private val counter = AtomicInteger()
     @Volatile private var fullLogged = 0
     @Volatile private var closed = false
 
@@ -71,7 +69,8 @@ internal class RangeProxy(
         val length = Regex("""[?&]clen=(\d+)""").find(upstream)?.groupValues?.get(1)?.toLongOrNull()?.takeIf { it > 0 } ?: return null
         val mime = Regex("""[?&]mime=([^&]+)""").find(upstream)?.groupValues?.get(1)
             ?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() }?.takeIf { '/' in it } ?: "application/octet-stream"
-        val path = "/s${counter.incrementAndGet()}"
+        // Trecho aleatório no endereço: outro programa (ou uma página no navegador) não acha as rotas abertas chutando /s1, /s2…
+        val path = "/${LocalHttp.newToken()}"
         routes[path] = Route(upstream, length, mime, headers, full)
         return "http://127.0.0.1:${server.localPort}$path"
     }
@@ -85,28 +84,26 @@ internal class RangeProxy(
         runCatching { server.close() }
     }
 
-    private fun accept() {
-        while (!closed) {
-            val socket = runCatching { server.accept() }.getOrNull() ?: return
-            Thread { serve(socket) }.also { it.isDaemon = true; it.name = "apex-range-conn" }.start()
-        }
-    }
+    private fun accept() = LocalHttp.acceptLoop(server, "apex-range-conn", MAX_CONNECTIONS, { closed }) { serve(it) }
 
     private fun serve(socket: Socket) {
         socket.use { s ->
             runCatching {
                 s.soTimeout = 30_000
-                val reader = s.getInputStream().bufferedReader()
-                val request = reader.readLine().orEmpty()
-                var range: String? = null
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    if (line.isEmpty()) break
-                    if (line.startsWith("Range:", ignoreCase = true)) range = line.substringAfter(':').trim()
+                val request = LocalHttp.readRequest(s.getInputStream().buffered())
+                if (request == null) {
+                    LocalHttp.respondEmpty(s, "400 Bad Request")
+                    return@runCatching
                 }
+                // Contra "DNS rebinding": uma página que aponta o domínio dela para 127.0.0.1 manda o domínio dela no Host.
+                if (!LocalHttp.isLocalHost(request.header("Host"), server.localPort)) {
+                    LocalHttp.respondEmpty(s, "403 Forbidden")
+                    return@runCatching
+                }
+                val range = request.header("Range")
                 val out = s.getOutputStream()
-                val method = request.substringBefore(' ')
-                val route = routes[request.substringAfter(' ').substringBefore(' ').substringBefore('?')]
+                val method = request.method
+                val route = routes[request.path]
                 if (route == null || (method != "GET" && method != "HEAD")) {
                     out.write("HTTP/1.1 ${if (route == null) "404 Not Found" else "405 Method Not Allowed"}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                     out.flush()
@@ -282,6 +279,9 @@ internal class RangeProxy(
 
         /** Um pedido que começa nos últimos bytes do arquivo (o VLC lê 16) é a espiada pelo índice do fim, não um pulo de verdade. */
         const val TAIL_PROBE_BYTES = 64L
+
+        /** Conexões atendidas ao mesmo tempo (o VLC abre umas poucas por vídeo: vídeo, áudio e os pulos). */
+        const val MAX_CONNECTIONS = 32
 
         /** `bytes=a-b`, `bytes=a-` ou `bytes=-n` num arquivo de [length] bytes → (a, b) já dentro do arquivo; `null` se não dá. Sem cabeçalho, o arquivo todo. */
         internal fun parseRange(header: String?, length: Long): Pair<Long, Long>? {

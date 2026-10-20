@@ -138,7 +138,11 @@ fun SeekBar(
 
 /** Controle deslizante fino (volume). */
 @Composable
-fun MiniSlider(value: Float, onChange: (Float) -> Unit, modifier: Modifier = Modifier, markAt: Float? = null) {
+fun MiniSlider(
+    value: Float, onChange: (Float) -> Unit, modifier: Modifier = Modifier, markAt: Float? = null,
+    /** Cores: brancas no player (fundo escuro); fora dele, as do tema. */
+    fill: Color = Color.White, track: Color = Color(0x55FFFFFF),
+) {
     val density = LocalDensity.current
     var widthPx by remember { mutableIntStateOf(1) }
     val change by rememberUpdatedState(onChange)
@@ -160,8 +164,8 @@ fun MiniSlider(value: Float, onChange: (Float) -> Unit, modifier: Modifier = Mod
                 }
             },
     ) {
-        Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50)).background(Color(0x55FFFFFF))) {
-            Box(Modifier.fillMaxWidth(value.coerceIn(0f, 1f)).fillMaxHeight().background(Color.White))
+        Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50)).background(track)) {
+            Box(Modifier.fillMaxWidth(value.coerceIn(0f, 1f)).fillMaxHeight().background(fill))
         }
         // Uma marquinha numa posição fixa (o 100% do volume).
         markAt?.let { mark ->
@@ -172,7 +176,7 @@ fun MiniSlider(value: Float, onChange: (Float) -> Unit, modifier: Modifier = Mod
         }
         Box(
             Modifier.align(Alignment.CenterStart).offset(x = with(density) { (value.coerceIn(0f, 1f) * widthPx).toDp() - 6.dp })
-                .size(12.dp).background(Color.White, CircleShape),
+                .size(12.dp).background(fill, CircleShape),
         )
     }
 }

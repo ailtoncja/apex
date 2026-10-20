@@ -43,9 +43,14 @@ internal class FakePlayer2 : app.apex.player.PlayerController {
     var stops = 0
     var released = false
     override fun play(source: app.apex.player.PlaySource) { played += source }
-    override fun togglePause() {}
-    override fun pause() {}
-    override fun resume() {}
+    /** Quantas vezes pediram para pausar/continuar (o clique na tela) e para pausar. */
+    var toggles = 0
+    var pauses = 0
+    override fun togglePause() { toggles++ }
+    override fun pause() { pauses++ }
+    /** Quantas vezes pediram para continuar (depois do fim, é recomeçar). */
+    var resumes = 0
+    override fun resume() { resumes++ }
     /** Para onde os atalhos pediram para pular (em ms). */
     val seeks = mutableListOf<Long>()
     override fun seekTo(positionMs: Long) { seeks += positionMs }
@@ -73,13 +78,18 @@ internal class FakeExtractor2 : app.apex.source.Extractor {
 
 
 /** Um [AppContainer] de verdade com os dados numa pasta temporária e as peças do sistema trocadas por falsas. */
-internal fun newTestApp(youtubeHttp: io.ktor.client.HttpClient? = null): Pair<AppContainer, FakeSystem> {
+internal fun newTestApp(
+    youtubeHttp: io.ktor.client.HttpClient? = null,
+    extractor: app.apex.source.Extractor = FakeExtractor2(),
+    newPlayer: () -> app.apex.player.PlayerController = { FakePlayer2() },
+    tileResolve: suspend (Media) -> app.apex.model.Resolved = ::fakeTileResolve,
+): Pair<AppContainer, FakeSystem> {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val system = FakeSystem()
     val data = UserData(FileStore(Files.createTempDirectory("apex-test").toFile()), scope)
     return AppContainer(
-        scope, system, data, FakeExtractor2(), FakePlayer2(), newPlayer = { FakePlayer2() }, youtubeHttp = youtubeHttp ?: app.apex.source.Http.client,
-        fastYoutube = false, tileResolve = ::fakeTileResolve,
+        scope, system, data, extractor, FakePlayer2(), newPlayer = newPlayer, youtubeHttp = youtubeHttp ?: app.apex.source.Http.client,
+        fastYoutube = false, tileResolve = tileResolve,
     ) to system
 }
 

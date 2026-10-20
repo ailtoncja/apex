@@ -130,6 +130,7 @@ internal class RangeProxy(
                 out.flush()
                 if (method == "GET") {
                     Timing.mark("ponte: ${route.mime.substringBefore('/')} pedido $start-$end")
+                    if (start > 0 && end - start > 64) firstByteWatch = start
                     stream(route, start, end, out)
                 }
             }
@@ -152,6 +153,12 @@ internal class RangeProxy(
             route.fullUrl = access?.match(route.url)
             route.fullHeaders = access?.userAgent?.let { mapOf("User-Agent" to it) } ?: emptyMap()
             route.fullDecided = true
+            if (Timing.enabled) {
+                val itag = Regex("""[?&/]itag[=/](\d+)""")
+                val offered = access?.urls?.mapNotNull { itag.find(it)?.groupValues?.get(1) }
+                val mine = itag.find(route.url)?.groupValues?.get(1)
+                Timing.mark("ponte: ${route.mime.substringBefore('/')} itag $mine " + if (route.fullUrl != null) "tem par no yt-dlp" else "SEM par no yt-dlp (${if (access == null) "yt-dlp falhou" else "itags do yt-dlp: $offered"})")
+            }
         }
         return route.fullUrl
     }
@@ -185,6 +192,7 @@ internal class RangeProxy(
                 if (full != null && Timing.enabled && fullLogged++ < 6) Timing.mark("ponte: completo ${route.mime.substringBefore('/')} $from-$to em ${System.currentTimeMillis() - t0} ms")
                 failures = 0
             } catch (e: ClientGone) {
+                if (Timing.enabled) Timing.mark("ponte: o VLC fechou o pedido de ${route.mime.substringBefore('/')} em ${cursor.pos} (entregues ${cursor.pos - start} bytes)")
                 return
             } catch (e: Exception) {
                 if (e !is Denied) Timing.mark("ponte: ${if (full != null) "endereço completo" else "via rápida"} falhou em ${cursor.pos}: ${e.message}")
@@ -228,6 +236,9 @@ internal class RangeProxy(
         }
     }
 
+    /** Só para medir: a posição do pedido cujos primeiros bytes vão para o registro. */
+    @Volatile private var firstByteWatch = -1L
+
     private fun fetch(url: String, headers: Map<String, String>, cursor: Cursor, to: Long, out: OutputStream) {
         val buffer = ByteArray(64 * 1024)
         runBlocking {
@@ -244,6 +255,11 @@ internal class RangeProxy(
                     val n = channel.readAvailable(buffer, 0, min(buffer.size.toLong(), to - cursor.pos + 1).toInt())
                     if (n < 0) break
                     if (n == 0) continue
+                    if (Timing.enabled && cursor.pos == firstByteWatch && n >= 8) {
+                        firstByteWatch = -1
+                        val tag = String(buffer, 4, 4, Charsets.ISO_8859_1).filter { it in ' '..'~' }
+                        Timing.mark("ponte: primeiros bytes em ${cursor.pos}: caixa '$tag' tamanho ${((buffer[0].toLong() and 0xFF) shl 24) or ((buffer[1].toLong() and 0xFF) shl 16) or ((buffer[2].toLong() and 0xFF) shl 8) or (buffer[3].toLong() and 0xFF)}")
+                    }
                     try { out.write(buffer, 0, n) } catch (e: IOException) { throw ClientGone() }
                     cursor.pos += n
                 }

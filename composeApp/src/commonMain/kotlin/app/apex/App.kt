@@ -36,6 +36,7 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.utf16CodePoint
 import androidx.compose.ui.input.key.key
@@ -64,6 +65,8 @@ import app.apex.ui.search.SearchScreen
 import app.apex.ui.settings.SettingsScreen
 import app.apex.ui.shell.MiniPlayer
 import app.apex.ui.shell.Sidebar
+import app.apex.ui.shell.TabStrip
+import app.apex.ui.shell.BackgroundAudioBar
 import app.apex.ui.shell.TopBar
 import app.apex.ui.shell.UpdateBanner
 import app.apex.ui.subs.SubscriptionsScreen
@@ -117,7 +120,9 @@ fun ApexApp() {
                                 TopBar(onToggleSidebar = { app.data.updateSettings { it.copy(sidebarCollapsed = !it.sidebarCollapsed) } })
                             }
                             UpdateBanner()
+                            TabStrip()
                             Box(Modifier.weight(1f).fillMaxSize()) { Content(route) }
+                            BackgroundAudioBar()
                         }
                     }
                     MiniPlayer()
@@ -213,6 +218,8 @@ internal fun handleShortcut(app: AppContainer, event: KeyEvent): Boolean {
             '?'.code -> { app.ui.shortcutsOpen = !app.ui.shortcutsOpen; return true }
         }
     }
+    // Com Ctrl, Alt ou Win a tecla não é atalho do player (Ctrl+C copia o texto selecionado, por exemplo).
+    if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
     val media = app.session.current.value ?: return false
     val player = app.player
     val state = player.state.value
@@ -248,6 +255,14 @@ internal fun handleShortcut(app: AppContainer, event: KeyEvent): Boolean {
         Key.Enter, Key.NumPadEnter -> { if (onWatch && live && app.ui.chatVisible) { app.ui.focusChatTick++; true } else false }
         Key.DirectionUp -> { app.setVolume(stepVolume(state.volume, 5, app.maxVolume)); true }
         Key.DirectionDown -> { app.setVolume(stepVolume(state.volume, -5, app.maxVolume)); true }
+        Key.R -> {
+            if (!live && !event.isShiftPressed) {
+                val on = !app.session.loop.value
+                app.session.setLoop(on)
+                app.toast(if (on) "Repetir: ligado" else "Repetir: desligado")
+                true
+            } else false
+        }
         Key.N -> { if (event.isShiftPressed) { app.session.next(); true } else false }
         Key.P -> { if (event.isShiftPressed) { app.session.previous(); true } else false }
         Key.C -> {
@@ -291,6 +306,9 @@ private fun appShortcut(app: AppContainer, event: KeyEvent): Boolean {
             Key.Four -> app.nav.goRoot(Route.Library(LibraryTab.History))
             Key.Five -> app.nav.goRoot(Route.Settings)
             Key.Six -> app.nav.goRoot(Route.Multi)
+            // Abas de vídeo, como no navegador.
+            Key.Tab -> app.cycleTab(if (event.isShiftPressed) -1 else 1)
+            Key.W -> app.closeCurrentTab()
             else -> return false
         }
         return true

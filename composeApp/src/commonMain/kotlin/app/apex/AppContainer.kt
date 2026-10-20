@@ -72,6 +72,9 @@ class UiState {
     /** O chat ao lado das lives do Multi. */
     var multiChat by mutableStateOf(true)
 
+    /** Abas de vídeo em sequência: quando um vídeo acaba, toca a aba seguinte (ver [app.apex.tabs.VideoTabs]). */
+    var tabsSequence by mutableStateOf(false)
+
     /** Sobe a cada clique em qualquer lugar da janela: as listas de sugestões fecham quando o clique cai fora delas. */
     var pressTick by androidx.compose.runtime.mutableIntStateOf(0)
     var typing by mutableStateOf(false)
@@ -111,7 +114,12 @@ class AppContainer(
 
     val nav = Navigator()
     val ui = UiState()
-    val session = PlaybackSession(scope, player, extractor, twitch, kick, data, if (fastYoutube) app.apex.source.YouTubeFast(tube)::resolve else null)
+    val session = PlaybackSession(
+        scope, player,
+        // O login guardado costuma estar vencido logo que o app abre: se o yt-dlp falhar e o login mudou, ele tenta de novo com o novo.
+        app.apex.source.FreshLoginExtractor(extractor, { data.account(Platform.YouTube)?.credential }, { refreshAccountFromBrowser(Platform.YouTube) }),
+        twitch, kick, data, if (fastYoutube) app.apex.source.YouTubeFast(tube)::resolve else null,
+    )
     /** Várias lives ao mesmo tempo. Ao começar, para o player principal: dois sons ao mesmo tempo não dá. */
     val multi = app.apex.multi.MultiStream(scope, data, newPlayer, tileResolve ?: { session.resolve(it) }, beforeStart = {
         if (session.current.value != null) session.close()
@@ -135,6 +143,13 @@ class AppContainer(
     }
 
     init {
+        scope.launch {
+            kotlinx.coroutines.delay(20_000)
+            while (true) {
+                syncFollowsIfStale(60_000)
+                kotlinx.coroutines.delay(2 * 60 * 60_000L)
+            }
+        }
         scope.launch {
             data.accounts.collect { accounts ->
                 // Os endereços de vídeo dependem do login do YouTube: quem trocou de conta não pode herdar os preparados da outra.
@@ -188,10 +203,93 @@ class AppContainer(
         }
     }
 
-    fun openMedia(media: Media, upNext: List<Media>? = null) {
+    /** As abas de vídeo: os vídeos abertos agora (ver [app.apex.tabs.VideoTabs]). */
+    val tabs = app.apex.tabs.VideoTabs(data, { session.current.value }, { session.prefetch(it) })
+
+    init {
+        // O vídeo preparado traz o título e a capa de verdade: a aba dele deixa de dizer "Carregando…".
+        scope.launch { session.current.collect { media -> media?.let { tabs.refresh(it) } } }
+        // Abas guardadas sem título nem capa (o app fechou antes de o vídeo ser preparado): busca os dois, uma de cada vez, depois que a
+        // abertura assentou. Sem isto a faixa mostrava "Carregando…" para sempre.
+        scope.launch {
+            kotlinx.coroutines.delay(6_000)
+            for (media in tabs.medias.filter { it.thumbnailUrl == null }) session.describe(media)?.let { tabs.refresh(it) }
+        }
+    }
+
+    fun openMedia(media: Media, upNext: List<Media>? = null, startAtMs: Long? = null) {
         ui.miniPlayerHidden = false
-        session.open(media, upNext)
+        // Clique normal: o vídeo entra na aba ativa (ou vira aba nova se não havia nenhuma); se já era aba, ela só fica ativa.
+        tabs.opened(media)
+        session.open(media, if (ui.tabsSequence) tabs.after(media) else upNext, startAtMs)
         nav.push(Route.Watch)
+    }
+
+    /** "Abrir em nova aba" (botão do meio do mouse ou o menu): a aba entra no fim, já se preparando, sem interromper o que toca. */
+    fun openInNewTab(media: Media) {
+        when {
+            tabs.medias.any { it.key == media.key } -> toast("Já está aberto numa aba")
+            tabs.isFull -> toast("Cabem até ${app.apex.tabs.VideoTabs.MAX} abas")
+            else -> {
+                tabs.openInNew(media)
+                toast("Aberto em nova aba")
+                // Um link (da descrição, do chat) chega só com o endereço: a aba ganha título e capa assim que o vídeo é preparado.
+                if (media.thumbnailUrl == null) scope.launch { runCatching { session.resolve(media) }.getOrNull()?.let { tabs.refresh(it.media) } }
+            }
+        }
+    }
+
+    /** Fecha a aba [key]. Se era a do vídeo que toca, a vizinha (direita, senão esquerda) abre no lugar, como no navegador; sem vizinha, para. */
+    fun closeTab(key: String) {
+        val wasPlaying = session.current.value?.key == key
+        val next = if (wasPlaying) tabs.neighborOf(key) else null
+        tabs.close(key)
+        if (!wasPlaying) return
+        if (next != null) openMedia(next) else session.close()
+    }
+
+    /** O ✕ do mini player: para o vídeo e fecha a aba dele, sem abrir outra (a pessoa estava navegando, não trocando de aba). */
+    fun closeCurrent() {
+        val current = session.current.value ?: return
+        session.close()
+        tabs.close(current.key)
+    }
+
+    /** Ctrl+W: fecha a aba do vídeo que toca; a vizinha abre no lugar. */
+    fun closeCurrentTab() {
+        val current = session.current.value ?: return
+        closeTab(current.key)
+    }
+
+    /** Botão do meio ou Ctrl+clique na foto de um canal ao vivo: a live entra numa aba nova, sem interromper o que toca. */
+    fun openLiveInNewTab(channel: Channel, known: Media? = null) {
+        val live = known?.takeIf { it.isLive }
+            ?: liveWatcher.live.value.firstOrNull { it.channel?.key == channel.key && it.isLive }
+        if (live != null) return openInNewTab(live.copy(channel = live.channel ?: channel))
+        when (channel.platform) {
+            Platform.Twitch -> openInNewTab(Media(Platform.Twitch, channel.id, channel.name, channel, isLive = true, url = "https://www.twitch.tv/${channel.id}"))
+            Platform.Kick -> openInNewTab(Media(Platform.Kick, channel.id, channel.name, channel, isLive = true, url = "https://kick.com/${channel.id}"))
+            Platform.YouTube -> {
+                toast("Procurando a live…")
+                scope.launch {
+                    val found = runCatching { youtube.channelLive(channel.id) }.getOrNull()
+                    if (found != null) openInNewTab(found.copy(channel = found.channel ?: channel)) else toast("Esta live já acabou.")
+                }
+            }
+        }
+    }
+
+    /** Ctrl+Tab e Ctrl+Shift+Tab: abre a aba vizinha ([delta] = +1 a próxima, -1 a anterior), dando a volta. */
+    fun cycleTab(delta: Int) {
+        val next = tabs.neighbor(delta) ?: return
+        if (next.key != session.current.value?.key) openMedia(next) else nav.push(Route.Watch)
+    }
+
+    /** Liga ou desliga o "tocar em sequência": ligado, a fila passa a ser as abas depois da que toca. */
+    fun toggleTabsSequence() {
+        ui.tabsSequence = !ui.tabsSequence
+        if (ui.tabsSequence) session.current.value?.let { session.setUpNext(tabs.after(it)) }
+        toast(if (ui.tabsSequence) "Tocar em sequência ligado: quando um vídeo acabar, toca a aba seguinte" else "Tocar em sequência desligado")
     }
 
     /** Copia uma playlist do YouTube (todos os vídeos) para as playlists do app. */
@@ -261,6 +359,47 @@ class AppContainer(
     }
 
     /** Põe [medias] no Multi (as que couberem) e abre a tela dele. */
+    /** Os emotes da 7TV, BetterTTV e FrankerFaceZ, buscados uma vez por canal enquanto o app está aberto. */
+    val extensionEmotes = app.apex.chat.ExtensionEmotes()
+
+    /** Os emotes das extensões do canal da Twitch [login] (o chat gravado dos VODs, que não informa o número do canal). */
+    suspend fun extensionEmotesForLogin(login: String?): app.apex.chat.ChannelEmotes {
+        val id = login?.let { runCatching { twitch.userId(it) }.getOrNull() } ?: return app.apex.chat.ChannelEmotes.Empty
+        return extensionEmotes.forTwitchChannel(id)
+    }
+
+    /** Música de fundo: um segundo player, só de som, que toca junto com o vídeo da página (ver [app.apex.player.BackgroundAudio]). */
+    val background = app.apex.player.BackgroundAudio(scope, data, newPlayer, { session.resolve(it) }, { toast(it) })
+
+    /** Toca o som de [media] em segundo plano, sem mexer no vídeo da página. */
+    fun playInBackground(media: Media) {
+        background.play(media)
+        toast("Tocando em segundo plano")
+    }
+
+    /**
+     * Leva o vídeo da página para o segundo plano, do ponto em que está (só o som continua), e libera o player para outro vídeo: o caminho de
+     * quem abriu uma música e agora quer assistir a outra coisa ouvindo ela.
+     */
+    fun moveToBackground() {
+        val media = session.current.value ?: return
+        val position = if (media.isLive) 0 else player.state.value.positionMs + (media.clipStartMs ?: 0)
+        background.play(media, position)
+        if (ui.playerFullscreen) setPlayerFullscreen(false)
+        closeCurrent()
+        if (nav.current is Route.Watch) { if (nav.canGoBack) nav.back() else nav.goRoot(Route.Home) }
+        toast("Tocando em segundo plano")
+    }
+
+    /**
+     * Volta a assistir um vídeo que estava no fundo: ele sai do fundo (o som não fica em dobro) e abre no player principal, do ponto em que o
+     * som estava (o que estava só na fila começa de onde a pessoa tinha parado).
+     */
+    fun watchFromBackground(key: String) {
+        val (media, position) = background.takeOut(key) ?: return
+        openMedia(media, startAtMs = position.takeIf { it > 0 })
+    }
+
     fun openMulti(medias: List<Media> = emptyList()) {
         var full = false
         for (m in medias) if (!multi.add(m) && multi.isFull) full = true
@@ -391,6 +530,17 @@ class AppContainer(
         return true
     }
 
+    /**
+     * Roda [block] com a conta do YouTube; se a sessão venceu ([app.apex.source.SessionExpiredException]), relê os cookies do navegador e
+     * tenta de novo uma vez (o navegador troca os cookies de tempos em tempos e o app só confere a cada poucos minutos).
+     */
+    suspend fun <T> withYouTubeSession(block: suspend () -> T): T = try {
+        block()
+    } catch (e: app.apex.source.SessionExpiredException) {
+        if (!refreshAccountFromBrowser(Platform.YouTube)) throw e
+        block()
+    }
+
     /** Completa nome e foto da conta logada. */
     fun refreshAccountProfile(platform: Platform) {
         val account = data.account(platform) ?: return
@@ -411,25 +561,25 @@ class AppContainer(
         data.setAccount(null, platform)
     }
 
-    /** Resultado de [importFollows]: quantos canais vieram e, se couber, um aviso. */
-    class ImportResult(val count: Int, val note: String? = null) {
-        val summary: String get() = "$count canais importados" + (note?.let { " ($it)" } ?: "")
+    /** Resultado de [importFollows]: quantos canais a conta segue, quantos saíram por terem deixado de ser seguidos e, se couber, um aviso. */
+    class ImportResult(val count: Int, val note: String? = null, val removed: Int = 0) {
+        val summary: String
+            get() = "$count canais importados" + (if (removed > 0) ", $removed que você deixou de seguir saíram" else "") + (note?.let { " ($it)" } ?: "")
     }
 
-    /** Traz para o Apex os canais que a conta segue (e, na Twitch, em que é inscrita) na plataforma. */
+    /**
+     * Sincroniza com a plataforma os canais que a conta segue (e, na Twitch, em que é inscrita): entra quem falta e sai quem a pessoa deixou de
+     * seguir lá. Na Twitch, se a lista não veio inteira (mais de 200 canais), ninguém sai.
+     */
     suspend fun importFollows(platform: Platform): ImportResult {
         var note: String? = null
+        var complete = true
         val channels = when (platform) {
-            Platform.YouTube -> try {
-                youtube.subscribedChannels()
-            } catch (e: app.apex.source.SessionExpiredException) {
-                // O navegador pode já ter cookies mais novos: renova e tenta de novo uma vez.
-                if (!refreshAccountFromBrowser(Platform.YouTube)) throw e
-                youtube.subscribedChannels()
-            }
+            Platform.YouTube -> withYouTubeSession { youtube.subscribedChannels() }
             Platform.Twitch -> {
                 val follows = twitch.followedChannels()
                 if (!follows.complete) {
+                    complete = false
                     note = "a Twitch só deixa ler 200 dos canais que você segue; se segue mais, os do meio da lista não vêm"
                 }
                 // Quem você é sub também entra, mesmo sem seguir.
@@ -438,40 +588,105 @@ class AppContainer(
             }
             Platform.Kick -> kick.followedChannels()
         }
-        data.addSubscriptions(channels)
+        val local = data.settings.value.localFollows.toSet()
+        val (_, removed) = data.syncSubscriptions(platform, channels, removeMissing = complete, keep = local)
         // Quem a pessoa paga (sub ou membro) fica separado dos demais canais.
-        runCatching { refreshSupport(platform) }
-        return ImportResult(channels.size, note)
+        runCatching { refreshSupport(platform, exclude = local) }
+        // Um canal "só no Apex" cujos dois lados voltaram a concordar deixa de ser exceção.
+        val platformKeys = channels.map { it.key }.toSet()
+        val appKeys = data.subscriptions.value.map { it.key }.toSet()
+        val prefix = "${platform.name}:"
+        val stillLocal = local.filter { key -> !key.startsWith(prefix) || (key in platformKeys) != (key in appKeys) }
+        if (stillLocal.size != local.size) data.updateSettings { it.copy(localFollows = stillLocal) }
+        followsSyncedAt[platform] = System.currentTimeMillis()
+        return ImportResult(channels.size, note, removed)
+    }
+
+    /** Quando as inscrições de cada plataforma foram conferidas com a conta pela última vez (ms do relógio). */
+    private val followsSyncedAt = HashMap<Platform, Long>()
+    @Volatile private var syncingFollows = false
+
+    /**
+     * Confere com as contas conectadas quem a pessoa segue, nas plataformas em que isso não é feito há mais de [maxAgeMs]: ao abrir o app, ao
+     * voltar para a janela e de tempos em tempos. Quem deixou de ser seguido no site sai daqui; quem passou a ser seguido entra. Silencioso,
+     * a não ser que algo tenha mudado.
+     */
+    fun syncFollowsIfStale(maxAgeMs: Long) {
+        if (syncingFollows) return
+        val now = System.currentTimeMillis()
+        val due = Platform.entries.filter { data.account(it) != null && now - (followsSyncedAt[it] ?: 0L) > maxAgeMs }
+        if (due.isEmpty()) return
+        syncingFollows = true
+        scope.launch {
+            try {
+                for (p in due) {
+                    val before = data.subscriptions.value.count { it.platform == p }
+                    val result = runCatching { importFollows(p) }.getOrNull()
+                    followsSyncedAt[p] = System.currentTimeMillis()
+                    if (result == null) continue
+                    val after = data.subscriptions.value.count { it.platform == p }
+                    val added = (after - before + result.removed).coerceAtLeast(0)
+                    if (added > 0 || result.removed > 0) {
+                        toast("Inscrições de ${p.label} sincronizadas: ${if (added > 0) "$added entraram" else ""}${if (added > 0 && result.removed > 0) ", " else ""}${if (result.removed > 0) "${result.removed} saíram" else ""}")
+                        screens.subs.refreshFeed()
+                    }
+                }
+            } finally {
+                syncingFollows = false
+            }
+        }
     }
 
     /**
      * Atualiza quais canais a pessoa apoia pagando: subs da Twitch e memberships do YouTube (a Kick não informa).
      * Se a consulta falhar, o que já estava marcado continua como estava. Devolve quantos canais apoiados há depois.
      */
-    suspend fun refreshSupport(platform: Platform): Int {
+    suspend fun refreshSupport(platform: Platform, exclude: Set<String> = emptySet()): Int {
         when (platform) {
             Platform.Twitch -> {
                 if (data.account(Platform.Twitch) == null) return 0
                 val subs = twitch.subscribedChannels()
-                data.setSupport(Platform.Twitch, subs.map { it.channel to SupportKind.Sub })
+                // Ser sub inscreve o canal, a não ser que a pessoa o tenha tirado das inscrições de propósito ([exclude]).
+                data.setSupport(Platform.Twitch, subs.filter { it.channel.key !in exclude }.map { it.channel to SupportKind.Sub })
             }
             Platform.YouTube -> {
                 if (!tube.loggedIn) return 0
                 val known = data.subscriptions.value.filter { it.platform == Platform.YouTube }
                 val members = youtube.activeMemberships(known)
-                data.setSupport(Platform.YouTube, members.map { it to SupportKind.Member })
+                data.setSupport(Platform.YouTube, members.filter { it.key !in exclude }.map { it to SupportKind.Member })
             }
             Platform.Kick -> return 0
         }
         return data.subscriptions.value.count { it.platform == platform && it.support != null }
     }
 
-    /** Segue/deixa de seguir no app e, se houver conta do YouTube logada, também na conta. */
+    /**
+     * Segue/deixa de seguir no app e, com a conta conectada, também na conta (YouTube e Kick). A Twitch não aceita isso vindo de outro app
+     * (exige a verificação de integridade do navegador: "failed integrity check"), então nela a mudança vale só no Apex. O que ficou só no
+     * Apex entra em [AppSettings.localFollows], para a sincronização com a conta não desfazer.
+     */
     fun setSubscribed(channel: Channel, on: Boolean) {
         val already = data.isSubscribed(channel)
         if (on != already) data.toggleSubscription(channel)
-        if (channel.platform == Platform.YouTube && tube.loggedIn) {
-            scope.launch { runCatching { youtube.setSubscribed(channel.id, on) } }
+        val key = channel.key
+        fun markLocal(local: Boolean) = data.updateSettings { it.copy(localFollows = if (local) (it.localFollows + key).distinct() else it.localFollows - key) }
+        val push: (suspend () -> Boolean)? = when (channel.platform) {
+            Platform.YouTube -> if (tube.loggedIn) ({ withYouTubeSession { youtube.setSubscribed(channel.id, on) } }) else null
+            Platform.Kick -> if (data.account(Platform.Kick) != null) ({ kick.setFollowed(channel.id, on) }) else null
+            Platform.Twitch -> null
+        }
+        if (push == null) {
+            markLocal(true)
+            if (channel.platform == Platform.Twitch && data.account(Platform.Twitch) != null) {
+                toast("Na Twitch isso vale só no Apex: ela não aceita seguir ou deixar de seguir por outros apps. No site continua como estava.")
+            }
+            return
+        }
+        scope.launch {
+            val ok = runCatching { push() }.getOrElse { app.apex.util.Timing.mark("seguir: ${channel.platform} falhou: ${it.message}"); false }
+            app.apex.util.Timing.mark("seguir: ${channel.platform} ${channel.id} ${if (on) "seguir" else "deixar"} -> ${if (ok) "ok" else "recusado"}")
+            markLocal(!ok)
+            if (!ok) toast("${channel.platform.label} não aceitou ${if (on) "seguir" else "deixar de seguir"} ${channel.name} pela sua conta; ficou só no Apex.")
         }
     }
 
@@ -480,7 +695,7 @@ class AppContainer(
         data.setReaction(media, value)
         // Curtir um clipe não deve curtir o vídeo inteiro de onde ele saiu: fica só no app.
         if (media.platform == Platform.YouTube && tube.loggedIn && !media.isClip) {
-            scope.launch { runCatching { youtube.rate(media.videoId, value) } }
+            scope.launch { runCatching { withYouTubeSession { youtube.rate(media.videoId, value) } } }
         }
     }
 }

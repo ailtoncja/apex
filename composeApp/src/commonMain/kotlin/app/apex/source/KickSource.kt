@@ -20,6 +20,7 @@ import io.ktor.http.ContentType
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.request.header
 import io.ktor.client.request.setBody
+import io.ktor.client.request.delete
 import io.ktor.client.request.post
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.async
@@ -187,7 +188,7 @@ class KickSource(private val http: HttpClient = Http.client) {
         val id = m["id"].str() ?: return null
         val sender = m["sender"]
         val name = sender["username"].str() ?: return null
-        val text = app.apex.chat.cleanKickText(m["content"].str().orEmpty())
+        val (text, emotes) = app.apex.chat.parseKickEmotes(m["content"].str().orEmpty())
         if (text.isBlank()) return null
         val at = parseIsoMillis(m["created_at"].str()) ?: return null
         val badges = sender["identity"]["badges"].list().mapNotNull { it["type"].str() }
@@ -195,7 +196,7 @@ class KickSource(private val http: HttpClient = Http.client) {
             (at - vodStartMs).coerceAtLeast(0),
             ChatMessage(
                 id, name, text,
-                app.apex.chat.parseHexColor(sender["identity"]["color"].str()) ?: app.apex.chat.colorFromName(name), badges,
+                app.apex.chat.parseHexColor(sender["identity"]["color"].str()) ?: app.apex.chat.colorFromName(name), badges, emotes,
             ),
         )
     }
@@ -363,7 +364,7 @@ class KickSource(private val http: HttpClient = Http.client) {
         val info = channel(media.id, withThumbnail = false) ?: error("Canal não encontrado na Kick.")
         val url = info.playbackUrl ?: error("A Kick não liberou o stream.")
         val text = http.getText(url, headers)
-        if (!text.startsWith("#EXTM3U")) error("O canal ${info.hit.channel.name} está offline.")
+        if (!text.startsWith("#EXTM3U")) throw ChannelOfflineException(info.hit.channel.name, info.hit.channel)
         return Resolved(
             media = info.hit.live?.let { it.copy(thumbnailUrl = it.thumbnailUrl ?: media.thumbnailUrl) } ?: media, description = null, likes = null,
             subscribers = info.hit.channel.followers, uploadDate = null,
@@ -404,6 +405,22 @@ class KickSource(private val http: HttpClient = Http.client) {
         val u = json("https://kick.com/api/v1/user") ?: return null
         val name = u["streamer_channel"]["user"]["username"].str() ?: u["username"].str() ?: return null
         return name to (u["profile_pic"].str() ?: u["profilepic"].str())
+    }
+
+    /** Segue ([on] = true) ou deixa de seguir o canal [slug] com a conta logada. `false` se a Kick recusou. */
+    suspend fun setFollowed(slug: String, on: Boolean): Boolean {
+        if (sessionToken == null) return false
+        val url = "https://kick.com/api/v2/channels/$slug/follow"
+        val response = if (on) {
+            http.post(url) {
+                this@KickSource.headers.forEach { (k, v) -> header(k, v) }
+                contentType(ContentType.Application.Json)
+                setBody("{}")
+            }
+        } else {
+            http.delete(url) { this@KickSource.headers.forEach { (k, v) -> header(k, v) } }
+        }
+        return response.status.isSuccess()
     }
 
     /** Canais que a conta logada segue (precisa do [sessionToken]). */

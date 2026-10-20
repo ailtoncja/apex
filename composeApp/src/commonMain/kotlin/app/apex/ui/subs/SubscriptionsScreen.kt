@@ -47,6 +47,7 @@ import app.apex.state.withoutBlocked
 import app.apex.theme.ApexColors
 import app.apex.theme.color
 import app.apex.ui.components.ActionButton
+import app.apex.ui.components.newTabClick
 import app.apex.ui.components.ApexChip
 import app.apex.ui.components.ApexGrid
 import app.apex.ui.components.Avatar
@@ -138,7 +139,7 @@ fun SubscriptionsScreen() {
                                 // Ao vivo: a foto entra direto na live; o nome abre o canal.
                                 Avatar(
                                     ch.avatarUrl, ch.name, 56.dp,
-                                    if (ch.key in liveKeys) Modifier.clip(CircleShape).clickable { app.openLive(ch) } else Modifier,
+                                    if (ch.key in liveKeys) Modifier.clip(CircleShape).newTabClick { app.openLiveInNewTab(ch) }.clickable { app.openLive(ch) } else Modifier,
                                     ring = if (ch.key in liveKeys) ApexColors.Live else if (ch.support != null) ApexColors.Support else null,
                                 )
                                 Text(

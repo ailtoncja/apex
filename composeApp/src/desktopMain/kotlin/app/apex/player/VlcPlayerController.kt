@@ -74,6 +74,8 @@ internal fun vlcOptions(source: PlaySource, viaEdge: Boolean = false): List<Stri
     source.userAgent?.let { add(":http-user-agent=$it") }
     if (source.startMs > 1000) add(":start-time=${source.startMs / 1000.0}")
     source.endMs?.let { add(":stop-time=${it / 1000.0}") }
+    // Só som (a música de fundo, ou "Somente áudio"): o VLC nem decodifica a imagem, que ninguém vê.
+    if (source.audioOnly) add(":no-video")
     when {
         !source.live -> add(":network-caching=1500")
         // Pela lista curta ([LiveEdgeProxy]) o VLC já começa perto do fim: só o buffer pequeno.
@@ -157,6 +159,9 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         const val SEEK_OLD_TOLERANCE_MS = 1_500L
         const val SEEK_WAIT_MS = 3_000L
 
+        /** Com um jogo em outro monitor, o intervalo mínimo entre quadros mostrados (~30 por segundo). */
+        const val GAMING_FRAME_NS = 31_000_000L
+
         /** Setas apertadas em sequência viram um pulo só: o VLC sai para o último pedido este tempo depois da última. */
         const val SEEK_DEBOUNCE_MS = 120L
 
@@ -171,9 +176,11 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
 
         @Synchronized
         private fun sharedFactory(hardwareDecode: Boolean): MediaPlayerFactory = factories.getOrPut(hardwareDecode) {
+            // `APEX_VLC_LOG=arquivo` (só para ensaio): o registro detalhado do próprio VLC vai para esse arquivo.
+            val log = System.getenv("APEX_VLC_LOG")?.takeIf { it.isNotBlank() }
+                ?.let { listOf("--file-logging", "--logfile=$it", "--log-verbose=2") } ?: listOf("--quiet")
             MediaPlayerFactory(
-                "--no-video-title-show", "--no-osd", "--no-snapshot-preview", "--quiet",
-                if (hardwareDecode) "--avcodec-hw=any" else "--avcodec-hw=none",
+                *(listOf("--no-video-title-show", "--no-osd", "--no-snapshot-preview", if (hardwareDecode) "--avcodec-hw=any" else "--avcodec-hw=none") + log).toTypedArray(),
             )
         }
     }
@@ -187,13 +194,72 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
      */
     private val softAudio: SoftAudio? = if (SoftAudio.available()) SoftAudio() else null
 
+    // ---------- economia quando ninguém vê (ver ViewingWatch) ----------
+
+    /** A imagem está desligada no VLC (Apex escondido): ele nem decodifica o vídeo, só o som. */
+    @Volatile private var videoOff = false
+    private var savedVideoTrack = -1
+    @Volatile private var hideQueued = false
+
+    /** Com um jogo em outro monitor: quando foi entregue o último quadro (no máximo ~30 por segundo). */
+    @Volatile private var lastShownNanos = 0L
+
+    /** Só para medir: quando a imagem foi religada (para marcar quanto ela levou para voltar). */
+    @Volatile private var reshownAt = 0L
+
+    private val viewingListener: (Viewing) -> Unit = { v -> if (v == Viewing.Hidden) requestHide() else vlc { showVideo() } }
+
+    init {
+        ViewingWatch.listeners += viewingListener
+    }
+
+    /**
+     * Dá para desligar a faixa de vídeo sem parar o vídeo? Só quando o som vem no mesmo arquivo (lives e VODs da Twitch e da Kick, lives do
+     * YouTube). No YouTube gravado o som vem num arquivo à parte e o arquivo principal é o do vídeo: sem a faixa dele, o VLC dá o vídeo por
+     * acabado (e a reprodução automática pulava para o próximo). Nesse caso o VLC segue decodificando, mas nenhum quadro é copiado nem desenhado.
+     */
+    private fun canDropVideoTrack() = lastSource?.let { it.audioUrl == null && !it.audioOnly } == true
+
+    private fun requestHide() {
+        if (hideQueued || videoOff || !canDropVideoTrack()) return
+        hideQueued = true
+        vlc {
+            hideQueued = false
+            hideVideo()
+        }
+    }
+
+    /** Na fila do VLC: desliga a faixa de vídeo (lembrando qual era). Sem faixa ainda (o vídeo está abrindo), tenta de novo no próximo quadro. */
+    private fun hideVideo() {
+        if (videoOff || !canDropVideoTrack() || ViewingWatch.viewing != Viewing.Hidden) return
+        val track = mediaPlayer.video().track()
+        if (track < 0) return
+        savedVideoTrack = track
+        mediaPlayer.video().setTrack(-1)
+        videoOff = true
+        Timing.mark("imagem desligada: ninguém está vendo (o som continua)")
+    }
+
+    /** Na fila do VLC: religa a imagem. Num vídeo gravado, um pulo para o mesmo ponto faz a imagem voltar já, sem esperar o próximo quadro-chave. */
+    private fun showVideo() {
+        if (!videoOff) return
+        videoOff = false
+        noPictureSinceMs = -1
+        mediaPlayer.video().setTrack(savedVideoTrack)
+        if (lastSource?.live == false && _state.value.durationMs > 0) mediaPlayer.controls().setTime(mediaPlayer.status().time())
+        if (Timing.enabled) reshownAt = System.currentTimeMillis()
+        Timing.mark("imagem religada")
+    }
+
     private val _state = MutableStateFlow(PlayerState())
     override val state: StateFlow<PlayerState> = _state.asStateFlow()
 
     // ---------- a thread do VLC ----------
 
     /** A fila deste player: cada chamada ao libVLC roda aqui, uma de cada vez, na ordem em que foi pedida. */
-    private val vlcThread = Executors.newSingleThreadExecutor { r -> Thread(r, "apex-vlc-${ids.incrementAndGet()}").apply { isDaemon = true } }
+    /** O número deste player (o principal, os do Multi, o da música de fundo), nos nomes das threads e nas medições. */
+    private val tag = ids.incrementAndGet()
+    private val vlcThread = Executors.newSingleThreadExecutor { r -> Thread(r, "apex-vlc-$tag").apply { isDaemon = true } }
     @Volatile private var released = false
 
     /**
@@ -258,8 +324,15 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         )
         softAudio?.let { out ->
             mediaPlayer.audio().callback(SoftAudio.VLC_FORMAT, SoftAudio.RATE, SoftAudio.CHANNELS, object : AudioCallbackAdapter() {
-                override fun play(mediaPlayer: MediaPlayer, samples: com.sun.jna.Pointer, sampleCount: Int, pts: Long) = out.push(samples, sampleCount)
-                override fun flush(mediaPlayer: MediaPlayer, pts: Long) = out.flush()
+                override fun play(mediaPlayer: MediaPlayer, samples: com.sun.jna.Pointer, sampleCount: Int, pts: Long) {
+                    if (seekWatchSound) { seekWatchSound = false; Timing.mark("pulo: som de volta em ${System.currentTimeMillis() - seekWatchAt} ms") }
+                    out.push(samples, sampleCount)
+                }
+                override fun flush(mediaPlayer: MediaPlayer, pts: Long) {
+                    // O som que chega depois do esvaziamento já é o do ponto novo.
+                    if (seekWatchSoundArmed) { seekWatchSoundArmed = false; seekWatchSound = true; Timing.mark("pulo: VLC esvaziou o som em ${System.currentTimeMillis() - seekWatchAt} ms") }
+                    out.flush()
+                }
             })
         }
         // Os eventos chegam na thread de eventos do libVLC: aqui só se mexe no estado; o que precisa falar com o VLC vai para a fila dele.
@@ -305,6 +378,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                     val elapsed = System.currentTimeMillis() - seekAskedAt
                     val stillOld = kotlin.math.abs(newTime - (seekFromMs + elapsed)) < SEEK_OLD_TOLERANCE_MS
                     if (stillOld && elapsed < SEEK_WAIT_MS) return
+                    if (Timing.enabled) Timing.mark("pulo: o tempo chegou em ${newTime / 1000.0} s (pedido ${seekTargetMs / 1000.0} s) em $elapsed ms")
                     seekTargetMs = -1
                 }
                 if (pendingSeekMs >= 0 && issuePendingSeek(newTime)) return
@@ -326,7 +400,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
 
     private fun logDrift(newTime: Long) {
         val now = System.currentTimeMillis()
-        if (framesSincePlay == 0L) return
+        if (framesSincePlay == 0L && lastSource?.audioOnly != true) return
         if (driftTimeStart < 0) { driftTimeStart = newTime; driftWallStart = now; driftLoggedAt = now; return }
         if (now - driftLoggedAt < 10_000) return
         driftLoggedAt = now
@@ -334,7 +408,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         vlc {
             val info = mediaPlayer.media().info()
             val stats = info?.statistics()
-            if (stats != null) Timing.mark("áudio: ${info.audioTracks().size} faixa(s), ${stats.decodedAudio()} blocos decodificados, ${stats.audioBuffersPlayed()} tocados, ${stats.audioBuffersLost()} perdidos; vídeo: ${stats.decodedVideo()} quadros, ${stats.picturesLost()} perdidos")
+            if (stats != null) Timing.mark("áudio[$tag]: ${info.audioTracks().size} faixa(s), ${stats.decodedAudio()} blocos decodificados, ${stats.audioBuffersPlayed()} tocados, ${stats.audioBuffersLost()} perdidos; vídeo: ${stats.decodedVideo()} quadros, ${stats.picturesLost()} perdidos")
         }
     }
 
@@ -422,6 +496,8 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         catchingUp = false
         noPictureSinceMs = -1
         retriedWithoutPicture = safeMode
+        videoOff = false
+        savedVideoTrack = -1
         // `APEX_TEST_NOVIDEO=1` (só para ensaio): a primeira abertura sai sem vídeo, para ver a recuperação acontecer.
         val noVideo = if (!safeMode && System.getenv("APEX_TEST_NOVIDEO") == "1") listOf(":no-video") else emptyList()
         // Pela saída do app, o VLC adianta o áudio um pouco (o que fica na fila curta e na linha de som).
@@ -479,7 +555,8 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
      */
     private fun recoverIfNoPicture(time: Long) {
         val source = lastSource ?: return
-        if (source.audioOnly || pictureSeen || retriedWithoutPicture) return
+        // Com a imagem desligada de propósito (Apex escondido), não chegar imagem é o esperado.
+        if (source.audioOnly || pictureSeen || retriedWithoutPicture || videoOff || ViewingWatch.viewing == Viewing.Hidden) return
         if (_state.value.loading) { noPictureSinceMs = -1; return }
         val now = System.currentTimeMillis()
         if (noPictureSinceMs < 0) { noPictureSinceMs = now; return }
@@ -551,11 +628,18 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         return true
     }
 
+    /** Só para medir (`APEX_TIMING=1`): quando o último pulo saiu, para marcar quando a imagem e o som voltam depois dele. */
+    @Volatile private var seekWatchAt = 0L
+    @Volatile private var seekWatchFrame = false
+    @Volatile private var seekWatchSound = false
+    @Volatile private var seekWatchSoundArmed = false
+
     /** Manda o VLC pular para [absolute] (tempo do arquivo), partindo de [from]. */
     private fun issueSeek(absolute: Long, from: Long) {
         Timing.mark("VLC: pulo para ${absolute / 1000.0} s (de ${from / 1000.0} s)")
         seekFromMs = from
         seekAskedAt = System.currentTimeMillis()
+        if (Timing.enabled) { seekWatchAt = seekAskedAt; seekWatchFrame = true; seekWatchSoundArmed = true }
         seekTargetMs = absolute
         vlc { mediaPlayer.controls().setTime(absolute) }
     }
@@ -619,6 +703,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     override fun release() {
         if (released) return
         released = true
+        ViewingWatch.listeners -= viewingListener
         generation.incrementAndGet()
         showing = false
         closeEdge()
@@ -675,7 +760,8 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         override fun getBufferFormat(sourceWidth: Int, sourceHeight: Int): BufferFormat {
             // A altura que o VLC oferece aqui não é a do vídeo: é a "altura codificada" (1080p vira 1088) e, depois que as tentativas de
             // decodificação por hardware falham, ainda cresce (1090). Aceitar esse tamanho estica a imagem e, na tela cheia, deixa
-            // faixas pretas dos lados. O tamanho de verdade vem da faixa de vídeo ou da qualidade escolhida.
+            // faixas pretas dos lados. O tamanho de verdade vem da faixa de vídeo ou da qualidade escolhida. (Pedir o tamanho oferecido e
+            // cortar as linhas a mais ao desenhar foi medido: o VLC gasta o mesmo, e o processo todo ainda gasta ~10% de um núcleo a mais.)
             val track = runCatching { mediaPlayer.media().info()?.videoTracks()?.firstOrNull() }.getOrNull()
             val (width, height) = trueFrameSize(sourceWidth, sourceHeight, track?.width() ?: 0, track?.height() ?: 0, hintHeight)
             val sarNum = track?.sampleAspectRatio() ?: 0
@@ -705,6 +791,18 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
             displayHeight: Int,
         ) {
             if (!showing) return
+            when (ViewingWatch.viewing) {
+                // Ninguém vê: nada de copiar nem desenhar; e a imagem é desligada no VLC (quadros que ainda chegam pedem de novo).
+                Viewing.Hidden -> { requestHide(); return }
+                // Um jogo em outro monitor: no máximo ~30 quadros por segundo (os outros nem são copiados).
+                Viewing.Gaming -> {
+                    val now = System.nanoTime()
+                    if (now - lastShownNanos < GAMING_FRAME_NS) return
+                    lastShownNanos = now
+                }
+                Viewing.Normal -> {}
+            }
+            if (reshownAt > 0) { Timing.mark("imagem de volta ${System.currentTimeMillis() - reshownAt} ms depois de religar"); reshownAt = 0 }
             val info = imageInfo ?: return
             val t0 = if (FrameMeter.enabled) System.nanoTime() else 0L
             nativeBuffers[0].rewind()
@@ -716,6 +814,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                 old
             }
             previous?.close()
+            if (seekWatchFrame && seekTargetMs < 0) { seekWatchFrame = false; Timing.mark("pulo: imagem de volta em ${System.currentTimeMillis() - seekWatchAt} ms") }
             if (t0 != 0L) {
                 FrameMeter.videoFrames.incrementAndGet()
                 FrameMeter.videoCopyNanos.addAndGet(System.nanoTime() - t0)

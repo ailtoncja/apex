@@ -38,9 +38,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -59,6 +63,8 @@ import kotlin.math.roundToInt
 fun ContextMenuHost(
     modifier: Modifier = Modifier,
     menu: @Composable (dismiss: () -> Unit) -> Unit,
+    /** O botão do meio do mouse (abrir em nova aba, como no navegador). */
+    onMiddleClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     var at by remember { mutableStateOf<IntOffset?>(null) }
@@ -71,6 +77,9 @@ fun ContextMenuHost(
                         val change = event.changes.firstOrNull() ?: continue
                         at = IntOffset(change.position.x.roundToInt(), change.position.y.roundToInt())
                         change.consume()
+                    } else if (event.type == PointerEventType.Press && onMiddleClick != null && event.isNewTabClick()) {
+                        event.changes.forEach { it.consume() }
+                        onMiddleClick()
                     }
                 }
             }
@@ -78,6 +87,25 @@ fun ContextMenuHost(
     ) {
         content()
         at?.let { point -> Box(Modifier.offset { point }) { menu { at = null } } }
+    }
+}
+
+/** O gesto de "abrir em nova aba" do navegador: botão do meio, ou Ctrl + clique. */
+fun PointerEvent.isNewTabClick(): Boolean = buttons.isTertiaryPressed || (buttons.isPrimaryPressed && keyboardModifiers.isCtrlPressed)
+
+/**
+ * Faz o botão do meio (ou Ctrl + clique) chamar [onNewTab] em vez do clique normal, como no navegador. Vem ANTES do `clickable` na
+ * cadeia: o evento é consumido na passagem inicial, e o clique comum não acontece.
+ */
+fun Modifier.newTabClick(onNewTab: () -> Unit): Modifier = pointerInput(onNewTab) {
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (event.type == PointerEventType.Press && event.isNewTabClick()) {
+                event.changes.forEach { it.consume() }
+                onNewTab()
+            }
+        }
     }
 }
 

@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.PlaylistAdd
@@ -29,6 +31,9 @@ import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.WatchLater
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -54,6 +59,8 @@ import app.apex.player.LoadState
 import app.apex.theme.ApexColors
 import app.apex.ui.components.ActionButton
 import app.apex.ui.components.ApexChip
+import app.apex.ui.components.LinkedText
+import app.apex.ui.components.SelectableText
 import app.apex.ui.components.Avatar
 import app.apex.ui.components.EmptyState
 import app.apex.ui.components.PlatformTag
@@ -137,61 +144,67 @@ private fun VideoInfo() {
     val reaction = reactions[media.key] ?: 0
     val isLater = later.any { it.key == media.key }
     var expanded by remember(media.key) { mutableStateOf(false) }
-    val channel = media.channel
+    // Canal offline: o player já diz "fulano está offline"; aqui fica só o canal (com o Seguir), que a plataforma mandou junto com o aviso.
+    val offline = load as? LoadState.Error
+    val isOffline = offline?.offline == true
+    val channel = media.channel ?: offline?.channel
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(media.title, style = MaterialTheme.typography.titleLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        if (!isOffline) SelectableText(media.title, style = MaterialTheme.typography.titleLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
 
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // O canal à esquerda e as ações à direita numa linha só quando cabe, como no YouTube; numa janela estreita as ações descem. Só as
+        // ações de todo dia ficam à vista (curtir, salvar); o resto vai para o "…".
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (channel != null) {
-                Row(
-                    Modifier.clip(RoundedCornerShape(50)).clickable { app.openChannel(channel) },
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Avatar(channel.avatarUrl, channel.name, 44.dp)
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text(channel.name, style = MaterialTheme.typography.titleSmall, maxLines = 1)
-                            if (channel.verified) VerifiedMark()
-                            if (media.platform != Platform.YouTube) PlatformTag(media.platform)
-                        }
-                        (channel.followers ?: resolved?.subscribers)?.let {
-                            Text(
-                                "${formatCount(it)} ${if (media.platform == Platform.YouTube) "inscritos" else "seguidores"}",
-                                style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted,
-                            )
+                Row(Modifier.align(Alignment.CenterVertically), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(50)).clickable { app.openChannel(channel) },
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Avatar(channel.avatarUrl, channel.name, 44.dp)
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text(channel.name, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                                if (channel.verified) VerifiedMark()
+                                if (media.platform != Platform.YouTube) PlatformTag(media.platform)
+                            }
+                            (channel.followers ?: resolved?.subscribers)?.let {
+                                Text(
+                                    "${formatCount(it)} ${if (media.platform == Platform.YouTube) "inscritos" else "seguidores"}",
+                                    style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted,
+                                )
+                            }
                         }
                     }
+                    SubscribeButton(channel)
                 }
-                SubscribeButton(channel)
+            }
+            Row(Modifier.align(Alignment.CenterVertically), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (media.platform == Platform.YouTube) {
+                    Row(Modifier.clip(RoundedCornerShape(50)).background(ApexColors.SurfaceHigh)) {
+                        val base = resolved?.likes
+                        val shown = base?.let { it + if (reaction == 1) 1 else 0 }
+                        ActionButton(
+                            shown?.let { formatCount(it) } ?: "Curtir",
+                            { app.react(media, if (reaction == 1) 0 else 1) },
+                            icon = Icons.Rounded.ThumbUp, active = reaction == 1,
+                        )
+                        ActionButton("", { app.react(media, if (reaction == -1) 0 else -1) }, icon = Icons.Rounded.ThumbDown, active = reaction == -1)
+                    }
+                }
+                if (!media.isLive) {
+                    ActionButton(if (isLater) "Salvo" else "Salvar", { app.data.toggleWatchLater(media); app.toast(if (isLater) "Removido de Assistir depois" else "Salvo em Assistir depois") },
+                        icon = Icons.Rounded.WatchLater, active = isLater)
+                }
+                if (!isOffline) MoreActions(media)
             }
         }
 
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (media.platform == Platform.YouTube) {
-                Row(Modifier.clip(RoundedCornerShape(50)).background(ApexColors.SurfaceHigh)) {
-                    val base = resolved?.likes
-                    val shown = base?.let { it + if (reaction == 1) 1 else 0 }
-                    ActionButton(
-                        shown?.let { formatCount(it) } ?: "Curtir",
-                        { app.react(media, if (reaction == 1) 0 else 1) },
-                        icon = Icons.Rounded.ThumbUp, active = reaction == 1,
-                    )
-                    ActionButton("", { app.react(media, if (reaction == -1) 0 else -1) }, icon = Icons.Rounded.ThumbDown, active = reaction == -1)
-                }
-            }
-            if (!media.isLive) {
-                ActionButton(if (isLater) "Salvo" else "Salvar", { app.data.toggleWatchLater(media); app.toast(if (isLater) "Removido de Assistir depois" else "Salvo em Assistir depois") },
-                    icon = Icons.Rounded.WatchLater, active = isLater)
-                ActionButton("Playlist", { app.ui.playlistTarget = media }, icon = Icons.Rounded.PlaylistAdd)
-            }
-            ActionButton("Copiar link", { app.system.copyText(media.url); app.toast("Link copiado") }, icon = Icons.Rounded.ContentCopy)
-            ActionButton("Abrir no site", { app.system.openUrl(media.url) }, icon = Icons.Rounded.OpenInBrowser)
-        }
-
+        // Canal offline: não há live para descrever (o player já mostra o canal e o caminho para os vídeos dele).
+        if (isOffline) return@Column
+        // A descrição dá para selecionar e copiar, e os links dela abrem (por isso o toque que expande fica na linha de cima e no "…mais").
         Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(ApexColors.SurfaceHigh)
-                .clickable { expanded = !expanded }.padding(14.dp),
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(ApexColors.SurfaceHigh).padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             val meta = buildList {
@@ -200,17 +213,17 @@ private fun VideoInfo() {
                 if (date.isNotEmpty() && !media.isLive) add(date)
                 media.category?.let { add(it) }
             }.joinToString(" • ")
-            if (meta.isNotEmpty()) Text(meta, style = MaterialTheme.typography.titleSmall)
+            if (meta.isNotEmpty()) Text(meta, Modifier.fillMaxWidth().clickable { expanded = !expanded }, style = MaterialTheme.typography.titleSmall)
             val description = resolved?.description
             if (description.isNullOrBlank()) {
                 if (load is LoadState.Loading) Box(Modifier.fillMaxWidth().height(40.dp).shimmer())
                 else Text("Sem descrição.", style = MaterialTheme.typography.bodyMedium, color = ApexColors.Muted)
             } else {
+                LinkedText(description, style = MaterialTheme.typography.bodyMedium, maxLines = if (expanded) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis)
                 Text(
-                    description, style = MaterialTheme.typography.bodyMedium,
-                    maxLines = if (expanded) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis,
+                    if (expanded) "Mostrar menos" else "…mais", Modifier.clip(RoundedCornerShape(6.dp)).clickable { expanded = !expanded }.padding(vertical = 2.dp),
+                    style = MaterialTheme.typography.labelLarge, color = ApexColors.Muted,
                 )
-                Text(if (expanded) "Mostrar menos" else "…mais", style = MaterialTheme.typography.labelLarge, color = ApexColors.Muted)
             }
             if (expanded && resolved?.chapters?.isNotEmpty() == true) {
                 Text("Capítulos", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
@@ -222,6 +235,27 @@ private fun VideoInfo() {
                     )
                 }
             }
+        }
+    }
+}
+
+/** O "…" da página do vídeo: as ações de vez em quando, que antes ocupavam uma segunda linha de botões. */
+@Composable
+private fun MoreActions(media: Media) {
+    val app = LocalApp.current
+    var open by remember { mutableStateOf(false) }
+    Box {
+        ActionButton("", { open = true }, Modifier.testTag("watch-more"), icon = Icons.Rounded.MoreHoriz)
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            @Composable
+            fun item(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, tag: String, action: () -> Unit) = DropdownMenuItem(
+                text = { Text(label) }, leadingIcon = { Icon(icon, null) }, modifier = Modifier.testTag(tag),
+                onClick = { open = false; action() },
+            )
+            if (!media.isLive) item("Adicionar à playlist…", Icons.Rounded.PlaylistAdd, "watch-more-playlist") { app.ui.playlistTarget = media }
+            item("Ouvir só o som em segundo plano", Icons.Rounded.Headphones, "watch-more-background") { app.moveToBackground() }
+            item("Copiar link", Icons.Rounded.ContentCopy, "watch-more-copy") { app.system.copyText(media.url); app.toast("Link copiado") }
+            item("Abrir no site", Icons.Rounded.OpenInBrowser, "watch-more-site") { app.system.openUrl(media.url) }
         }
     }
 }
@@ -302,7 +336,7 @@ private fun Comments(media: Media) {
                         Text(c.author, style = MaterialTheme.typography.labelLarge, maxLines = 1)
                         Text(c.timeText, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted)
                     }
-                    Text(c.text, style = MaterialTheme.typography.bodyMedium)
+                    LinkedText(c.text, style = MaterialTheme.typography.bodyMedium)
                     if (c.likes > 0) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             androidx.compose.material3.Icon(Icons.Rounded.ThumbUp, null, tint = ApexColors.Muted, modifier = Modifier.height(14.dp).width(14.dp))

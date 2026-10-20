@@ -104,6 +104,12 @@ object ApexColors {
     val Live get() = palette.live
     /** Canais que a pessoa apoia pagando (sub ou membro). */
     val Support get() = palette.support
+    /**
+     * O que está escolhido (chip, filtro, botão ligado). Nos temas Subaru é o dourado, a cor do tema em tudo que está ativo; nos outros fica
+     * o contraste máximo (branco no escuro, preto no claro), como no YouTube.
+     */
+    val Selected get() = if (palette.rally) palette.accent else palette.onSurface
+    val OnSelected get() = if (palette.rally) palette.onAccent else palette.background
     val Scrim = Color(0xCC000000)
 
     val YouTube = Color(0xFFFF3B30)

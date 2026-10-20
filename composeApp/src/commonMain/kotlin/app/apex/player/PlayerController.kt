@@ -38,17 +38,28 @@ data class PlaySource(
 /** Os endereços completos dos arquivos de um vídeo do YouTube (do yt-dlp) e o User-Agent que eles pedem. */
 data class FullAccess(val urls: List<String>, val userAgent: String?) {
     /**
-     * O endereço completo do mesmo arquivo que [fast] (a abertura rápida): mesmo formato (`itag`) e mesmo tamanho (`clen`), o que garante os
-     * mesmos bytes; `null` se não houver, e aí a ponte não pode continuar depois do primeiro minuto.
+     * O endereço completo do mesmo arquivo que [fast] (a abertura rápida); `null` se não houver, e aí a ponte não pode continuar depois do
+     * primeiro minuto. Mesmo formato (`itag`) e mesmo tamanho (`clen`) não bastam: o áudio do YouTube tem taxa fixa, e a versão com volume
+     * nivelado (`xtags=drc=1`) e as dublagens (`xtags=lang=…`) saem com o mesmo formato e o mesmo tamanho, mas outros bytes. Continuar o
+     * arquivo por uma delas desalinha tudo depois do primeiro minuto: o pulo no áudio falha, o VLC desliga o som e o vídeo trava. Por isso a
+     * versão (`xtags`) também tem de bater e, entre as que sobram, vale a da mesma data de arquivo (`lmt`).
      */
     fun match(fast: String): String? {
-        val itag = param(fast, "itag") ?: return null
-        val clen = param(fast, "clen")
-        return urls.firstOrNull { param(it, "itag") == itag && (clen == null || param(it, "clen") == clen) }
+        val itag = number(fast, "itag") ?: return null
+        val clen = number(fast, "clen")
+        val xtags = xtags(fast)
+        val same = urls.filter { number(it, "itag") == itag && (clen == null || number(it, "clen") == clen) && xtags(it) == xtags }
+        val lmt = number(fast, "lmt")
+        return same.firstOrNull { lmt != null && number(it, "lmt") == lmt } ?: same.firstOrNull()
     }
 
-    private fun param(url: String, name: String): String? =
+    private fun number(url: String, name: String): String? =
         Regex("""[?&/]$name[=/](\d+)""").find(url)?.groupValues?.get(1)
+
+    /** A versão do arquivo (`xtags`, já decodificada; vazia na versão principal). */
+    private fun xtags(url: String): String =
+        Regex("""[?&/]xtags[=/]([^&/]*)""").find(url)?.groupValues?.get(1)
+            ?.let { raw -> runCatching { with(io.ktor.http.Url("https://x/?v=$raw")) { parameters["v"] } }.getOrNull() ?: raw }.orEmpty()
 }
 
 data class PlayerState(

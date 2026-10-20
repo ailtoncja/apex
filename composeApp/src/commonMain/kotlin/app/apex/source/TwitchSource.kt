@@ -189,11 +189,14 @@ class TwitchSource(private val http: HttpClient = Http.client) {
     suspend fun recentChatMessages(login: String): List<ChatMessage> {
         if (authToken == null) return emptyList()
         val data = gql(
-            "{ channel(name: ${lit(login)}) { recentChatMessages { id sentAt deletedAt content { text } " +
+            "{ channel(name: ${lit(login)}) { recentChatMessages { id sentAt deletedAt content { text fragments { text content { __typename ... on Emote { id } } } } " +
                 "sender { login displayName chatColor } senderBadges { setID } } } }",
         )
         return parseRecentChat(data)
     }
+
+    /** O número do canal [login] na Twitch (o que as extensões de emotes usam para achar os emotes dele). */
+    suspend fun userId(login: String): String? = gql("{ user(login: ${lit(login)}) { id } }")["user"]["id"].str()
 
     internal fun parseRecentChat(data: JsonElement?): List<ChatMessage> =
         data["channel"]["recentChatMessages"].list()
@@ -203,11 +206,23 @@ class TwitchSource(private val http: HttpClient = Http.client) {
                 val id = m["id"].str() ?: return@mapNotNull null
                 val sender = m["sender"]
                 val name = sender["displayName"].str() ?: sender["login"].str() ?: return@mapNotNull null
-                val text = m["content"]["text"].str()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val fragments = m["content"]["fragments"].list()
+                // Em pedaços, os emotes vêm marcados; sem eles (resposta antiga), só o texto.
+                val (raw, rawEmotes) = if (fragments.isNotEmpty()) {
+                    app.apex.chat.emotesFromFragments(fragments.map { f ->
+                        f["text"].str().orEmpty() to f["content"].takeIf { it["__typename"].str() == "Emote" }?.get("id").str()
+                    })
+                } else (m["content"]["text"].str().orEmpty() to emptyList())
+                // Sem os espaços das pontas (os emotes andam junto com o texto).
+                val text = raw.trim()
+                if (text.isEmpty()) return@mapNotNull null
+                val lead = raw.length - raw.trimStart().length
+                val emotes = rawEmotes.map { it.copy(start = it.start - lead, end = it.end - lead) }.filter { it.start >= 0 && it.end <= text.length }
                 ChatMessage(
                     id, name, text,
                     app.apex.chat.parseHexColor(sender["chatColor"].str()) ?: app.apex.chat.colorFromName(name),
                     m["senderBadges"].list().mapNotNull { it["setID"].str() },
+                    emotes,
                 )
             }
 
@@ -269,6 +284,29 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         return FollowsPage(items, follows["pageInfo"]["hasNextPage"].str() == "true")
     }
 
+    /**
+     * Segue ([on] = true) ou deixa de seguir o canal [login] com a conta logada: a mesma mutação que o site da Twitch usa. `false` se a Twitch
+     * recusou (sem conta, canal inexistente, ou erro na resposta).
+     */
+    suspend fun setFollowed(login: String, on: Boolean): Boolean {
+        if (authToken == null) return false
+        val id = gql("""{ user(login: ${lit(login)}) { id } }""")["user"]["id"].str() ?: return false
+        val query = if (on) {
+            """mutation { followUser(input: {targetID: ${lit(id)}, disableNotifications: false}) { follow { user { id } } error { code } } }"""
+        } else {
+            """mutation { unfollowUser(input: {targetID: ${lit(id)}}) { follow { user { id } } } }"""
+        }
+        val response = parseJson(http.postJson(GQL_URL, buildJsonObject { put("query", query) }.toString(), headers()))
+        val result = response["data"][if (on) "followUser" else "unfollowUser"]
+        val errorCode = result["error"]["code"].str()
+        if (result == null || errorCode != null) {
+            val why = errorCode ?: response["errors"].list().firstOrNull()["message"].str() ?: response.toString().take(200)
+            app.apex.util.Timing.mark("twitch: ${if (on) "seguir" else "deixar de seguir"} $login recusado: $why")
+            return false
+        }
+        return true
+    }
+
     /** O que a Twitch devolveu do chat gravado: as mensagens e se há mais depois. */
     class VideoComments(val messages: List<ReplayMessage>, val hasNext: Boolean)
 
@@ -307,7 +345,9 @@ class TwitchSource(private val http: HttpClient = Http.client) {
             val id = node["id"].str() ?: return@mapNotNull null
             val offset = node["contentOffsetSeconds"].long() ?: return@mapNotNull null
             val name = node["commenter"]["displayName"].str() ?: node["commenter"]["login"].str() ?: "?"
-            val text = node["message"]["fragments"].list().joinToString("") { it["text"].str().orEmpty() }
+            val (text, emotes) = app.apex.chat.emotesFromFragments(
+                node["message"]["fragments"].list().map { it["text"].str().orEmpty() to it["emote"]["emoteID"].str() },
+            )
             if (text.isBlank()) return@mapNotNull null
             ReplayMessage(
                 offset * 1000,
@@ -315,6 +355,7 @@ class TwitchSource(private val http: HttpClient = Http.client) {
                     id = id, author = name, text = text,
                     color = app.apex.chat.parseHexColor(node["message"]["userColor"].str()) ?: app.apex.chat.colorFromName(name),
                     badges = node["message"]["userBadges"].list().mapNotNull { it["setID"].str()?.takeIf { s -> s.isNotBlank() } },
+                    emotes = emotes,
                 ),
             )
         }.sortedBy { it.offsetMs }
@@ -438,7 +479,10 @@ class TwitchSource(private val http: HttpClient = Http.client) {
             // `fast_bread` é o modo de baixa latência da Twitch: as listas passam a trazer os próximos trechos já antes de ficarem prontos.
             "&allow_source=true&allow_audio_only=true&player=twitchweb&playlist_include_framerate=true&fast_bread=true&p=${Random.nextInt(100000, 999999)}"
         val text = http.getText(master)
-        if (!text.startsWith("#EXTM3U")) error("O canal ${media.channel?.name ?: login} está offline.")
+        if (!text.startsWith("#EXTM3U")) {
+            val channel = info.await()?.channel ?: media.channel
+            throw ChannelOfflineException(channel?.name ?: login, channel)
+        }
         val hit = info.await()
         val full = hit?.live?.copy(thumbnailUrl = hit.live.thumbnailUrl ?: media.thumbnailUrl)
             ?: media.copy(channel = hit?.channel ?: media.channel)

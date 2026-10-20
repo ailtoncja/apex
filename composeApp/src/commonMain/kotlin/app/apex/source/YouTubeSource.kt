@@ -108,6 +108,18 @@ enum class PostResult { Posted, Rejected, Unclear }
 /** A conta salva deixou de valer na plataforma (a pessoa precisa entrar de novo). */
 class SessionExpiredException(message: String) : Exception(message)
 
+private const val YT_SESSION_EXPIRED = "Sua sessão do YouTube expirou. Saia da conta e entre de novo."
+
+/** O código do erro quando o YouTube responde `{"error": {"code": 401, …}}` (ele responde assim, com a página "certa", em vez de falhar). */
+internal fun JsonElement?.apiError(): Int? = this["error"]?.let { it["code"].int() ?: 0 }
+
+/** Uma ação na conta deu certo? Resposta sem erro sim; com erro não; 401 (sessão vencida) vira [SessionExpiredException]. */
+internal fun accountActionOk(root: JsonElement?): Boolean {
+    val code = root.apiError() ?: return root != null
+    if (code == 401) throw SessionExpiredException(YT_SESSION_EXPIRED)
+    return false
+}
+
 class YouTubeSource(val tube: InnerTube) : CommentPoster {
     private val gate = Semaphore(6)
 
@@ -341,7 +353,7 @@ class YouTubeSource(val tube: InnerTube) : CommentPoster {
     suspend fun subscribedChannels(): List<Channel> {
         val root = tube.call("browse") { put("browseId", "FEchannels") } ?: return emptyList()
         // Sessão vencida: o YouTube devolve só o cabeçalho, sem conteúdo. Melhor avisar do que importar "0 canais" calado.
-        if (root["contents"] == null) throw SessionExpiredException("Sua sessão do YouTube expirou. Saia da conta e entre de novo.")
+        if (root["contents"] == null) throw SessionExpiredException(YT_SESSION_EXPIRED)
         val first = root.collect("channelRenderer", "gridChannelRenderer").mapNotNull { parseChannelRenderer(it.second) }
         val extra = mutableListOf<Channel>()
         var token = root.continuationToken()
@@ -449,28 +461,48 @@ class YouTubeSource(val tube: InnerTube) : CommentPoster {
         )
     }
 
-    /** Em quais playlists da conta o vídeo já está (para o diálogo "Salvar em…"). */
+    /**
+     * Em quais playlists da conta o vídeo já está (para o diálogo "Salvar em…"). Falha com exceção em vez de devolver lista vazia: vazio
+     * quer dizer "a conta não tem playlists", e o diálogo precisa saber a diferença. Sessão vencida: [SessionExpiredException].
+     */
     suspend fun playlistOptions(videoId: String): List<PlaylistOption> {
-        val root = tube.call("playlist/get_add_to_playlist") { put("videoId", videoId); put("excludeWatchLater", false) } ?: return emptyList()
-        return root.collect("playlistAddToOptionRenderer").mapNotNull { (_, n) ->
-            val id = n["playlistId"].str() ?: return@mapNotNull null
-            val title = n["title"]["simpleText"].str() ?: return@mapNotNull null
-            PlaylistOption(id, title, n["containsSelectedVideos"].str() == "ALL")
+        // O YouTube passou a exigir a lista `videoIds` (como o site manda); com `videoId` sozinho ele responde "argumento inválido" e o
+        // diálogo ficava sem nenhuma playlist da conta, nem a que acabou de ser criada.
+        val root = tube.call("playlist/get_add_to_playlist") {
+            put("videoIds", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(videoId)) })
+            put("excludeWatchLater", false)
+        } ?: error("O YouTube não respondeu")
+        when (val code = root.apiError()) {
+            null -> {}
+            401 -> throw SessionExpiredException(YT_SESSION_EXPIRED)
+            else -> error("O YouTube recusou a lista de playlists ($code)")
         }
+        return parsePlaylistOptions(root)
     }
 
+    internal fun parsePlaylistOptions(root: JsonElement): List<PlaylistOption> =
+        root.collect("playlistAddToOptionRenderer").mapNotNull { (_, n) ->
+            val id = n["playlistId"].str() ?: return@mapNotNull null
+            val title = n["title"]["simpleText"].str() ?: n["title"]["runs"].list().joinToString("") { it["text"].str().orEmpty() }.ifBlank { null }
+                ?: return@mapNotNull null
+            PlaylistOption(id, title, n["containsSelectedVideos"].str() == "ALL")
+        }.distinctBy { it.id }
+
+    /** Põe ou tira o vídeo da playlist da conta. `true` só quando o YouTube confirma (uma resposta de erro não conta como feito). */
     suspend fun editPlaylist(playlistId: String, videoId: String, add: Boolean): Boolean {
         if (!tube.loggedIn) return false
         val action = kotlinx.serialization.json.buildJsonObject {
             if (add) { put("action", "ACTION_ADD_VIDEO"); put("addedVideoId", videoId) }
             else { put("action", "ACTION_REMOVE_VIDEO_BY_VIDEO_ID"); put("removedVideoId", videoId) }
         }
-        return tube.call("browse/edit_playlist") {
+        val root = tube.call("browse/edit_playlist") {
             put("playlistId", playlistId)
             put("actions", kotlinx.serialization.json.buildJsonArray { add(action) })
-        } != null
+        }
+        return accountActionOk(root) && root["status"].str().let { it == null || it == "STATUS_SUCCEEDED" }
     }
 
+    /** Cria uma playlist privada na conta (já com o vídeo, se vier). Devolve o id dela, ou `null` se o YouTube recusou. */
     suspend fun createPlaylist(title: String, videoId: String?): String? {
         if (!tube.loggedIn) return null
         val root = tube.call("playlist/create") {
@@ -478,6 +510,7 @@ class YouTubeSource(val tube: InnerTube) : CommentPoster {
             put("privacyStatus", "PRIVATE")
             if (videoId != null) put("videoIds", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(videoId)) })
         }
+        if (!accountActionOk(root)) return null
         return root["playlistId"].str()
     }
 
@@ -493,16 +526,16 @@ class YouTubeSource(val tube: InnerTube) : CommentPoster {
     suspend fun rate(videoId: String, value: Int): Boolean {
         if (!tube.loggedIn) return false
         val endpoint = when (value) { 1 -> "like/like"; -1 -> "like/dislike"; else -> "like/removelike" }
-        return tube.call(endpoint) { put("target", kotlinx.serialization.json.buildJsonObject { put("videoId", videoId) }) } != null
+        return accountActionOk(tube.call(endpoint) { put("target", kotlinx.serialization.json.buildJsonObject { put("videoId", videoId) }) })
     }
 
     suspend fun setSubscribed(channelId: String, subscribe: Boolean): Boolean {
         if (!tube.loggedIn) return false
         val endpoint = if (subscribe) "subscription/subscribe" else "subscription/unsubscribe"
-        return tube.call(endpoint) {
+        return accountActionOk(tube.call(endpoint) {
             put("channelIds", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(channelId)) })
             if (subscribe) put("params", "EgIIAhgA")
-        } != null
+        })
     }
 
     // ---------- comentar ----------

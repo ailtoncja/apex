@@ -50,11 +50,13 @@ fun BoxScope.MiniPlayer() {
     if (route is Route.Watch || app.ui.miniPlayerHidden) return
 
     val ps by app.player.state.collectAsState()
+    // Com a barra da música de fundo embaixo, a janelinha sobe para não cobrir ela.
+    val backgroundIndex by app.background.index.collectAsState()
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
 
     Column(
-        Modifier.align(Alignment.BottomEnd).padding(20.dp).width(380.dp)
+        Modifier.align(Alignment.BottomEnd).padding(start = 20.dp, top = 20.dp, end = 20.dp, bottom = if (backgroundIndex >= 0) 78.dp else 20.dp).width(380.dp)
             .clip(RoundedCornerShape(14.dp)).background(ApexColors.Surface)
             .border(1.dp, ApexColors.Outline, RoundedCornerShape(14.dp)).hoverable(source),
     ) {
@@ -64,7 +66,7 @@ fun BoxScope.MiniPlayer() {
                 Box(Modifier.matchParent().background(Color(0x66000000)))
                 Row(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
                     IconBtn(Icons.Rounded.Fullscreen, "Abrir", { app.nav.push(Route.Watch) }, size = 34.dp, iconSize = 20.dp, tint = Color.White, hoverColor = Color(0x44FFFFFF))
-                    IconBtn(Icons.Rounded.Close, "Fechar", { app.session.close() }, size = 34.dp, iconSize = 20.dp, tint = Color.White, hoverColor = Color(0x44FFFFFF))
+                    IconBtn(Icons.Rounded.Close, "Fechar", { app.closeCurrent() }, size = 34.dp, iconSize = 20.dp, tint = Color.White, hoverColor = Color(0x44FFFFFF))
                 }
                 IconBtn(
                     if (ps.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Tocar ou pausar",

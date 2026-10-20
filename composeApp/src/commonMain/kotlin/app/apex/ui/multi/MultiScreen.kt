@@ -82,6 +82,7 @@ import app.apex.player.LoadState
 import app.apex.theme.ApexColors
 import app.apex.theme.color
 import app.apex.ui.components.ActionButton
+import app.apex.ui.components.Avatar
 import app.apex.ui.components.ChipBar
 import app.apex.ui.components.EmptyState
 import app.apex.ui.components.IconBtn
@@ -304,7 +305,25 @@ private fun TileView(tile: Tile, audioOn: Boolean, chatOn: Boolean, focused: Boo
         tile.player.Video(Modifier.fillMaxSize())
         when (val l = load) {
             is LoadState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center).size(34.dp), color = ApexColors.Accent, strokeWidth = 3.dp)
-            is LoadState.Error -> Text(l.message, Modifier.align(Alignment.Center).padding(16.dp), color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            // Offline (ou erro): o canal e um "Tentar de novo" para quando a live começar; o ✕ embaixo tira do Multi.
+            is LoadState.Error -> Column(
+                Modifier.align(Alignment.Center).padding(16.dp).testTag("tile-offline-${tile.key}"),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (l.offline) {
+                    val channel = l.channel ?: media.channel
+                    Avatar(channel?.avatarUrl, channel?.name ?: media.id, 44.dp)
+                    Text("Offline", color = Color.White, style = MaterialTheme.typography.titleSmall)
+                } else {
+                    Text(l.message, color = Color.White, style = MaterialTheme.typography.bodyMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
+                Text(
+                    "Tentar de novo",
+                    Modifier.clip(RoundedCornerShape(50)).clickable { multi.retry(tile.key) }.background(Color.White.copy(alpha = 0.12f))
+                        .padding(horizontal = 12.dp, vertical = 5.dp).testTag("tile-retry-${tile.key}"),
+                    color = Color.White, style = MaterialTheme.typography.labelMedium,
+                )
+            }
             else -> {}
         }
         Row(
@@ -314,9 +333,12 @@ private fun TileView(tile: Tile, audioOn: Boolean, chatOn: Boolean, focused: Boo
         ) {
             Box(Modifier.size(9.dp).background(media.platform.color(), CircleShape))
             Text(media.channel?.name ?: media.id, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            media.viewCount?.let { Text("${formatCount(it)} assistindo", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1) }
-            Spacer(Modifier.weight(1f))
-            Text(media.title, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(2f, fill = false))
+            // Espectadores e título só da live que está no ar (os guardados são da última vez e enganam num canal offline).
+            if (load !is LoadState.Error) {
+                media.viewCount?.let { Text("${formatCount(it)} assistindo", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1) }
+                Spacer(Modifier.weight(1f))
+                Text(media.title, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(2f, fill = false))
+            }
         }
         // "AO VIVO" quando a live está em dia; atrasada (pausa, travadas) vira "Voltar ao vivo" e reabre no ponto mais novo.
         if (load is LoadState.Ready && (resolved?.isLive ?: media.isLive)) {

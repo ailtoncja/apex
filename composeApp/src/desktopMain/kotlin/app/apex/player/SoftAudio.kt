@@ -48,6 +48,7 @@ internal class SoftAudio {
         }
         line = l
         running = true
+        if (Timing.enabled) Timing.mark("som: saída $id aberta")
         writer = Thread({ pump(l) }, "apex-audio-$id").apply { isDaemon = true; start() }
         return true
     }

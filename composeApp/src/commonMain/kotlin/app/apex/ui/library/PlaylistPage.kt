@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -138,6 +139,8 @@ private fun PlaylistPageLayout(
                 if (unique.isNotEmpty()) {
                     ActionButton("Reproduzir tudo", { app.openMedia(unique.first(), unique.drop(1)) }, icon = Icons.Rounded.PlayArrow, primary = true)
                     ActionButton("Aleatório", { unique.shuffled().let { app.openMedia(it.first(), it.drop(1)) } }, icon = Icons.Rounded.Shuffle)
+                    // A playlist como música de fundo: toca só o som, enquanto a pessoa assiste a outra coisa.
+                    ActionButton("Ouvir em segundo plano", { app.background.playAll(unique); app.toast("Tocando em segundo plano") }, icon = Icons.Rounded.Headphones)
                 }
                 actions()
             }

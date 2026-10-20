@@ -19,5 +19,5 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: gradle/actions/wrapper-validation@v4
-      - uses: gradle/actions/dependency-submission@v4
+      - uses: gradle/actions/wrapper-validation@v6
+      - uses: gradle/actions/dependency-submission@v6

@@ -2,13 +2,13 @@
 # As imagens base ficam presas pelo digest (a tag "21-jdk"/"21-jre" sozinha pode mudar por baixo sem aviso). O Dependabot (ecossistema
 # "docker") abre um pedido de atualização quando sai uma imagem nova; para atualizar à mão, pegue o "digest" em
 # https://hub.docker.com/v2/repositories/library/eclipse-temurin/tags/21-jre (e 21-jdk).
-FROM eclipse-temurin:21-jdk@sha256:23cc5734ff46e776f51ce66eb9ee08444fd47caabec0a95b7eb6e94be2d3696d AS build
+FROM eclipse-temurin:25-jdk@sha256:2d5d5e9b533342a565907c84f47a2ec298c40cde7b13a3ca85d4950fa456a641 AS build
 WORKDIR /src
 COPY . .
 ENV APEX_SERVER_ONLY=true
 RUN chmod +x gradlew && ./gradlew :server:installDist --no-daemon -x test -Dorg.gradle.jvmargs="-Xmx1g -Dfile.encoding=UTF-8" -Dkotlin.daemon.jvm.options="-Xmx768m"
 
-FROM eclipse-temurin:21-jre@sha256:227118764cccd3c3294617061aaa93a08309c63a395eefa83e6b35032992ea99
+FROM eclipse-temurin:25-jre@sha256:dbb43d81099eec91e0800226ed2296d03146ee7857165b95112372ad0d67e87f
 RUN useradd --system --create-home apex
 COPY --from=build /src/server/build/install/server /app
 USER apex

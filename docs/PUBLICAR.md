@@ -66,10 +66,24 @@ a cada 5 minutos. Se crescer, o plano pago do Render (US$ 7/mês) acaba com isso
   Ele gera os instaladores, o zip, o `SHA256SUMS.txt` **e a assinatura** `SHA256SUMS.txt.sig`. Depois crie a Release com todos eles:
   `gh release create v1.0.2 dist/Apex-1.0.2* dist/SHA256SUMS.txt dist/SHA256SUMS.txt.sig --title "Apex 1.0.2" --notes "..."`.
   Quem já tem o Apex 1.0.1 ou mais novo recebe a atualização sozinho (confere ao abrir e a cada 6 horas). Quem tem a 1.0.0 atualiza uma vez à mão.
-- **A chave que assina as atualizações** fica em `%USERPROFILE%\.apex\signing\apex-update.key` (fora do repositório; o `.gitignore` bloqueia `*.key`).
-  **Faça uma cópia segura dela** (gerenciador de senhas, pen drive): sem ela não dá para publicar atualizações que os apps aceitem (só mandando um instalador novo
-  à mão), e quem a roubar consegue assinar uma atualização falsa. Para trocar a chave: gere outra com `java tools/GenKey.java`, cole a pública em
-  `UpdateKeys.kt` e publique uma versão nova assinada com a **antiga** (que os apps ainda aceitam) contendo a chave nova.
+- **A chave que assina as atualizações** fica em `%USERPROFILE%\.apex\signing\apex-update.key.enc`, **protegida por senha**
+  (PBKDF2-HMAC-SHA256 com 600 mil iterações + AES-256-GCM; fora do repositório, o `.gitignore` bloqueia `*.key` e `*.key.enc`).
+  Sem ela não dá para publicar atualizações que os apps aceitem (só mandando um instalador novo à mão), e quem a roubar consegue assinar uma atualização falsa.
+  - **Migração (uma vez só), se você ainda tem a `apex-update.key` antiga sem senha:** num `cmd` ou PowerShell, na pasta do projeto,
+    `"%USERPROFILE%\.apex\jdk\jdk-21.0.12.1+1\bin\java.exe" tools\ProtegerChave.java` (ou qualquer `java` 21+). Ele pede a senha duas vezes
+    (mínimo 12 caracteres; prefira uma frase longa), grava `apex-update.key.enc`, confere que ele abre e devolve a mesma chave e oferece apagar o arquivo
+    sem senha (digite `APAGAR`). Se preferir apagar depois de testar um `Empacotar.cmd`: `del "%USERPROFILE%\.apex\signing\apex-update.key"`.
+    Apague também cópias antigas da chave sem senha (pen drive, nuvem, backups).
+  - **Cópia de segurança:** guarde o `apex-update.key.enc` fora do PC (pen drive guardado, outro disco) e a **senha separada** dele (gerenciador de senhas).
+    Sem a senha o `.enc` não serve para nada, nem para você.
+  - **Ao empacotar:** o `Empacotar.cmd` compila, para o daemon do Gradle (`gradlew --stop`, para nenhum código do build continuar rodando) e só então o
+    `tools\Sign.java` pede a senha e abre a chave. Para rodar sem ninguém digitando dá para definir `APEX_SIGN_PASSPHRASE`, mas é **menos seguro**
+    (variáveis de ambiente ficam visíveis para outros programas do seu usuário e podem acabar em logs); se usar, defina só naquela janela e feche depois.
+    Se só existir a chave antiga sem senha, o `Sign.java` ainda assina, com um aviso grande.
+  - **Trocar a chave** (se a senha vazar, o PC for comprometido ou de tempos em tempos): gere outra com
+    `java tools\GenKey.java "%USERPROFILE%\.apex\signing\apex-update-nova.key.enc"` (já nasce com senha), cole a pública em `UpdateKeys.kt` e publique uma
+    versão nova assinada com a **antiga** (que os apps ainda aceitam) contendo a chave nova. Depois disso, renomeie a nova para `apex-update.key.enc`
+    (guarde a antiga offline até todo mundo ter atualizado) e refaça a cópia de segurança.
 - O servidor mostra o link da página de Releases na página inicial (mude com `DOWNLOAD_URL` no Render se hospedar em outro lugar).
 - Sem assinatura de código, o Windows (SmartScreen) mostra um aviso na primeira abertura (o `LEIA-ME` e o README explicam o que clicar). A assinatura é paga
   por ano; deixe para quando houver público.

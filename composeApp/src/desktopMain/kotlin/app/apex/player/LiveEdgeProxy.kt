@@ -144,7 +144,10 @@ internal class LiveEdgeProxy(
     @Volatile var estimate: EdgeEstimate? = null
         private set
 
-    val url: String get() = "http://127.0.0.1:${server.localPort}/live.m3u8"
+    /** Caminho com um trecho aleatório: outro programa (ou uma página no navegador) não acha a lista chutando o endereço. */
+    private val path = "/${LocalHttp.newToken()}/live.m3u8"
+
+    val url: String get() = "http://127.0.0.1:${server.localPort}$path"
 
     /** Busca a primeira lista e começa a servir. `false` se [upstreamUrl] não é a lista de uma qualidade (ou não respondeu). */
     suspend fun start(upstreamUrl: String, headers: Map<String, String>): Boolean {
@@ -180,23 +183,21 @@ internal class LiveEdgeProxy(
         runCatching { server.close() }
     }
 
-    private fun accept() {
-        while (!server.isClosed) {
-            val socket = runCatching { server.accept() }.getOrNull() ?: return
-            Thread { serve(socket) }.also { it.isDaemon = true }.start()
-        }
-    }
+    private fun accept() = LocalHttp.acceptLoop(server, "apex-live-edge-conn", MAX_CONNECTIONS, { server.isClosed }) { serve(it) }
 
     private fun serve(socket: Socket) {
         socket.use { s ->
             runCatching {
                 s.soTimeout = 5_000
-                val reader = s.getInputStream().bufferedReader()
-                val request = reader.readLine().orEmpty()
-                while (reader.readLine().orEmpty().isNotEmpty()) { /* cabeçalhos: ignorados */ }
+                val request = LocalHttp.readRequest(s.getInputStream().buffered())
                 val out = s.getOutputStream()
-                if (!request.startsWith("GET /live.m3u8")) {
-                    out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                if (request == null) {
+                    LocalHttp.respondEmpty(s, "400 Bad Request")
+                } else if (!LocalHttp.isLocalHost(request.header("Host"), server.localPort)) {
+                    // Contra "DNS rebinding": uma página que aponta o domínio dela para 127.0.0.1 manda o domínio dela no Host.
+                    LocalHttp.respondEmpty(s, "403 Forbidden")
+                } else if (request.method != "GET" || request.path != path) {
+                    LocalHttp.respondEmpty(s, "404 Not Found")
                 } else {
                     val bytes = body.toByteArray(Charsets.UTF_8)
                     out.write(
@@ -212,5 +213,8 @@ internal class LiveEdgeProxy(
 
     companion object {
         const val POLL_MS = 500L
+
+        /** Conexões atendidas ao mesmo tempo (o VLC pede a lista uma vez por vez). */
+        const val MAX_CONNECTIONS = 8
     }
 }

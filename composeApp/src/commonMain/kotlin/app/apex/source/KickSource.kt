@@ -40,14 +40,17 @@ class KickSource(private val http: HttpClient = Http.client) {
     /** Token de sessão da conta (cookie `session_token`), quando o usuário entrou. */
     var sessionToken: String? = null
 
-    private val headers: Map<String, String>
-        get() = buildMap {
-            put("User-Agent", Http.UA)
-            put("Accept", "application/json")
-            sessionToken?.let { put("Authorization", "Bearer $it") }
-        }
+    /**
+     * Os cabeçalhos de um pedido para [url]. O token da conta só vai para os servidores da própria Kick (kick.com, www e web): as listas
+     * de vídeo dos VODs, clipes e lives apontam para a CDN (IVS/CloudFront), que nunca deve recebê-lo.
+     */
+    internal fun headersFor(url: String): Map<String, String> = buildMap {
+        put("User-Agent", Http.UA)
+        put("Accept", "application/json")
+        if (isKickAuthUrl(url)) sessionToken?.let { put("Authorization", "Bearer $it") }
+    }
 
-    private suspend fun json(url: String): JsonElement? = parseJson(http.getText(url, headers))
+    private suspend fun json(url: String): JsonElement? = parseJson(http.getText(url, headersFor(url)))
 
     private fun slugUrl(slug: String) = "https://kick.com/$slug"
 
@@ -276,7 +279,7 @@ class KickSource(private val http: HttpClient = Http.client) {
         val uuid = media.id.removePrefix(VOD_PREFIX)
         val video = json("https://kick.com/api/v1/video/$uuid") ?: error("A Kick não achou este VOD (apagado ou privado).")
         val source = video["source"].str() ?: error("A Kick não liberou este VOD.")
-        val text = http.getText(source, headers)
+        val text = http.getText(source, headersFor(source))
         if (!text.startsWith("#EXTM3U")) error("A Kick não entregou este VOD.")
         return Resolved(
             media = vodDetailToMedia(video) ?: media, description = null, likes = null, subscribers = null, uploadDate = null,
@@ -347,7 +350,7 @@ class KickSource(private val http: HttpClient = Http.client) {
         val id = media.id.removePrefix(CLIP_PREFIX)
         val clip = json("https://kick.com/api/v2/clips/${id.encodeURLParameter()}")["clip"] ?: error("A Kick não achou este clipe (apagado ou privado).")
         val url = clip["clip_url"].str() ?: clip["video_url"].str() ?: error("A Kick não liberou este clipe.")
-        val text = http.getText(url, headers)
+        val text = http.getText(url, headersFor(url))
         if (!text.startsWith("#EXTM3U")) error("A Kick não entregou este clipe.")
         // O clipe costuma ser uma lista única (uma só qualidade); se vier mestra, usa as qualidades dela.
         val qualities = (if ("#EXT-X-STREAM-INF" in text) parseHlsMaster(url, text).filter { it.height > 0 || it.audioOnly } else emptyList())
@@ -363,7 +366,7 @@ class KickSource(private val http: HttpClient = Http.client) {
         if (media.isClip) return resolveClip(media)
         val info = channel(media.id, withThumbnail = false) ?: error("Canal não encontrado na Kick.")
         val url = info.playbackUrl ?: error("A Kick não liberou o stream.")
-        val text = http.getText(url, headers)
+        val text = http.getText(url, headersFor(url))
         if (!text.startsWith("#EXTM3U")) throw ChannelOfflineException(info.hit.channel.name, info.hit.channel)
         return Resolved(
             media = info.hit.live?.let { it.copy(thumbnailUrl = it.thumbnailUrl ?: media.thumbnailUrl) } ?: media, description = null, likes = null,
@@ -384,8 +387,9 @@ class KickSource(private val http: HttpClient = Http.client) {
     suspend fun sendChat(chatroomId: Long, text: String): String? {
         if (sessionToken == null) return "Entre na conta da Kick (Ajustes) para escrever no chat."
         val body = buildJsonObject { put("content", text); put("type", "message") }.toString()
-        val response = http.post("https://kick.com/api/v2/messages/send/$chatroomId") {
-            this@KickSource.headers.forEach { (k, v) -> header(k, v) }
+        val url = "https://kick.com/api/v2/messages/send/$chatroomId"
+        val response = http.post(url) {
+            headersFor(url).forEach { (k, v) -> header(k, v) }
             contentType(ContentType.Application.Json)
             setBody(body)
         }
@@ -410,15 +414,17 @@ class KickSource(private val http: HttpClient = Http.client) {
     /** Segue ([on] = true) ou deixa de seguir o canal [slug] com a conta logada. `false` se a Kick recusou. */
     suspend fun setFollowed(slug: String, on: Boolean): Boolean {
         if (sessionToken == null) return false
+        // O slug pode vir de inscrições sincronizadas: com "/" ou ".." viraria outro endereço da Kick, pedido com a conta.
+        if (slug.isEmpty() || !slug.all { it.isLetterOrDigit() || it == '_' || it == '-' }) return false
         val url = "https://kick.com/api/v2/channels/$slug/follow"
         val response = if (on) {
             http.post(url) {
-                this@KickSource.headers.forEach { (k, v) -> header(k, v) }
+                headersFor(url).forEach { (k, v) -> header(k, v) }
                 contentType(ContentType.Application.Json)
                 setBody("{}")
             }
         } else {
-            http.delete(url) { this@KickSource.headers.forEach { (k, v) -> header(k, v) } }
+            http.delete(url) { headersFor(url).forEach { (k, v) -> header(k, v) } }
         }
         return response.status.isSuccess()
     }

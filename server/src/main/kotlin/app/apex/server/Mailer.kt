@@ -27,14 +27,28 @@ interface Mailer {
 fun mailerFor(config: ServerConfig): Mailer =
     config.resendApiKey?.let { ResendMailer(it, config.mailFrom) }
         ?: config.mailWebhookUrl?.let { url -> config.mailWebhookSecret?.let { WebhookMailer(url, it) } }
-        ?: LogMailer()
+        ?: LogMailer(production = config.isProduction)
 
-/** Sem provedor de e-mail configurado (desenvolvimento): escreve o e-mail no log para você clicar no link. */
-class LogMailer : Mailer {
+/** Para os logs: `a***@gmail.com` em vez do e-mail inteiro (dado pessoal não vai para o log). */
+fun maskEmail(email: String): String {
+    val at = email.lastIndexOf('@')
+    if (at <= 0) return "***"
+    return email.first() + "***" + email.substring(at)
+}
+
+/**
+ * Sem provedor de e-mail configurado. No desenvolvimento escreve o e-mail no log para você clicar no link. Em [production] não escreve
+ * o texto (os links levam tokens: quem lesse o log trocaria a senha de qualquer pessoa) nem guarda nada na memória; só avisa.
+ */
+class LogMailer(private val production: Boolean = false) : Mailer {
     private val log = LoggerFactory.getLogger("mail")
     val outbox = java.util.concurrent.CopyOnWriteArrayList<Mail>()
 
     override suspend fun send(mail: Mail) {
+        if (production) {
+            log.warn("E-mail NÃO enviado (nenhum provedor configurado) para {} — {}", maskEmail(mail.to), mail.subject)
+            return
+        }
         outbox += mail
         log.info("E-mail para {} — {}\n{}", mail.to, mail.subject, mail.text)
     }
@@ -58,7 +72,7 @@ class ResendMailer(private val apiKey: String, private val from: String) : Maile
             contentType(ContentType.Application.Json)
             setBody(body.toString())
         }
-        if (!response.status.isSuccess()) log.warn("Resend recusou o e-mail para {}: HTTP {}", mail.to, response.status.value)
+        if (!response.status.isSuccess()) log.warn("Resend recusou o e-mail para {}: HTTP {}", maskEmail(mail.to), response.status.value)
     }
 }
 

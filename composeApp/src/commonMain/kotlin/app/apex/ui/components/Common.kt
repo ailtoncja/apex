@@ -72,7 +72,8 @@ import kotlin.math.abs
 @Composable
 fun RemoteImage(url: String?, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
     Box(modifier.background(ApexColors.SurfaceHigh)) {
-        if (!url.isNullOrBlank()) {
+        val url = safeImageUrl(url)
+        if (url != null) {
             val context = coil3.compose.LocalPlatformContext.current
             val request = remember(url, context) { coil3.request.ImageRequest.Builder(context).data(url).size(coil3.size.Size(MAX_IMAGE_PX, MAX_IMAGE_PX)).build() }
             val painter = coil3.compose.rememberAsyncImagePainter(request, contentScale = contentScale, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
@@ -88,12 +89,31 @@ fun RemoteImage(url: String?, modifier: Modifier = Modifier, contentScale: Conte
 /** Imagens maiores que isso (em qualquer lado) são reduzidas ao decodificar; as miniaturas e capas ficam abaixo. */
 private const val MAX_IMAGE_PX = 1600
 
+/**
+ * O endereço de imagem que pode ir para o Coil, ou `null` (fica o fundo/as iniciais no lugar). Miniaturas e avatares vêm das plataformas
+ * (e de quem publica nelas): só passam `https://` e `http://`, além de `data:image/…` (a imagem está no próprio texto). Caminho de arquivo,
+ * `file:`, `jar:` e pasta de rede (`\\servidor\pasta`, que faria o Windows se identificar para aquele servidor) nunca. Endereço sem esquema
+ * (`//i.ytimg.com/…`) vira `https:`.
+ */
+fun safeImageUrl(url: String?): String? {
+    val u = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (u.any { it == '\\' || it.code < 0x20 }) return null
+    if (u.startsWith("//")) return safeImageUrl("https:$u")
+    val lower = u.lowercase()
+    return when {
+        lower.startsWith("https://") || lower.startsWith("http://") ->
+            u.takeIf { lower.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#').isNotEmpty() }
+        lower.startsWith("data:image/") -> u
+        else -> null
+    }
+}
+
 @Composable
 fun Avatar(url: String?, name: String, size: Dp = 36.dp, modifier: Modifier = Modifier, ring: Color? = null) {
     val base = Modifier.size(size).clip(CircleShape)
     val ringed = if (ring != null) modifier.border(2.dp, ring, CircleShape).padding(3.dp) else modifier
     Box(ringed) {
-        if (url.isNullOrBlank()) {
+        if (safeImageUrl(url) == null) {
             val hue = (abs(name.hashCode()) % 360).toFloat()
             Box(
                 base.background(Color.hsv(hue, 0.45f, 0.55f)),

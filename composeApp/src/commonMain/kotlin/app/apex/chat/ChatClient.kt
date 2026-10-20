@@ -12,6 +12,8 @@ import app.apex.source.list
 import app.apex.source.parseJson
 import app.apex.source.path
 import app.apex.source.str
+import app.apex.source.stripLineBreaks
+import app.apex.source.twitchChatLogin
 import io.ktor.client.HttpClient
 import kotlinx.serialization.json.JsonElement
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
@@ -156,21 +158,26 @@ class TwitchChat(
 
     override val canSend: Boolean get() = token() != null && accountLogin() != null
 
+    /** O canal como o IRC aceita; `null` se o login tem algo além de letras minúsculas, números e "_" (viraria outro comando IRC). */
+    private val channel: String? = twitchChatLogin(login)
+
     override suspend fun connect() {
+        val channel = channel ?: throw ChatUnavailable("Canal inválido para o chat da Twitch")
         loadHistory(history)
         http.webSocket("wss://irc-ws.chat.twitch.tv:443") {
             session = this
-            val oauth = token()
-            val nick = accountLogin()
+            val oauth = token()?.takeIf { '\r' !in it && '\n' !in it && ' ' !in it }
+            // O nome da conta só vale se for um login de verdade; senão, entra só para ler.
+            val nick = accountLogin()?.let { twitchChatLogin(it) }
             send(Frame.Text("CAP REQ :twitch.tv/tags twitch.tv/commands"))
             if (oauth != null && nick != null) {
                 send(Frame.Text("PASS oauth:$oauth"))
-                send(Frame.Text("NICK ${nick.lowercase()}"))
+                send(Frame.Text("NICK $nick"))
             } else {
                 send(Frame.Text("PASS SCHMOOPIIE"))
                 send(Frame.Text("NICK justinfan${(10_000..99_999).random()}"))
             }
-            send(Frame.Text("JOIN #${login.lowercase()}"))
+            send(Frame.Text("JOIN #$channel"))
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
                 frame.readText().split("\r\n").filter { it.isNotBlank() }.forEach { handle(it) }
@@ -207,10 +214,14 @@ class TwitchChat(
 
     override suspend fun send(text: String): Boolean {
         val s = session ?: return false
+        val channel = channel ?: return false
         if (!canSend) return false
-        s.send(Frame.Text("PRIVMSG #${login.lowercase()} :$text"))
+        // Uma quebra de linha no texto viraria um segundo comando IRC (com o login da pessoa).
+        val clean = stripLineBreaks(text).trim()
+        if (clean.isEmpty()) return false
+        s.send(Frame.Text("PRIVMSG #$channel :$clean"))
         val me = accountLogin().orEmpty()
-        push(ChatMessage(localId("me"), me, text, colorFromName(me)))
+        push(ChatMessage(localId("me"), me, clean, colorFromName(me)))
         return true
     }
 }

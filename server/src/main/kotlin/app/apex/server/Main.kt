@@ -16,16 +16,27 @@ fun main() {
         exitProcess(1)
     }
 
-    val db = Database.open(config)
+    val db = try {
+        Database.open(config)
+    } catch (e: ConfigException) {
+        System.err.println("Configuração inválida: ${e.message}")
+        exitProcess(1)
+    }
     val mailer = mailerFor(config)
 
     if (config.isProduction && config.contactEmail == null) {
         log.warn("CONTACT_EMAIL não está definido: a Política de Privacidade e os Termos ficam sem e-mail de contato. Defina antes de abrir ao público.")
     }
+    if (config.isProduction && mailer is LogMailer) {
+        log.warn(
+            "**** ATENÇÃO: nenhum provedor de e-mail configurado (RESEND_API_KEY ou MAIL_WEBHOOK_URL + MAIL_WEBHOOK_SECRET). " +
+                "Os e-mails de confirmar conta e redefinir senha NÃO serão enviados, e os links não vão para o log. ****",
+        )
+    }
     if (!config.isProduction) {
         log.warn("Modo desenvolvimento: PostgreSQL embutido em {} e e-mails só no log. Defina DATABASE_URL para usar um banco de verdade.", config.devDataDir)
     }
-    val host = if (config.isProduction) "0.0.0.0" else "127.0.0.1"
+    val host = config.bindHost
     log.info("Apex Server em http://{}:{}", host, config.port)
 
     startServer(config, db, mailer, host, config.port).start(wait = true)

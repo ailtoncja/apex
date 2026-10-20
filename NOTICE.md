@@ -16,7 +16,7 @@ com a sua licença. Nada daqui é incluído sem que a licença permita o uso den
 | Flyway (community) | migrações do banco | Apache-2.0 |
 | HikariCP | conexões com o banco | Apache-2.0 |
 | PostgreSQL JDBC | driver do banco | BSD-2-Clause |
-| Bouncy Castle | Argon2id (senhas) | licença MIT do Bouncy Castle |
+| Bouncy Castle | Argon2id (senhas, no servidor) e OpenPGP (conferir a assinatura do yt-dlp, no app) | licença MIT do Bouncy Castle |
 | Logback / SLF4J | registros (logs) | EPL-1.0 ou LGPL-2.1 / MIT |
 | zonky embedded-postgres | banco embutido só para desenvolvimento e testes | Apache-2.0 (binários: licença do PostgreSQL) |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | baixado pelo app na primeira abertura para resolver streams | Unlicense |

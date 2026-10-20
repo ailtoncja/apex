@@ -21,9 +21,12 @@ import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Parameters
 import io.ktor.http.contentType
+import io.ktor.http.formUrlEncode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
@@ -276,8 +279,83 @@ class ApiTest {
 
         assertEquals(HttpStatusCode.Unauthorized, client.post("/v1/auth/login") { contentType(ContentType.Application.Json); setBody(LoginRequest(email, "senha-forte-123")) }.status)
         assertEquals(HttpStatusCode.Unauthorized, client.post("/v1/auth/refresh") { contentType(ContentType.Application.Json); setBody(RefreshRequest(session.refreshToken)) }.status)
-        // O token de acesso antigo ainda é válido por minutos, mas já não tem dono.
+        // O token de acesso antigo ainda estaria no prazo, mas a sessão dele morreu com a conta.
         assertEquals(HttpStatusCode.Unauthorized, client.sync(session.accessToken, null, SyncChange("history", "k2", item("y"), modifiedAt = 1)).status)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/me") { bearerAuth(session.accessToken) }.status)
+    }
+
+    @Test
+    fun sair_ou_trocar_a_senha_derruba_o_token_de_acesso_na_hora() = run { client ->
+        val email = email()
+        val a = client.register(email)
+        val b = client.post("/v1/auth/login") { contentType(ContentType.Application.Json); setBody(LoginRequest(email, "senha-forte-123", "Outro PC")) }.body<AuthResponse>()
+        assertEquals(HttpStatusCode.OK, client.get("/v1/me") { bearerAuth(a.accessToken) }.status)
+
+        // Sair encerra só a sessão deste aparelho: o token de acesso dela para na hora; o do outro aparelho continua.
+        client.post("/v1/auth/logout") { contentType(ContentType.Application.Json); setBody(RefreshRequest(a.refreshToken)) }
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/me") { bearerAuth(a.accessToken) }.status)
+        assertEquals(HttpStatusCode.OK, client.get("/v1/me") { bearerAuth(b.accessToken) }.status)
+
+        // Renovar troca a sessão: o token novo vale, o antigo não.
+        val renewed = client.post("/v1/auth/refresh") { contentType(ContentType.Application.Json); setBody(RefreshRequest(b.refreshToken)) }.body<AuthResponse>()
+        assertEquals(HttpStatusCode.OK, client.get("/v1/me") { bearerAuth(renewed.accessToken) }.status)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/me") { bearerAuth(b.accessToken) }.status)
+
+        // Trocar a senha pelo link encerra todas as sessões, e com elas os tokens de acesso.
+        client.post("/v1/auth/forgot") { contentType(ContentType.Application.Json); setBody(ForgotRequest(email)) }
+        val token = tokenFrom(waitForMail(email, "Redefinir"))
+        assertEquals(HttpStatusCode.NoContent, client.post("/v1/auth/reset") { contentType(ContentType.Application.Json); setBody(ResetRequest(token, "senha-nova-456")) }.status)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/me") { bearerAuth(renewed.accessToken) }.status)
+    }
+
+    @Test
+    fun token_assinado_sem_sessao_nao_vale() = run { client ->
+        val a = client.register(email())
+        val jwt = JwtService(config.jwtSecret)
+        // Assinatura certa, mas sem sid, ou com o sid de uma sessão que não existe ou de outra pessoa.
+        val semSid = com.auth0.jwt.JWT.create().withIssuer(JwtService.ISSUER).withAudience(JwtService.AUDIENCE).withSubject(a.user.id)
+            .withExpiresAt(java.util.Date(System.currentTimeMillis() + 600_000)).sign(com.auth0.jwt.algorithms.Algorithm.HMAC256(config.jwtSecret))
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/me") { bearerAuth(semSid) }.status)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/me") { bearerAuth(jwt.issue(UUID.fromString(a.user.id), UUID.randomUUID())) }.status)
+        val b = client.register(email())
+        val sidDeB = db.tx { c -> c.queryList("select id from refresh_tokens where user_id = ?", UUID.fromString(b.user.id)) { it.uuid("id") } }.single()
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/me") { bearerAuth(jwt.issue(UUID.fromString(a.user.id), sidDeB)) }.status)
+    }
+
+    @Test
+    fun apagar_conta_pelo_app_passa_pela_barreira_de_tentativas() = run { client ->
+        val email = email()
+        val session = client.register(email)
+        suspend fun delete(password: String) =
+            client.delete("/v1/me") { bearerAuth(session.accessToken); contentType(ContentType.Application.Json); setBody(DeleteAccountRequest(password)) }.status
+        // Do mesmo IP, poucas tentativas erradas e a barreira fecha (até para a senha certa).
+        repeat(6) { assertEquals(HttpStatusCode.Forbidden, delete("errada-$it-123")) }
+        assertEquals(HttpStatusCode.TooManyRequests, delete("senha-forte-123"))
+        // Os erros contam também para o login do mesmo e-mail.
+        val login = client.post("/v1/auth/login") { contentType(ContentType.Application.Json); setBody(LoginRequest(email, "senha-forte-123")) }
+        assertEquals(HttpStatusCode.TooManyRequests, login.status)
+    }
+
+    @Test
+    fun redefinir_pela_pagina_confere_o_link_antes_da_senha() = run { client ->
+        val email = email()
+        client.register(email, "senha-antiga-123")
+        suspend fun form(token: String, password: String) = client.post("/reset") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(Parameters.build { append("token", token); append("password", password) }.formUrlEncode())
+        }
+        // Link inventado: recusado sem trocar nada.
+        val fake = form("link-inventado", "senha-nova-456")
+        assertEquals(HttpStatusCode.OK, fake.status)
+        assertTrue(fake.bodyAsText().contains("venceu ou já foi usado"))
+
+        client.post("/v1/auth/forgot") { contentType(ContentType.Application.Json); setBody(ForgotRequest(email)) }
+        val token = tokenFrom(waitForMail(email, "Redefinir"))
+        // Senha fraca não gasta o link.
+        assertTrue(form(token, "curta").bodyAsText().contains("pelo menos 8"))
+        assertTrue(form(token, "senha-nova-456").bodyAsText().contains("Senha alterada"))
+        assertTrue(form(token, "senha-outra-789").bodyAsText().contains("venceu ou já foi usado"))
+        assertEquals(HttpStatusCode.OK, client.post("/v1/auth/login") { contentType(ContentType.Application.Json); setBody(LoginRequest(email, "senha-nova-456")) }.status)
     }
 
     @Test
@@ -303,21 +381,42 @@ class ApiTest {
 
     @Test
     fun endereco_do_banco() {
+        val tls = "sslmode=verify-full&sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory"
         val neon = ServerConfig.parseDatabaseUrl("postgresql://joao:p%40ss@ep-abc.us-east-2.aws.neon.tech/neondb?sslmode=require")
-        assertEquals("jdbc:postgresql://ep-abc.us-east-2.aws.neon.tech/neondb?sslmode=require", neon.jdbcUrl)
+        // O sslmode=require do Neon não confere o certificado: vira verify-full, com os certificados confiáveis do Java.
+        assertEquals("jdbc:postgresql://ep-abc.us-east-2.aws.neon.tech/neondb?$tls", neon.jdbcUrl)
         assertEquals("joao", neon.user)
         assertEquals("p@ss", neon.password)
-        // O endereço que o painel do Neon entrega hoje, com channel_binding.
+        // O endereço que o painel do Neon entrega hoje, com channel_binding: vira o channelBinding do driver do Java.
         val withBinding = ServerConfig.parseDatabaseUrl("postgresql://neondb_owner:abc@ep-x.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
-        assertEquals("jdbc:postgresql://ep-x.sa-east-1.aws.neon.tech/neondb?sslmode=require", withBinding.jdbcUrl)
-        val onlyBinding = ServerConfig.parseDatabaseUrl("postgresql://u:p@h/db?channel_binding=require")
-        // Banco fora da própria máquina: sem sslmode na string, a conexão passa a ser criptografada por padrão.
-        assertEquals("jdbc:postgresql://h/db?sslmode=require", onlyBinding.jdbcUrl)
-        assertEquals("jdbc:postgresql://h/db?sslmode=require", ServerConfig.parseDatabaseUrl("postgres://u:p@h/db").jdbcUrl)
-        assertEquals("jdbc:postgresql://h/db?sslmode=verify-full", ServerConfig.parseDatabaseUrl("postgres://u:p@h/db?sslmode=verify-full").jdbcUrl)
+        assertEquals("jdbc:postgresql://ep-x.sa-east-1.aws.neon.tech/neondb?$tls&channelBinding=require", withBinding.jdbcUrl)
+        // Banco fora da própria máquina: sem sslmode na string, a conexão é criptografada e conferida do mesmo jeito.
+        assertEquals("jdbc:postgresql://h/db?$tls&channelBinding=require", ServerConfig.parseDatabaseUrl("postgresql://u:p@h/db?channel_binding=require").jdbcUrl)
+        assertEquals("jdbc:postgresql://h/db?$tls", ServerConfig.parseDatabaseUrl("postgres://u:p@h/db").jdbcUrl)
+        assertEquals("jdbc:postgresql://h/db?$tls", ServerConfig.parseDatabaseUrl("postgres://u:p@h/db?sslmode=verify-full").jdbcUrl)
+        // Nem a própria string rebaixa a segurança de um banco remoto; channel_binding=prefer é o padrão do driver e sai.
+        assertEquals("jdbc:postgresql://h/db?$tls", ServerConfig.parseDatabaseUrl("postgres://u:p@h/db?sslmode=disable&ssl=false&channel_binding=prefer").jdbcUrl)
+        // Outros parâmetros passam.
+        assertEquals(
+            "jdbc:postgresql://h:5433/db?options=endpoint%3Dep-x&$tls",
+            ServerConfig.parseDatabaseUrl("postgres://u:p@h:5433/db?sslmode=require&options=endpoint%3Dep-x").jdbcUrl,
+        )
+        // No próprio computador (desenvolvimento, sem TLS) nada é imposto; channel_binding sem TLS não tem como valer e sai.
         val local = ServerConfig.parseDatabaseUrl("postgres://u:p@localhost:5432/apex")
         assertEquals("jdbc:postgresql://localhost:5432/apex", local.jdbcUrl)
         assertNotNull(local.user)
+        assertEquals(
+            "jdbc:postgresql://127.0.0.1:5432/apex?sslmode=disable",
+            ServerConfig.parseDatabaseUrl("postgres://u:p@127.0.0.1:5432/apex?sslmode=disable&channel_binding=require").jdbcUrl,
+        )
+        // jdbc:… passa sem mudança.
+        assertEquals("jdbc:postgresql://h/db?sslmode=verify-ca", ServerConfig.parseDatabaseUrl("jdbc:postgresql://h/db?sslmode=verify-ca").jdbcUrl)
+
+        // O driver do Java entende os nomes que geramos (channelBinding existe desde o pgjdbc 42.7.7).
+        val props = org.postgresql.Driver.parseURL(withBinding.jdbcUrl, java.util.Properties())!!
+        assertEquals("verify-full", props.getProperty(org.postgresql.PGProperty.SSL_MODE.getName()))
+        assertEquals("org.postgresql.ssl.DefaultJavaSSLFactory", props.getProperty(org.postgresql.PGProperty.SSL_FACTORY.getName()))
+        assertEquals("require", props.getProperty(org.postgresql.PGProperty.CHANNEL_BINDING.getName()))
     }
 }
 
@@ -331,6 +430,15 @@ class ConfigTest {
         assertEquals("segredo com aspas", env["JWT_SECRET"])
         assertEquals("9000", env["PORT"])
         assertEquals(3, env.size)
+    }
+
+    @Test
+    fun por_padrao_escuta_so_neste_computador() {
+        assertEquals("127.0.0.1", ServerConfig.fromEnv(emptyMap()).bindHost)
+        // Nem em produção o padrão muda: quem abre para fora é o container (BIND_HOST=0.0.0.0 no Dockerfile).
+        assertEquals("127.0.0.1", ServerConfig.fromEnv(mapOf("DATABASE_URL" to "postgres://u:p@h/db", "JWT_SECRET" to "x".repeat(40))).bindHost)
+        assertEquals("0.0.0.0", ServerConfig.fromEnv(mapOf("BIND_HOST" to " 0.0.0.0 ")).bindHost)
+        assertEquals("127.0.0.1", ServerConfig.fromEnv(mapOf("BIND_HOST" to "  ")).bindHost)
     }
 
     @Test

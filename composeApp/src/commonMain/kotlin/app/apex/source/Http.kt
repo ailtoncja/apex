@@ -23,6 +23,10 @@ object Http {
             }
             install(WebSockets)
             expectSuccess = false
+            // Seguir redirecionamentos não vaza login: o HttpRedirect do Ktor (3.x, conferido no 3.6.0) tira o cabeçalho Authorization
+            // quando o redirecionamento vai para outro host/porta ("Removing Authorization header for cross-authority redirect") e não
+            // segue de https para http. Atenção: os outros cabeçalhos (como Cookie) seguem junto; por isso a Kick só põe o token em pedidos
+            // para os hosts dela (ver KickSource.headersFor).
             followRedirects = true
         }
     }

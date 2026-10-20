@@ -5,7 +5,9 @@ rem   Apex-X.Y.Z.msi / Apex-X.Y.Z.exe   instaladores (atalho no menu Iniciar e n
 rem   SHA256SUMS.txt e SHA256SUMS.txt.sig   hashes dos arquivos e a assinatura deles (o app so instala atualizacoes com a assinatura certa)
 rem A versao e a do app: appVersion em composeApp\build.gradle.kts.
 rem Precisa de um JDK 21 COMPLETO (com jpackage), como o Temurin 21: procura em %APEX_PACKAGE_JDK% e em %USERPROFILE%\.apex\jdk\jdk-21*.
-rem Para assinar: a chave privada em %APEX_SIGNING_KEY% ou %USERPROFILE%\.apex\signing\apex-update.key (gerada com tools\GenKey.java; NUNCA vai para o GitHub).
+rem Para assinar: a chave privada em %APEX_SIGNING_KEY% ou %USERPROFILE%\.apex\signing\apex-update.key.enc (protegida por senha; gerada com
+rem tools\GenKey.java ou convertida da antiga apex-update.key com tools\ProtegerChave.java; NUNCA vai para o GitHub). A senha e pedida no fim,
+rem depois que o Gradle parou; APEX_SIGN_PASSPHRASE evita a pergunta, mas e menos seguro (veja docs\PUBLICAR.md).
 rem Para os instaladores, o WiX Toolset 3.x (candle.exe): procura no PATH e em %APEX_WIX% ou %USERPROFILE%\.apex\wix.
 setlocal
 cd /d "%~dp0"
@@ -15,8 +17,10 @@ if not defined JDK for /d %%D in ("%USERPROFILE%\.apex\jdk\jdk-21*") do set "JDK
 if not defined JDK goto semjdk
 if not exist "%JDK%\bin\jpackage.exe" goto semjdk
 
+rem Prefere a chave protegida por senha (.enc); a sem senha so e usada (com aviso) se ainda nao foi convertida.
+if not defined APEX_SIGNING_KEY if exist "%USERPROFILE%\.apex\signing\apex-update.key.enc" set "APEX_SIGNING_KEY=%USERPROFILE%\.apex\signing\apex-update.key.enc"
 if not defined APEX_SIGNING_KEY set "APEX_SIGNING_KEY=%USERPROFILE%\.apex\signing\apex-update.key"
-if not exist "%APEX_SIGNING_KEY%" goto semchave
+if not exist "%APEX_SIGNING_KEY%" if not exist "%APEX_SIGNING_KEY%.enc" goto semchave
 
 set "OUT=%~dp0dist"
 set "STAGE=%OUT%\stage"
@@ -37,8 +41,15 @@ set "TASKS=:composeApp:createDistributable"
 if defined WIX_OK set "TASKS=%TASKS% :composeApp:packageMsi :composeApp:packageExe"
 if not defined WIX_OK echo Aviso: WiX nao encontrado, so o zip sera gerado (instaladores .msi/.exe precisam do WiX 3.x).
 
-call "%~dp0gradlew.bat" %TASKS% "-Papex.jdk=%JDK%" --console=plain
-if errorlevel 1 exit /b 1
+rem Compila o Kotlin dentro do daemon do Gradle (sem o daemon separado do Kotlin), para que o --stop abaixo encerre todo o codigo do build.
+call "%~dp0gradlew.bat" %TASKS% "-Papex.jdk=%JDK%" -Pkotlin.compiler.execution.strategy=in-process --console=plain
+if errorlevel 1 (
+  call "%~dp0gradlew.bat" --stop >nul 2>nul
+  exit /b 1
+)
+rem Para o daemon do Gradle ANTES de abrir a chave: nenhum codigo do build (plugins, dependencias) continua rodando enquanto ela esta na memoria.
+call "%~dp0gradlew.bat" --stop
+if errorlevel 1 ( echo Nao consegui parar o daemon do Gradle; a chave nao foi aberta. & exit /b 1 )
 
 rem A versao vem do app (appVersion em composeApp\build.gradle.kts, gerada em BuildInfo.kt).
 set "INFO=%~dp0composeApp\build\generated\buildinfo\app\apex\BuildInfo.kt"
@@ -72,7 +83,9 @@ if defined WIX_OK (
 rem Hashes SHA-256 de tudo que foi gerado.
 powershell -NoProfile -Command "Get-ChildItem '%OUT%' -File | Where-Object { $_.Name -like 'Apex-*' } | ForEach-Object { '{0} *{1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content -Encoding ASCII '%OUT%\SHA256SUMS.txt'"
 
-rem Assina a lista de hashes (o app confere esta assinatura antes de instalar qualquer atualizacao).
+rem Assina a lista de hashes (o app confere esta assinatura antes de instalar qualquer atualizacao). Pede a senha da chave.
+rem Sem JAVA_TOOL_OPTIONS aqui: nada de opcoes extras injetadas no Java que abre a chave.
+set "JAVA_TOOL_OPTIONS="
 "%JDK%\bin\java.exe" "%~dp0tools\Sign.java" "%APEX_SIGNING_KEY%" "%OUT%\SHA256SUMS.txt"
 if errorlevel 1 exit /b 1
 echo.
@@ -88,6 +101,6 @@ exit /b 1
 
 :semchave
 echo Nao encontrei a chave que assina as atualizacoes: %APEX_SIGNING_KEY%
-echo Gere uma com:  java tools\GenKey.java "%USERPROFILE%\.apex\signing\apex-update.key"  e cole a chave publica em UpdateKeys.kt.
+echo Gere uma com:  java tools\GenKey.java "%USERPROFILE%\.apex\signing\apex-update.key.enc"  e cole a chave publica em UpdateKeys.kt.
 echo (Sem a assinatura nenhum app instalado aceita a atualizacao.)
 exit /b 1

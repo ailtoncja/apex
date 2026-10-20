@@ -146,7 +146,11 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
         jwt("auth-jwt") {
             realm = "apex"
             verifier(jwt.verifier)
-            validate { credential -> if (credential.payload.subject != null) JWTPrincipal(credential.payload) else null }
+            // Além da assinatura e da validade, a sessão que gerou o token precisa continuar aberta (busca pela chave primária).
+            validate { credential ->
+                val payload = credential.payload
+                if (auth.sessionActive(payload.subject, payload.getClaim(JwtService.SESSION_CLAIM).asString())) JWTPrincipal(payload) else null
+            }
             challenge { _, _ ->
                 call.respond(HttpStatusCode.Unauthorized, ErrorResponse(ErrorBody("unauthorized", "Entre de novo.")))
             }
@@ -203,9 +207,12 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
                     call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=\"apex-meus-dados.json\"")
                     call.respond(sync.export(call.userId()))
                 }
-                delete("/me") {
-                    auth.deleteAccount(call.userId(), call.receive<DeleteAccountRequest>())
-                    call.respond(HttpStatusCode.NoContent)
+                // Confere a senha: mesmo limite por IP do login e mesma barreira de tentativas por e-mail.
+                rateLimit(AUTH_LIMIT) {
+                    delete("/me") {
+                        auth.deleteAccount(call.userId(), call.receive<DeleteAccountRequest>(), call.clientIp(config))
+                        call.respond(HttpStatusCode.NoContent)
+                    }
                 }
                 rateLimit(SYNC_LIMIT) {
                     post("/sync") { call.respond(sync.sync(call.userId(), call.receive<SyncRequest>())) }
@@ -227,20 +234,20 @@ fun Application.apexModule(config: ServerConfig, db: Database, mailer: Mailer, s
         get("/reset") {
             call.respondText(pages.resetForm(call.request.queryParameters["token"].orEmpty()), ContentType.Text.Html)
         }
-        post("/reset") {
-            val form = call.receiveParameters()
-            val token = form["token"].orEmpty()
-            val password = form["password"].orEmpty()
-            val page = try {
-                auth.reset(token, password)
-                pages.message("Senha alterada", "Agora é só entrar no Apex com a nova senha.")
-            } catch (e: ApiException) {
-                pages.resetForm(token, e.message)
-            }
-            call.respondText(page, ContentType.Text.Html)
-        }
         get("/account/delete") { call.respondText(pages.deleteForm(), ContentType.Text.Html) }
         rateLimit(AUTH_LIMIT) {
+            post("/reset") {
+                val form = call.receiveParameters()
+                val token = form["token"].orEmpty()
+                val password = form["password"].orEmpty()
+                val page = try {
+                    auth.reset(token, password)
+                    pages.message("Senha alterada", "Agora é só entrar no Apex com a nova senha.")
+                } catch (e: ApiException) {
+                    pages.resetForm(token, e.message)
+                }
+                call.respondText(page, ContentType.Text.Html)
+            }
             post("/account/delete") {
                 val form = call.receiveParameters()
                 val page = try {

@@ -5,6 +5,7 @@ import app.apex.shared.DeleteAccountRequest
 import app.apex.shared.ExportDto
 import app.apex.shared.LoginRequest
 import app.apex.shared.RegisterRequest
+import app.apex.shared.SessionDto
 import app.apex.shared.SyncChange
 import app.apex.shared.SyncCollections
 import app.apex.shared.SyncItem
@@ -30,16 +31,30 @@ class ApiException(val status: HttpStatusCode, val code: String, message: String
 private fun fail(status: HttpStatusCode, code: String, message: String): Nothing = throw ApiException(status, code, message)
 
 /** Barra quem erra a senha muitas vezes seguidas para o mesmo e-mail. (Memória local: com várias instâncias, use um cache compartilhado.) */
-class LoginThrottle(private val maxFailures: Int = 8, private val windowMs: Long = 15 * 60_000L) {
+class LoginThrottle(
+    private val maxFailures: Int = 8,
+    private val windowMs: Long = 15 * 60_000L,
+    private val maxEntries: Int = MAX_ENTRIES,
+) {
     private class Entry(var count: Int, val start: Long)
 
     private val entries = ConcurrentHashMap<String, Entry>()
 
-    /** Sem isto, quem testa milhões de e-mails diferentes encheria a memória. */
+    /**
+     * Sem isto, quem testa milhões de e-mails diferentes encheria a memória. Primeiro saem as entradas vencidas; se ainda faltar espaço,
+     * saem as mais antigas que ainda não travaram nada, até sobrar 1/4 de folga. Uma trava ativa nunca é apagada antes da hora (senão,
+     * encher o mapa de chaves novas destravaria a conta atacada); travas custam [maxFailures] senhas erradas cada, passam pelo limite
+     * por IP e somem sozinhas quando a janela passa.
+     */
     private fun purge(now: Long) {
-        if (entries.size < MAX_ENTRIES) return
+        if (entries.size < maxEntries) return
         entries.entries.removeIf { now - it.value.start > windowMs }
-        if (entries.size >= MAX_ENTRIES) entries.clear()
+        if (entries.size < maxEntries) return
+        val excess = entries.size - maxEntries * 3 / 4
+        entries.entries.filter { it.value.count < maxFailures }
+            .sortedBy { it.value.start }
+            .take(excess)
+            .forEach { entries.remove(it.key, it.value) }
     }
 
     fun check(key: String) {
@@ -100,8 +115,18 @@ class AuthService(
     private fun UserRow.dto() = UserDto(id.toString(), email, displayName, avatarUrl, emailVerified)
 
     private suspend fun session(user: UserRow, device: String?): AuthResponse {
-        val refresh = db.query { TokenRepo.issue(it, user.id, device?.filterNot { c -> c.isISOControl() }) }
-        return AuthResponse(jwt.issue(user.id), refresh, JwtService.ACCESS_TTL_SEC, user.dto())
+        val session = db.query { TokenRepo.issue(it, user.id, device?.filterNot { c -> c.isISOControl() }) }
+        return AuthResponse(jwt.issue(user.id, session.id), session.token, JwtService.ACCESS_TTL_SEC, user.dto())
+    }
+
+    /**
+     * Confere, a cada pedido autenticado, se a sessão do token de acesso continua aberta. Assim sair, trocar a senha ou apagar a conta
+     * derruba na hora os tokens de acesso já emitidos (que de outro modo valeriam até 15 minutos). Token sem `sid` não vale.
+     */
+    suspend fun sessionActive(userId: String?, sessionId: String?): Boolean {
+        val user = userId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return false
+        val sid = sessionId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return false
+        return db.query { TokenRepo.isActive(it, sid, user) }
     }
 
     /**
@@ -110,7 +135,7 @@ class AuthService(
      */
     private suspend fun sendMail(mail: Mail) {
         val sent = withTimeoutOrNull(10_000) { runCatching { mailer.send(mail) }.onFailure { log.warn("Falha ao enviar e-mail: {}", it.message) } }
-        if (sent == null) log.warn("O envio de e-mail para {} demorou demais e foi abandonado.", mail.to)
+        if (sent == null) log.warn("O envio de e-mail para {} demorou demais e foi abandonado.", maskEmail(mail.to))
     }
 
     suspend fun register(req: RegisterRequest, device: String?): AuthResponse {
@@ -140,19 +165,33 @@ class AuthService(
             fail(HttpStatusCode.Unauthorized, "invalid_credentials", "E-mail ou senha incorretos.")
         }
         val email = rawEmail.trim().lowercase()
-        val ipKey = "$ip|$email"
-        throttleByIp.check(ipKey)
-        throttleByEmail.check(email)
+        checkThrottle(email, ip)
         val user = db.query { UserRepo.findByEmail(it, email) }
-        val ok = withContext(Dispatchers.Default) { Passwords.verify(password, user?.passwordHash) }
-        if (user == null || !ok) {
-            throttleByIp.failure(ipKey)
-            throttleByEmail.failure(email)
+        if (!verifyThrottled(email, ip, password, user?.passwordHash) || user == null) {
             fail(HttpStatusCode.Unauthorized, "invalid_credentials", "E-mail ou senha incorretos.")
         }
-        throttleByIp.success(ipKey)
-        throttleByEmail.success(email)
         return user
+    }
+
+    /** Barra (429) quem já errou demais a senha deste e-mail, deste IP ou no total. */
+    private fun checkThrottle(email: String, ip: String) {
+        throttleByIp.check("$ip|$email")
+        throttleByEmail.check(email)
+    }
+
+    /** Confere a senha passando pelas duas barreiras de tentativas: cada erro conta contra o IP e contra o e-mail. */
+    private suspend fun verifyThrottled(email: String, ip: String, password: String, storedHash: String?): Boolean {
+        val ipKey = "$ip|$email"
+        checkThrottle(email, ip)
+        val ok = withContext(Dispatchers.Default) { Passwords.verify(password, storedHash) }
+        if (ok) {
+            throttleByIp.success(ipKey)
+            throttleByEmail.success(email)
+        } else {
+            throttleByIp.failure(ipKey)
+            throttleByEmail.failure(email)
+        }
+        return ok
     }
 
     suspend fun login(req: LoginRequest, ip: String): AuthResponse = session(authenticate(req.email, req.password, ip), req.device)
@@ -165,7 +204,7 @@ class AuthService(
             is RotateResult.Ok -> {
                 val user = db.query { UserRepo.findById(it, result.userId) }
                     ?: fail(HttpStatusCode.Unauthorized, "invalid_refresh", "Sessão expirada. Entre de novo.")
-                AuthResponse(jwt.issue(user.id), result.newToken, JwtService.ACCESS_TTL_SEC, user.dto())
+                AuthResponse(jwt.issue(user.id, result.session.id), result.session.token, JwtService.ACCESS_TTL_SEC, user.dto())
             }
         }
     }
@@ -187,15 +226,20 @@ class AuthService(
     }
 
     suspend fun reset(token: String, newPassword: String) {
+        fun invalid(): Nothing = fail(HttpStatusCode.BadRequest, "invalid_token", "Este link venceu ou já foi usado. Peça um novo.")
         checkPassword(newPassword)
+        // O link é conferido antes do Argon2 (caro de propósito): link inválido ou inventado não gasta processador do servidor.
+        if (token.isEmpty() || token.length > 128 || !db.query { TokenRepo.isEmailTokenValid(it, token, "reset") }) invalid()
         val hash = hash(newPassword)
+        // Gastar o link, trocar a senha e encerrar as sessões acontecem juntos (na mesma transação); se dois pedidos chegarem ao
+        // mesmo tempo com o mesmo link, só um consegue gastá-lo.
         val ok = db.query { c ->
             val userId = TokenRepo.consumeEmailToken(c, token, "reset") ?: return@query false
             UserRepo.updatePassword(c, userId, hash)
             TokenRepo.revokeAll(c, userId)
             true
         }
-        if (!ok) fail(HttpStatusCode.BadRequest, "invalid_token", "Este link venceu ou já foi usado. Peça um novo.")
+        if (!ok) invalid()
     }
 
     suspend fun verifyEmail(token: String) {
@@ -214,10 +258,11 @@ class AuthService(
         log.info("Conta apagada pelo site.")
     }
 
-    suspend fun deleteAccount(userId: UUID, req: DeleteAccountRequest) {
+    /** Apagar a conta pelo app. A senha passa pelas mesmas barreiras de tentativas do login (por IP e por e-mail). */
+    suspend fun deleteAccount(userId: UUID, req: DeleteAccountRequest, ip: String) {
         val user = db.query { UserRepo.findById(it, userId) } ?: fail(HttpStatusCode.Unauthorized, "unknown_user", "Conta não encontrada.")
-        val ok = withContext(Dispatchers.Default) { Passwords.verify(req.password, user.passwordHash) }
-        if (!ok) fail(HttpStatusCode.Forbidden, "wrong_password", "Senha incorreta.")
+        // 403 (e não 401): o app trata 401 como "sessão vencida" e renovaria a sessão à toa.
+        if (!verifyThrottled(user.email.lowercase(), ip, req.password, user.passwordHash)) fail(HttpStatusCode.Forbidden, "wrong_password", "Senha incorreta.")
         db.query { UserRepo.delete(it, userId) }
     }
 }
@@ -289,6 +334,9 @@ class SyncService(
             activeSessions = TokenRepo.activeSessions(c, userId),
             items = items.map {
                 SyncItem(it.collection, it.key, it.data?.let { text -> json.parseToJsonElement(text) }, it.deleted, it.modifiedAt, it.updatedAt.toString())
+            },
+            sessions = TokenRepo.sessions(c, userId).map {
+                SessionDto(it.device, it.createdAt.toString(), it.expiresAt.toString(), it.revokedAt?.toString())
             },
         )
     }

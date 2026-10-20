@@ -178,7 +178,33 @@ class PublicReleaseTest {
         assertEquals(Legal.VERSION, export.termsVersion)
         assertNotNull(export.termsAcceptedAt)
         assertEquals(1, export.activeSessions)
+        assertEquals(1, export.sessions.size)
         assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/me/export").status)
+    }
+
+    @Test
+    fun baixar_meus_dados_lista_as_sessoes_sem_os_tokens() = run { client ->
+        val email = email()
+        val first = client.signUp(email)
+        val second = client.post("/v1/auth/login") { contentType(ContentType.Application.Json); setBody(LoginRequest(email, "senha-forte-123", "Notebook da sala")) }.body<AuthResponse>()
+        // Sair do primeiro aparelho: a sessão continua na lista (até a limpeza), marcada como encerrada.
+        client.post("/v1/auth/logout") { contentType(ContentType.Application.Json); setBody(app.apex.shared.RefreshRequest(first.refreshToken)) }
+
+        val response = client.get("/v1/me/export") { bearerAuth(second.accessToken) }
+        assertEquals(HttpStatusCode.OK, response.status)
+        val text = response.bodyAsText()
+        val export = response.body<ExportDto>()
+        assertEquals(1, export.activeSessions)
+        assertEquals(2, export.sessions.size)
+        // A mais nova primeiro.
+        val notebook = export.sessions.first()
+        assertEquals("Notebook da sala", notebook.device)
+        assertEquals(null, notebook.revokedAt)
+        assertTrue(java.time.Instant.parse(notebook.expiresAt).isAfter(java.time.Instant.parse(notebook.createdAt)))
+        assertNotNull(export.sessions.last().revokedAt)
+        // Nem o token nem o hash dele saem do servidor.
+        assertFalse(text.contains(second.refreshToken) || text.contains(first.refreshToken))
+        assertFalse(text.contains(Tokens.sha256(second.refreshToken)) || text.contains("token_hash") || text.contains("tokenHash"))
     }
 
     @Test

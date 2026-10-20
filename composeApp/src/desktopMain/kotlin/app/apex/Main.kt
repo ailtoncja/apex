@@ -2,8 +2,14 @@ package app.apex
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxSize
@@ -100,7 +106,7 @@ private fun StartupProblem(error: Throwable) {
             if (vlc) {
                 Spacer(Modifier.height(20.dp))
                 Button(
-                    onClick = { runCatching { Desktop.getDesktop().browse(URI("https://www.videolan.org/vlc/")) } },
+                    onClick = { runCatching { Desktop.getDesktop().browse(URI(VLC_DOWNLOAD_URL)) } },
                     colors = ButtonDefaults.buttonColors(containerColor = ApexColors.Accent, contentColor = ApexColors.OnAccent),
                 ) { Text("Baixar o VLC") }
             }
@@ -109,6 +115,29 @@ private fun StartupProblem(error: Throwable) {
         }
     }
 }
+
+/** Aviso (sem bloquear o app) de que o VLC instalado é anterior ao [VLC_MIN_SAFE_VERSION]; o link é o mesmo do "O Apex precisa do VLC". */
+@Composable
+private fun VlcOutdatedBanner(version: String, modifier: Modifier, onDismiss: () -> Unit) {
+    ApexTheme {
+        Row(
+            modifier.padding(24.dp).widthIn(max = 720.dp).background(ApexColors.SurfaceHigh, RoundedCornerShape(12.dp)).padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Seu VLC ($version) está desatualizado e tem falhas de segurança conhecidas. Atualize para a versão mais nova.",
+                color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = { runCatching { Desktop.getDesktop().browse(URI(VLC_DOWNLOAD_URL)) } },
+                colors = ButtonDefaults.buttonColors(containerColor = ApexColors.Accent, contentColor = ApexColors.OnAccent),
+            ) { Text("Baixar o VLC") }
+            TextButton(onClick = onDismiss) { Text("Agora não", color = ApexColors.Muted) }
+        }
+    }
+}
+
+private const val VLC_DOWNLOAD_URL = "https://www.videolan.org/vlc/"
 
 /**
  * `APEX_SELFTEST=1`: confere, sem abrir janela, o que o app empacotado precisa para funcionar (pasta temporária, rede e o VLC)
@@ -136,7 +165,7 @@ private fun selfTest(updateRehearsal: Boolean = false): Nothing {
             "HTTP ${status.status.value}"
         }
     }
-    step("vlc") { VlcPlayerController(hardwareDecode = false).also { it.release() }.let { "libVLC carregou" } }
+    step("vlc") { VlcPlayerController(hardwareDecode = false).also { it.release() }.let { "libVLC carregou (${loadedVlcVersion()})" } }
     if (updateRehearsal) {
         // Ensaio da atualização de ponta a ponta: confere, baixa, verifica a assinatura e reinicia como o app faria.
         val updater = DesktopUpdater(
@@ -178,7 +207,7 @@ fun main(args: Array<String>) {
     // As listas mandam baixar as imagens antes de aparecerem (vão para o cache em disco, que as telas usam depois).
     app.apex.util.ImagePrefetch.enqueue = { urls ->
         val loader = coil3.SingletonImageLoader.get(coil3.PlatformContext.INSTANCE)
-        urls.forEach { url ->
+        urls.mapNotNull { app.apex.ui.components.safeImageUrl(it) }.forEach { url ->
             loader.enqueue(
                 coil3.request.ImageRequest.Builder(coil3.PlatformContext.INSTANCE).data(url)
                     .memoryCachePolicy(coil3.request.CachePolicy.DISABLED).size(coil3.size.Size(480, 270)).build(),
@@ -213,7 +242,11 @@ private fun runApp() = application {
         val downloads = Dispatchers.IO.limitedParallelism(24)
         ImageLoader.Builder(context)
             .fetcherCoroutineContext(downloads)
-            .components { add(KtorNetworkFetcherFactory(Http.client)) }
+            .components {
+                // Antes de tudo: só endereços da internet (nada de arquivo do PC, `jar:` ou pasta de rede vindo de uma miniatura).
+                add(OnlyWebImages)
+                add(KtorNetworkFetcherFactory(Http.client))
+            }
             .memoryCache { MemoryCache.Builder().maxSizePercent(context, 0.25).build() }
             .diskCache { DiskCache.Builder().directory(File(dataDir, "images").toOkioPath()).maxSizeBytes(400L * 1024 * 1024).build() }
             .build()
@@ -337,7 +370,14 @@ private fun runApp() = application {
                         app.syncFollowsIfStale(10 * 60_000L)
                     }
                 }
-                CompositionLocalProvider(LocalApp provides app) { ApexApp() }
+                Box(Modifier.fillMaxSize()) {
+                    CompositionLocalProvider(LocalApp provides app) { ApexApp() }
+                    // O VLC abriu, mas pode ser uma versão com falhas de segurança conhecidas: avisa sem impedir o uso.
+                    var vlcWarning by remember { mutableStateOf(if (training || background) null else loadedVlcVersion()?.takeIf { isVlcOutdated(it) }) }
+                    vlcWarning?.let { version ->
+                        VlcOutdatedBanner(version.substringBefore(' '), Modifier.align(Alignment.BottomCenter)) { vlcWarning = null }
+                    }
+                }
             },
             onFailure = { StartupProblem(it) },
         )

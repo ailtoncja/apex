@@ -10,6 +10,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.bearerAuth
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -19,6 +20,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.formUrlEncode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
@@ -30,6 +32,7 @@ import java.util.UUID
 import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -156,6 +159,47 @@ class SecurityTest {
         repeat(60_000) { throttle.failure("chave-$it") }
         // Passou do teto: o mapa foi limpo em vez de guardar tudo.
         assertTrue(throttle.size() <= 20_000, "guardou ${throttle.size()} chaves")
+    }
+
+    @Test
+    fun encher_o_limitador_nao_destrava_quem_esta_travado() {
+        val throttle = LoginThrottle(maxFailures = 3, maxEntries = 100)
+        repeat(3) { throttle.failure("vitima@apex.test") }
+        assertFailsWith<ApiException> { throttle.check("vitima@apex.test") }
+        // O atacante enche o mapa de chaves novas para tentar apagar a trava.
+        repeat(10_000) { throttle.failure("lixo-$it") }
+        assertTrue(throttle.size() <= 100, "guardou ${throttle.size()} chaves")
+        val e = assertFailsWith<ApiException> { throttle.check("vitima@apex.test") }
+        assertEquals(HttpStatusCode.TooManyRequests, e.status)
+    }
+
+    @Test
+    fun trava_vencida_sai_antes_das_entradas_ativas() {
+        val throttle = LoginThrottle(maxFailures = 2, windowMs = 50, maxEntries = 3)
+        repeat(2) { throttle.failure("velha") }
+        Thread.sleep(80)
+        throttle.failure("a")
+        throttle.failure("b")
+        // Mapa cheio: sai só a trava que já venceu; as entradas ativas ficam.
+        throttle.failure("c")
+        assertEquals(3, throttle.size())
+        throttle.check("velha")
+    }
+
+    @Test
+    fun redefinir_pela_pagina_e_apagar_conta_contam_no_limite_de_autenticacao() = run { client ->
+        val email = email()
+        val auth: app.apex.shared.AuthResponse = client.register(email).body()
+        val fake = io.ktor.http.Parameters.build { append("token", "inventado"); append("password", "senha-nova-456") }.formUrlEncode()
+        val statuses = (1..35).map { client.post("/reset") { contentType(ContentType.Application.FormUrlEncoded); setBody(fake) }.status }
+        // 30 por minuto por IP (o cadastro acima já gastou um).
+        assertEquals(HttpStatusCode.TooManyRequests, statuses.last())
+        assertEquals(29, statuses.count { it == HttpStatusCode.OK })
+        // O mesmo limite vale para apagar a conta pelo app, mesmo com a senha certa (a barreira por e-mail não teve erro nenhum).
+        val delete = client.delete("/v1/me") {
+            bearerAuth(auth.accessToken); contentType(ContentType.Application.Json); setBody(app.apex.shared.DeleteAccountRequest("senha-forte-123"))
+        }
+        assertEquals(HttpStatusCode.TooManyRequests, delete.status)
     }
 
     // ---------------------------------------------------------------- tokens

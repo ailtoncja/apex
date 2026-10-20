@@ -11,6 +11,11 @@ set "TEMP=%TMPD%"
 set "TMP=%TMPD%"
 set "JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=%TMPD%"
 
-echo Servidor do Apex em http://127.0.0.1:8080
+rem O servidor escuta so neste computador (127.0.0.1), a menos que BIND_HOST diga outra coisa (variavel ou .env).
+set "SHOW_HOST=127.0.0.1"
+if defined BIND_HOST set "SHOW_HOST=%BIND_HOST%"
+set "SHOW_PORT=8080"
+if defined PORT set "SHOW_PORT=%PORT%"
+echo Servidor do Apex em http://%SHOW_HOST%:%SHOW_PORT%  (se o .env mudar BIND_HOST ou PORT, vale o endereco da linha "Apex Server em" do log)
 echo Banco: se existir %USERPROFILE%\.apex-server\.env (criado pelo Configurar-Neon.cmd) usa o Neon; senao, um banco de teste embutido.
 call "%~dp0gradlew.bat" :server:run --console=plain

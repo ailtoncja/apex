@@ -248,6 +248,45 @@ class UpdaterTest {
     }
 
     @Test
+    fun instalador_trocado_depois_do_download_nao_e_instalado() = runBlocking<Unit> {
+        publish("1.0.1")
+        val dir = Files.createTempDirectory("apex-upd").toFile()
+        var closed = false
+        val u = updater(dir = dir, helper = { error("não deveria rodar") })
+        u.exit = { closed = true }
+        u.checkNow(manual = false)
+        assertIs<UpdateState.Ready>(u.state.value)
+        // Outro programa mexe no instalador enquanto ele espera a pessoa clicar em "reiniciar".
+        val file = File(dir, "Apex-1.0.1.msi")
+        file.writeBytes(msiBytes.copyOf().also { it[0] = (it[0] + 1).toByte() })
+        u.installAndRestart()
+        assertFalse(closed)
+        val failed = assertIs<UpdateState.Failed>(u.state.value)
+        assertTrue("hash" in failed.message, failed.message)
+        assertFalse(file.exists(), "o instalador alterado é apagado")
+        assertFalse(File(dir, "aplicar-atualizacao.cmd").exists())
+        // E sem nada pronto, um segundo clique não faz nada.
+        u.installAndRestart()
+        assertFalse(closed)
+    }
+
+    @Test
+    fun caminho_com_exclamacao_nao_vai_para_o_script() = runBlocking<Unit> {
+        publish("1.0.1")
+        // Com DelayedExpansion, "!x!" dentro do .cmd vira o valor de uma variável: o caminho pode mudar de sentido.
+        val dir = Files.createTempDirectory("apex!upd").toFile()
+        var closed = false
+        val u = updater(dir = dir, helper = { error("não deveria rodar") })
+        u.exit = { closed = true }
+        u.checkNow(manual = false)
+        assertIs<UpdateState.Ready>(u.state.value)
+        u.installAndRestart()
+        assertFalse(closed)
+        val failed = assertIs<UpdateState.Failed>(u.state.value)
+        assertTrue("caracteres" in failed.message, failed.message)
+    }
+
+    @Test
     fun sem_nada_pronto_nao_fecha_o_app() {
         var closed = false
         val u = updater(helper = { error("não deveria rodar") })

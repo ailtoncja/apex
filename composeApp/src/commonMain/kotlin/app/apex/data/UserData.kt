@@ -8,6 +8,9 @@ import app.apex.model.Media
 import app.apex.model.Platform
 import app.apex.model.SupportKind
 import app.apex.source.AppJson
+import app.apex.source.sanitized
+import app.apex.source.sanitizedChannels
+import app.apex.source.sanitizedMedia
 import app.apex.shared.SyncCollections
 import app.apex.shared.UserDto
 import app.apex.util.currentTimeMillis
@@ -112,34 +115,36 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
     private val _settings = MutableStateFlow(load("settings", AppSettings()))
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    private val _subscriptions = MutableStateFlow(load<List<Channel>>("subscriptions", emptyList()))
+    // Os arquivos do disco podem ter vindo de uma sincronização antiga (sem conferência) ou ter sido mexidos: tudo passa pelo
+    // mesmo saneamento do que chega da nuvem (ver app.apex.source.sanitized).
+    private val _subscriptions = MutableStateFlow(load<List<Channel>>("subscriptions", emptyList()).sanitizedChannels())
     val subscriptions: StateFlow<List<Channel>> = _subscriptions.asStateFlow()
 
-    private val _history = MutableStateFlow(load<List<HistoryEntry>>("history", emptyList()))
+    private val _history = MutableStateFlow(load<List<HistoryEntry>>("history", emptyList()).mapNotNull { it.sanitized() })
     val history: StateFlow<List<HistoryEntry>> = _history.asStateFlow()
 
-    private val _watchLater = MutableStateFlow(load<List<Media>>("watchlater", emptyList()))
+    private val _watchLater = MutableStateFlow(load<List<Media>>("watchlater", emptyList()).sanitizedMedia())
     val watchLater: StateFlow<List<Media>> = _watchLater.asStateFlow()
 
-    private val _playlists = MutableStateFlow(load<List<LocalPlaylist>>("playlists", emptyList()))
+    private val _playlists = MutableStateFlow(load<List<LocalPlaylist>>("playlists", emptyList()).mapNotNull { it.sanitized() })
     val playlists: StateFlow<List<LocalPlaylist>> = _playlists.asStateFlow()
 
     /** `1` = gostei, `-1` = não gostei, por chave da mídia. */
     private val _reactions = MutableStateFlow(load<Map<String, Int>>("reactions", emptyMap()))
     val reactions: StateFlow<Map<String, Int>> = _reactions.asStateFlow()
 
-    private val _liked = MutableStateFlow(load<List<Media>>("liked", emptyList()))
+    private val _liked = MutableStateFlow(load<List<Media>>("liked", emptyList()).sanitizedMedia())
     val liked: StateFlow<List<Media>> = _liked.asStateFlow()
 
     /** As lives do Multi (voltam quando o app abre de novo). */
-    private val _multiStreams = MutableStateFlow(load<List<Media>>("multistream", emptyList()))
+    private val _multiStreams = MutableStateFlow(load<List<Media>>("multistream", emptyList()).sanitizedMedia())
     val multiStreams: StateFlow<List<Media>> = _multiStreams.asStateFlow()
 
     /** As abas de vídeo (ver [app.apex.tabs.VideoTabs]): os vídeos abertos agora, na ordem da faixa. */
-    private val _tabs = MutableStateFlow(load<List<Media>>("tabs", emptyList()))
+    private val _tabs = MutableStateFlow(load<List<Media>>("tabs", emptyList()).sanitizedMedia())
     val tabs: StateFlow<List<Media>> = _tabs.asStateFlow()
 
-    private val _feed = MutableStateFlow(load("feed", FeedCache()))
+    private val _feed = MutableStateFlow(load("feed", FeedCache()).let { it.copy(items = it.items.sanitizedMedia()) })
     val feed: StateFlow<FeedCache> = _feed.asStateFlow()
 
     private val _cloud = MutableStateFlow(load<CloudSession?>("cloud", null))
@@ -388,28 +393,31 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
         )
     }
 
-    /** Aplica uma mudança que veio de outro aparelho. */
+    /**
+     * Aplica uma mudança que veio de outro aparelho. O que vem da nuvem é "de fora": cada item passa pelo saneamento (endereço https do
+     * site da plataforma, id sem espaço/controle e sem "-" no começo, imagens só https) e o que não passa é ignorado.
+     */
     fun applyRemote(collection: String, key: String, element: JsonElement?, deleted: Boolean) {
         val gone = deleted || element == null
         when (collection) {
             SyncCollections.SUBSCRIPTIONS ->
                 if (gone) _subscriptions.update { l -> l.filterNot { it.key == key } }
-                else decode<Channel>(element)?.let { ch ->
+                else decode<Channel>(element)?.sanitized()?.let { ch ->
                     _subscriptions.update { l -> if (l.any { it.key == key }) l.map { if (it.key == key) ch else it } else l + ch }
                 }
             SyncCollections.HISTORY ->
                 if (gone) _history.update { l -> l.filterNot { it.media.key == key } }
-                else decode<HistoryEntry>(element)?.let { e ->
+                else decode<HistoryEntry>(element)?.sanitized()?.let { e ->
                     _history.update { l -> (listOf(e) + l.filterNot { it.media.key == key }).sortedByDescending { it.watchedAt }.take(500) }
                 }
             SyncCollections.WATCH_LATER ->
                 if (gone) _watchLater.update { l -> l.filterNot { it.key == key } }
-                else decode<Media>(element)?.let { m ->
+                else decode<Media>(element)?.sanitized()?.let { m ->
                     _watchLater.update { l -> if (l.any { it.key == key }) l.map { if (it.key == key) m else it } else listOf(m) + l }
                 }
             SyncCollections.PLAYLISTS ->
                 if (gone) _playlists.update { l -> l.filterNot { it.id == key } }
-                else decode<LocalPlaylist>(element)?.let { p ->
+                else decode<LocalPlaylist>(element)?.sanitized()?.let { p ->
                     _playlists.update { l -> if (l.any { it.id == key }) l.map { if (it.id == key) p else it } else l + p }
                 }
             SyncCollections.REACTIONS -> {
@@ -419,7 +427,7 @@ class UserData(private val store: KeyValueStore, private val scope: CoroutineSco
                 } else {
                     val obj = element as? JsonObject ?: return
                     val value = (obj["value"] as? JsonPrimitive)?.int ?: return
-                    val media = decode<Media>(obj["media"])
+                    val media = decode<Media>(obj["media"])?.sanitized()
                     _reactions.update { it + (key to value) }
                     _liked.update { l ->
                         val without = l.filterNot { it.key == key }

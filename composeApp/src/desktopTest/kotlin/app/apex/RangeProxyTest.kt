@@ -1,5 +1,6 @@
 package app.apex
 
+import app.apex.player.LocalHttp
 import app.apex.player.RangeProxy
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -72,12 +73,13 @@ class RangeProxyTest {
     private fun fullUrl(clen: Int = size, itag: Int = 137) = "https://full.googlevideo.com/videoplayback?expire=1&itag=$itag&clen=$clen&mime=video%2Fmp4"
 
     /** Um pedido HTTP cru ao servidorzinho: devolve (primeira linha da resposta, cabeçalhos, corpo). */
-    private fun request(local: String, range: String?, method: String = "GET"): Triple<String, String, ByteArray> {
+    private fun request(local: String, range: String?, method: String = "GET", host: String? = null): Triple<String, String, ByteArray> {
         val port = local.substringAfterLast(':').substringBefore('/').toInt()
         val path = "/" + local.substringAfterLast('/')
         Socket("127.0.0.1", port).use { s ->
             s.soTimeout = 10_000
-            val req = "$method $path HTTP/1.1\r\nHost: 127.0.0.1\r\n" + (range?.let { "Range: $it\r\n" } ?: "") + "Connection: close\r\n\r\n"
+            // Como o VLC: Host com o endereço e a porta.
+            val req = "$method $path HTTP/1.1\r\nHost: ${host ?: "127.0.0.1:$port"}\r\n" + (range?.let { "Range: $it\r\n" } ?: "") + "Connection: close\r\n\r\n"
             s.getOutputStream().write(req.toByteArray())
             s.getOutputStream().flush()
             val all = s.getInputStream().readBytes()
@@ -155,6 +157,74 @@ class RangeProxyTest {
             assertEquals("HTTP/1.1 404 Not Found", status)
             proxy.clear()
             assertEquals("HTTP/1.1 404 Not Found", request(local, "bytes=0-").first, "uma reprodução nova esquece os endereços da anterior")
+        } finally {
+            proxy.close()
+        }
+    }
+
+    @Test
+    fun o_endereco_tem_um_trecho_impossivel_de_adivinhar() {
+        val proxy = RangeProxy(FakeYouTube(content).client)
+        try {
+            val a = assertNotNull(proxy.register(url())).substringAfterLast('/')
+            val b = assertNotNull(proxy.register(url())).substringAfterLast('/')
+            assertTrue(a != b, "cada rota tem o seu")
+            // 128 bits em Base64 sem preenchimento: 22 caracteres, só os seguros para endereço.
+            listOf(a, b).forEach { assertTrue(Regex("[A-Za-z0-9_-]{22}").matches(it), it) }
+        } finally {
+            proxy.close()
+        }
+    }
+
+    @Test
+    fun pedido_com_host_de_fora_e_recusado_e_o_do_vlc_passa() {
+        val proxy = RangeProxy(FakeYouTube(content).client)
+        try {
+            val local = assertNotNull(proxy.register(url()))
+            val port = local.substringAfterLast(':').substringBefore('/').toInt()
+            // DNS rebinding: a página manda o domínio dela; sem porta, outra porta ou sem Host também não passam.
+            listOf("evil.example:$port", "evil.example", "127.0.0.1", "127.0.0.1:${port + 1}", "localhost.evil.example:$port").forEach {
+                assertEquals("HTTP/1.1 403 Forbidden", request(local, "bytes=0-99", host = it).first, it)
+            }
+            assertEquals("HTTP/1.1 206 Partial Content", request(local, "bytes=0-99", host = "127.0.0.1:$port").first)
+            assertEquals("HTTP/1.1 206 Partial Content", request(local, "bytes=0-99", host = "localhost:$port").first)
+            assertEquals("HTTP/1.1 206 Partial Content", request(local, "bytes=0-99", host = "LocalHost:$port").first)
+        } finally {
+            proxy.close()
+        }
+    }
+
+    @Test
+    fun pedido_gigante_e_recusado_sem_travar() {
+        val proxy = RangeProxy(FakeYouTube(content).client)
+        try {
+            val local = assertNotNull(proxy.register(url()))
+            val port = local.substringAfterLast(':').substringBefore('/').toInt()
+            fun raw(req: String): String = Socket("127.0.0.1", port).use { s ->
+                s.soTimeout = 10_000
+                runCatching { s.getOutputStream().write(req.toByteArray()); s.getOutputStream().flush() }
+                runCatching { String(s.getInputStream().readBytes(), Charsets.ISO_8859_1).lineSequence().first() }.getOrDefault("")
+            }
+            val path = "/" + local.substringAfterLast('/')
+            // O servidor responde 400 e fecha sem ler o resto (o Windows pode cortar a conexão antes de a resposta ser lida): basta não atender.
+            val huge = raw("GET $path HTTP/1.1\r\nHost: 127.0.0.1:$port\r\nX: ${"a".repeat(20_000)}\r\n\r\n")
+            assertTrue(huge == "HTTP/1.1 400 Bad Request" || huge.isEmpty(), huge)
+            val many = raw("GET $path HTTP/1.1\r\nHost: 127.0.0.1:$port\r\n" + "X: 1\r\n".repeat(100) + "\r\n")
+            assertTrue(many == "HTTP/1.1 400 Bad Request" || many.isEmpty(), many)
+            // e continua atendendo depois
+            assertEquals("HTTP/1.1 206 Partial Content", request(local, "bytes=0-99").first)
+
+            // A leitura do pedido em si, sem rede.
+            fun parse(text: String) = LocalHttp.readRequest(text.toByteArray(Charsets.ISO_8859_1).inputStream())
+            val ok = assertNotNull(parse("GET /abc?x=1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\nRange: bytes=0-\r\n\r\n"))
+            assertEquals("/abc", ok.path)
+            assertEquals("bytes=0-", ok.header("range"))
+            assertNull(parse("GET /abc HTTP/1.1\r\nX: ${"a".repeat(LocalHttp.MAX_LINE)}\r\n\r\n"), "linha longa demais")
+            assertNull(parse("GET /${"a".repeat(LocalHttp.MAX_LINE)} HTTP/1.1\r\n\r\n"), "primeira linha longa demais")
+            assertNull(parse("GET /abc HTTP/1.1\r\n" + "X: 1\r\n".repeat(LocalHttp.MAX_HEADERS + 1) + "\r\n"), "cabeçalhos demais")
+            assertNotNull(parse("GET /abc HTTP/1.1\r\n" + "X: 1\r\n".repeat(LocalHttp.MAX_HEADERS) + "\r\n"))
+            assertNull(parse("lixo\r\n\r\n"))
+            assertNull(parse("GET /abc HTTP/1.1\r\nHost: x"), "conexão fechou no meio")
         } finally {
             proxy.close()
         }

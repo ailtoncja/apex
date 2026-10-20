@@ -62,6 +62,10 @@ class YtDlpExtractor(
 
     // ---------- execução ----------
 
+    /**
+     * Roda o yt-dlp com [args]. Todo endereço ou id que veio de dados (sincronizados, do disco, de respostas) tem de passar por
+     * [validUrl] e ir depois de "--", para nunca virar uma opção.
+     */
     private suspend fun run(args: List<String>, timeoutMs: Long = 90_000): ByteArray = gate.withPermit {
         withContext(Dispatchers.IO) {
             // Na primeira abertura o yt-dlp ainda pode estar sendo baixado: espera a instalação em vez de falhar na cara da pessoa.
@@ -129,10 +133,14 @@ class YtDlpExtractor(
 
     // ---------- Extractor ----------
 
+    /**
+     * O endereço pode vir de dados sincronizados: tem de ser https de um site do YouTube, sem espaço nem controle, e por isso nunca começa
+     * com "-" (viraria opção do yt-dlp, como --exec). Mesmo assim, vai sempre depois de "--".
+     */
+    private fun validUrl(url: String): String = ytDlpUrl(url) ?: throw ExtractionException("Endereço de vídeo inválido.")
+
     override suspend fun resolve(media: Media): Resolved {
-        // O endereço pode vir de dados sincronizados: tem de ser https e nunca pode começar com "-" (viraria opção do yt-dlp, como --exec).
-        val url = media.url.trim()
-        if (!url.startsWith("https://") || url.any { it.isWhitespace() || it.isISOControl() }) throw ExtractionException("Endereço de vídeo inválido.")
+        val url = validUrl(media.url)
         val info = fastInfo(url)
         val live = info["is_live"].bool() == true || info["live_status"].str() == "is_live"
         val qualities = buildQualities(info, live)
@@ -280,12 +288,13 @@ class YtDlpExtractor(
     }
 
     override suspend fun comments(media: Media, limit: Int, newest: Boolean): List<Comment> {
+        val url = validUrl(media.url)
         val sort = if (newest) "new" else "top"
         val info = json(
             listOf(
                 "--skip-download", "--write-comments", "--no-playlist",
-                "--extractor-args", "youtube:max_comments=$limit,all,0,0;comment_sort=$sort",
-                "-J", media.url,
+                "--extractor-args", "youtube:max_comments=${limit.coerceIn(1, 1000)},all,0,0;comment_sort=$sort",
+                "-J", "--", url,
             ),
             timeoutMs = 120_000,
         )
@@ -305,7 +314,9 @@ class YtDlpExtractor(
     }
 
     override suspend fun channelDetails(channelId: String): ChannelDetails {
-        val info = json(listOf("--flat-playlist", "-J", "--playlist-end", "1", "https://www.youtube.com/channel/$channelId/videos"))
+        // O id pode vir de inscrições sincronizadas: só o formato de um id de canal do YouTube vira endereço.
+        if (!isYouTubeChannelId(channelId)) throw ExtractionException("Canal inválido.")
+        val info = json(listOf("--flat-playlist", "-J", "--playlist-end", "1", "--", "https://www.youtube.com/channel/$channelId/videos"))
         val thumbs = info["thumbnails"].list()
         val avatar = thumbs.firstOrNull { it["id"].str() == "avatar_uncropped" }?.get("url").str()
             ?: thumbs.filter { (it["width"].int() ?: 0) > 0 && it["width"].int() == it["height"].int() }
@@ -325,8 +336,6 @@ class YtDlpExtractor(
         )
     }
 
-    override suspend fun updateEngine(): String {
-        val out = run(listOf("-U"), timeoutMs = 180_000).toString(Charsets.UTF_8)
-        return out.lines().lastOrNull { it.isNotBlank() }?.trim().orEmpty().ifBlank { "Concluído." }
-    }
+    // Sem `yt-dlp -U` (que não confere a assinatura): baixa a versão nova do yt-dlp e do Deno conferindo assinatura e hash, como na instalação.
+    override suspend fun updateEngine(): String = bins.update()
 }

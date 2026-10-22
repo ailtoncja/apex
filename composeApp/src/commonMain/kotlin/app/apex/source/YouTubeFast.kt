@@ -11,6 +11,21 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.put
 
 /**
+ * O codec diz que o vídeo é HDR: VP9 de perfil 2 ou 3 (`vp9.2`, `vp09.02…`, 10 bits) ou um codec completo com a curva de transferência PQ (16) ou
+ * HLG (18), como `av01.0.13M.10.0.110.09.16.09.0` e `vp09.02.51.10.01.09.16.09.00`.
+ */
+fun isHdrCodec(codec: String): Boolean {
+    val c = codec.trim().lowercase()
+    if (c.startsWith("vp9.2") || c.startsWith("vp9.3") || c.startsWith("vp09.02") || c.startsWith("vp09.03")) return true
+    val parts = c.split('.')
+    return when {
+        c.startsWith("av01") -> parts.getOrNull(7) in setOf("16", "18")
+        c.startsWith("vp09") -> parts.getOrNull(6) in setOf("16", "18")
+        else -> false
+    }
+}
+
+/**
  * Abre vídeos do YouTube sem o yt-dlp: o `player` da API do YouTube, falando como o app do iPhone, devolve na hora (uns 0,2 s) os endereços
  * diretos dos vídeos e do áudio, sem o código JavaScript do site e sem entrar na conta. O yt-dlp leva uns 4 s para o mesmo (abrir o programa,
  * pedir a página, resolver os desafios do site). Quando o YouTube não quer entregar assim (vídeo que pede login, restrição de idade, live, etc.)
@@ -89,6 +104,15 @@ class YouTubeFast(private val tube: InnerTube) {
 
     private fun label(height: Int, fps: Int?): String = "${height}p" + if (fps != null && fps > 30) "$fps" else ""
 
+    /**
+     * A versão HDR (10 bits, cores BT.2020). O player mostra o vídeo em cores comuns (SDR), sem converter o HDR: ela aparece acinzentada e sem
+     * cor. O YouTube sempre oferece também a versão SDR do mesmo tamanho, que é a escolhida.
+     */
+    private fun isHdr(f: JsonElement): Boolean {
+        val transfer = f["colorInfo"]["transferCharacteristics"].str().orEmpty()
+        return "2084" in transfer || "B67" in transfer || f["qualityLabel"].str()?.contains("HDR") == true || isHdrCodec(codecs(f))
+    }
+
     private fun buildQualities(adaptive: List<JsonElement>, muxed: List<JsonElement>): List<Quality> {
         // O áudio: o de maior qualidade da faixa principal (o YouTube também oferece dublagens e uma versão "com volume nivelado").
         val audioUrl = adaptive.filter {
@@ -100,8 +124,9 @@ class YouTubeFast(private val tube: InnerTube) {
             adaptive.filter { mime(it).startsWith("video/") && it["url"].str() != null && (it["height"].int() ?: 0) > 0 }
                 .groupBy { it["height"].int() ?: 0 }
                 .forEach { (h, list) ->
+                    // A versão SDR vence a HDR do mesmo tamanho (ver isHdr).
                     val best = list.sortedWith(
-                        compareBy<JsonElement> { codecRank(codecs(it), h) }.thenBy { it["fps"].int() ?: 0 }.thenBy { it["bitrate"].int() ?: 0 },
+                        compareBy<JsonElement> { !isHdr(it) }.thenBy { codecRank(codecs(it), h) }.thenBy { it["fps"].int() ?: 0 }.thenBy { it["bitrate"].int() ?: 0 },
                     ).last()
                     byHeight[h] = Quality(label(h, best["fps"].int()), h, best["url"].str()!!, audioUrl, best["fps"].int())
                 }

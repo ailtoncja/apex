@@ -31,6 +31,9 @@ class Tile(val media: Media, val player: PlayerController) {
     /** O que a plataforma respondeu (título, espectadores); `null` enquanto não abriu. */
     internal val _resolved = MutableStateFlow<Resolved?>(null)
     val resolved: StateFlow<Resolved?> = _resolved.asStateFlow()
+    /** A qualidade que está tocando agora; `null` enquanto não abriu. */
+    internal val _quality = MutableStateFlow<Quality?>(null)
+    val quality: StateFlow<Quality?> = _quality.asStateFlow()
 }
 
 /**
@@ -67,6 +70,42 @@ class MultiStream(
         tile.player.setVolume(percent)
         if (percent > 0 && key !in _audio.value) setAudio(_audio.value + key)
     }
+
+    /**
+     * A qualidade escolhida à mão em cada live (o rótulo, como "720p60" ou "Automático"); quem não está aqui fica no automático do Multi
+     * (menor quanto mais lives na tela, ver [tileQualityCap]).
+     */
+    private val _chosenQuality = MutableStateFlow<Map<String, String>>(emptyMap())
+    val chosenQuality: StateFlow<Map<String, String>> = _chosenQuality.asStateFlow()
+
+    /**
+     * Troca a qualidade de [key] para [label] (`null` = de volta ao automático do Multi) e reabre só essa live, sem buscar o endereço de novo.
+     */
+    fun setQuality(key: String, label: String?) {
+        val tile = _tiles.value.firstOrNull { it.key == key } ?: return
+        _chosenQuality.update { if (label == null) it - key else it + (key to label) }
+        app.apex.util.Timing.mark("multi: qualidade de $key = ${label ?: "automática"}")
+        if (!active) return
+        val resolved = tile._resolved.value
+        if (resolved == null || resolved.qualities.isEmpty()) { play(tile); return }
+        tile.job?.cancel()
+        tile._load.value = LoadState.Loading
+        tile.job = scope.launch {
+            tile.lane.withLock {
+                try {
+                    start(tile, resolved)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    tile._load.value = LoadState.Error(e.message ?: "Não foi possível abrir esta live.")
+                }
+            }
+        }
+    }
+
+    /** A qualidade para [tile]: a escolhida à mão (se ainda existe nesta live) ou a automática pelo tamanho da grade. */
+    private fun qualityFor(tile: Tile, list: List<Quality>): Quality =
+        _chosenQuality.value[tile.key]?.let { label -> list.firstOrNull { it.label == label } } ?: pickTileQuality(list, _tiles.value.size)
 
     /** A live cujo chat está aberto. */
     private val _chat = MutableStateFlow<String?>(null)
@@ -112,6 +151,7 @@ class MultiStream(
         if (_chat.value == key) _chat.value = remaining.firstOrNull()?.key
         if (_focus.value == key) _focus.value = null
         _volumes.update { it - key }
+        _chosenQuality.update { it - key }
         save()
     }
 
@@ -188,18 +228,7 @@ class MultiStream(
                     val resolved = resolve(tile.media)
                     tile._resolved.value = resolved
                     if (resolved.qualities.isEmpty()) error("Nenhuma qualidade disponível.")
-                    val quality = pickTileQuality(resolved.qualities, _tiles.value.size)
-                    val settings = data.settings.value
-                    tile.player.setVolume(volumeOf(tile.key))
-                    tile.player.setMuted(tile.key !in _audio.value)
-                    tile.player.play(
-                        PlaySource(
-                            videoUrl = quality.videoUrl, audioUrl = quality.audioUrl, userAgent = resolved.userAgent,
-                            live = resolved.isLive, lowLatency = settings.lowLatencyLive, videoHeight = quality.height,
-                            bridgeRanges = resolved.rangeBridge,
-                        ),
-                    )
-                    tile._load.value = LoadState.Ready(resolved)
+                    start(tile, resolved)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: app.apex.source.ChannelOfflineException) {
@@ -209,6 +238,23 @@ class MultiStream(
                 }
             }
         }
+    }
+
+    /** Toca [resolved] em [tile], na qualidade dela ([qualityFor]). Roda dentro da fila da live. */
+    private fun start(tile: Tile, resolved: Resolved) {
+        val quality = qualityFor(tile, resolved.qualities)
+        val settings = data.settings.value
+        tile.player.setVolume(volumeOf(tile.key))
+        tile.player.setMuted(tile.key !in _audio.value)
+        tile.player.play(
+            PlaySource(
+                videoUrl = quality.videoUrl, audioUrl = quality.audioUrl, userAgent = resolved.userAgent,
+                live = resolved.isLive, lowLatency = settings.lowLatencyLive, videoHeight = quality.height,
+                bridgeRanges = resolved.rangeBridge,
+            ),
+        )
+        tile._quality.value = quality
+        tile._load.value = LoadState.Ready(resolved)
     }
 
     companion object {

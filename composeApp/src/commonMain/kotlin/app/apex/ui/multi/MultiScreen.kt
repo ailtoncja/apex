@@ -4,6 +4,13 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -366,10 +373,12 @@ private fun TileView(tile: Tile, audioOn: Boolean, chatOn: Boolean, focused: Boo
     val ps by tile.player.state.collectAsState()
     val media = resolved?.media ?: tile.media
     val shape = RoundedCornerShape(10.dp)
-    Box(
+    BoxWithConstraints(
         Modifier.fillMaxSize().clip(shape).background(Color.Black)
             .border(2.dp, if (audioOn) ApexColors.Accent else Color.Transparent, shape).testTag("tile-${tile.key}"),
     ) {
+        // Num quadro estreito (muitas lives, ou a coluna ao lado do destaque) o botão de qualidade mostra só o ícone, para os outros caberem.
+        val compact = maxWidth < 420.dp
         tile.player.Video(Modifier.fillMaxSize())
         when (val l = load) {
             is LoadState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center).size(34.dp), color = ApexColors.Accent, strokeWidth = 3.dp)
@@ -419,6 +428,7 @@ private fun TileView(tile: Tile, audioOn: Boolean, chatOn: Boolean, focused: Boo
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             TileVolume(tile, audioOn)
+            if (load is LoadState.Ready) TileQuality(tile, compact)
             IconBtn(
                 Icons.Rounded.Chat, if (chatOn) "Esconder o chat" else "Chat desta live",
                 { if (chatOn) app.ui.multiChat = false else { multi.setChat(tile.key); app.ui.multiChat = true } },
@@ -465,6 +475,58 @@ private fun TileVolume(tile: Tile, audioOn: Boolean) {
             }
         }
     }
+}
+
+/**
+ * A qualidade de uma live do Multi: o botão mostra a que está tocando ("720p60"); o menu lista as da live, mais "Automática" (a do Multi,
+ * menor quanto mais lives na tela). Escolher reabre só essa live.
+ */
+@Composable
+private fun TileQuality(tile: Tile, compact: Boolean) {
+    val app = LocalApp.current
+    val multi = app.multi
+    val resolved by tile.resolved.collectAsState()
+    val playing by tile.quality.collectAsState()
+    val chosen by multi.chosenQuality.collectAsState()
+    val options = resolved?.qualities.orEmpty().filter { !it.audioOnly }
+    if (options.isEmpty()) return
+    var open by remember { mutableStateOf(false) }
+    val manual = chosen[tile.key]
+    Box {
+        Row(
+            Modifier.height(32.dp).clip(RoundedCornerShape(50)).clickable { open = true }.padding(horizontal = 8.dp)
+                .testTag("tile-quality-${tile.key}"),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(Icons.Rounded.Settings, "Qualidade${playing?.let { ": ${it.label}" }.orEmpty()}", Modifier.size(16.dp), tint = if (manual != null) ApexColors.Accent else Color.White)
+            if (!compact) Text(playing?.label ?: "Qualidade", color = Color.White, fontSize = 12.sp, maxLines = 1)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = ApexColors.SurfaceHigh) {
+            QualityItem("Automática", "pelo tamanho na tela", manual == null, Modifier.testTag("tile-quality-auto-${tile.key}")) {
+                open = false; multi.setQuality(tile.key, null)
+            }
+            options.forEach { q ->
+                QualityItem(q.label, null, manual == q.label, Modifier.testTag("tile-quality-${tile.key}-${q.label}"), q.height) {
+                    open = false; multi.setQuality(tile.key, q.label)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QualityItem(label: String, hint: String?, checked: Boolean, modifier: Modifier, height: Int = 0, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(label, fontSize = 14.sp, fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal)
+                if (height > 0) ResolutionBadge(height, small = true)
+                hint?.let { Text(it, color = ApexColors.Muted, fontSize = 12.sp) }
+            }
+        },
+        leadingIcon = { Box(Modifier.size(18.dp)) { if (checked) Icon(Icons.Rounded.Check, null, tint = ApexColors.Accent, modifier = Modifier.size(18.dp)) } },
+        onClick = onClick, modifier = modifier,
+    )
 }
 
 /** O chat de uma das lives, com uma aba por live. */

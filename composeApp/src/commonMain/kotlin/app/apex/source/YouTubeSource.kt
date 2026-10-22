@@ -23,6 +23,16 @@ data class VideoPage(val items: List<Media>, val continuation: String?)
 
 data class RemotePlaylist(val id: String, val title: String, val thumbnailUrl: String?, val countText: String?)
 
+/**
+ * As playlists de um canal na ordem [sort], a partir de [items] na ordem em que vieram do YouTube (das criadas mais recentemente, ou das
+ * atualizadas por último em [app.apex.model.PlaylistSort.Updated]). "Mais antigas" é a lista das recentes de trás para a frente.
+ */
+fun orderPlaylists(items: List<RemotePlaylist>, sort: app.apex.model.PlaylistSort): List<RemotePlaylist> = when (sort) {
+    app.apex.model.PlaylistSort.Created, app.apex.model.PlaylistSort.Updated -> items
+    app.apex.model.PlaylistSort.Oldest -> items.reversed()
+    app.apex.model.PlaylistSort.Name -> items.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title.trim() })
+}
+
 data class PlaylistPage(val items: List<RemotePlaylist>, val continuation: String?)
 
 /** O cabeçalho de uma playlist do YouTube: dono, contagem, visualizações, "atualizado há…" e descrição. */
@@ -89,6 +99,12 @@ private const val CHANNEL_SEARCH_TAB = "EgZzZWFyY2jyBgQKAloA"
 
 /** Parâmetro do `browse` que abre a aba "Playlists" de um canal (o mesmo para todos os canais). */
 private const val PLAYLISTS_TAB = "EglwbGF5bGlzdHPyBgQKAkIA"
+
+/** A aba "Playlists" na ordem "Último vídeo adicionado" do YouTube (`sort=lad`). */
+private const val PLAYLISTS_TAB_LAST_ADDED = "EglwbGF5bGlzdHMYBCABMAHyBgQKAkIA"
+
+/** Os cartões da aba "Playlists" que são playlists: as comuns e as que o YouTube mostra como série ou podcast ("N episódios"). */
+private val PLAYLIST_LOCKUPS = setOf("LOCKUP_CONTENT_TYPE_PLAYLIST", "LOCKUP_CONTENT_TYPE_SHOW", "LOCKUP_CONTENT_TYPE_PODCAST")
 
 /** As abas do canal: o prefixo da lista de envios do YouTube (`UULF…` = vídeos, `UULV…` = transmissões) e o parâmetro que abre a aba. */
 enum class ChannelTab(val prefix: String, val params: String) {
@@ -383,12 +399,13 @@ class YouTubeSource(val tube: InnerTube) : CommentPoster {
     }
 
     /** Playlists públicas de um canal (a aba "Playlists" dele). */
-    suspend fun channelPlaylists(channelId: String, continuation: String? = null): PlaylistPage {
+    /** As playlists do canal, na ordem do YouTube: criadas mais recentemente ou, com [byLastAdded], as que receberam vídeo por último. */
+    suspend fun channelPlaylists(channelId: String, continuation: String? = null, byLastAdded: Boolean = false): PlaylistPage {
         val root = tube.call("browse") {
             if (continuation != null) put("continuation", continuation)
             else {
                 put("browseId", channelId)
-                put("params", PLAYLISTS_TAB)
+                put("params", if (byLastAdded) PLAYLISTS_TAB_LAST_ADDED else PLAYLISTS_TAB)
             }
         } ?: return PlaylistPage(emptyList(), null)
         return PlaylistPage(parsePlaylists(root), root.continuationToken())
@@ -411,12 +428,15 @@ class YouTubeSource(val tube: InnerTube) : CommentPoster {
         val out = mutableListOf<RemotePlaylist>()
         for ((key, node) in root.collect("lockupViewModel", "gridPlaylistRenderer", "playlistRenderer")) {
             if (key == "lockupViewModel") {
-                if (node["contentType"].str() != "LOCKUP_CONTENT_TYPE_PLAYLIST") continue
+                // O YouTube agora mostra algumas playlists como "série" (SHOW) ou podcast (PODCAST), com "N episódios": abrem e tocam como uma
+                // playlist comum.
+                if (node["contentType"].str() !in PLAYLIST_LOCKUPS) continue
                 val id = node["contentId"].str() ?: continue
                 val title = node["metadata"]["lockupMetadataViewModel"]["title"]["content"].str() ?: continue
                 val thumb = node["contentImage"]?.collect("image")?.firstNotNullOfOrNull { it.second["sources"][0]["url"].str() }
                 val count = node["contentImage"]?.collect("thumbnailOverlayBadgeViewModel", "thumbnailBadgeViewModel")
                     ?.firstNotNullOfOrNull { it.second["text"].str() ?: it.second.collect("text").firstNotNullOfOrNull { t -> t.second.str() } }
+                    ?.replace(Regex("""\bepis[óo]dios?\b""", RegexOption.IGNORE_CASE)) { m -> if (m.value.endsWith("s", true)) "vídeos" else "vídeo" }
                 out += RemotePlaylist(id, title, thumb, count)
             } else {
                 val id = node["playlistId"].str() ?: continue

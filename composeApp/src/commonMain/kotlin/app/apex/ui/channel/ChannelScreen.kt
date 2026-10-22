@@ -33,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
 import app.apex.model.Channel
 import app.apex.model.ChannelSort
+import app.apex.model.PlaylistSort
+import app.apex.source.orderPlaylists
 import app.apex.model.sortedBy
 import app.apex.model.ClipSort
 import app.apex.model.Platform
@@ -97,9 +99,15 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
         !isYt && tab == 2 -> st.clips
         else -> null
     }
-    val allPlaylists by st.playlists.items.collectAsState()
-    val playlistsLoading by st.playlists.loading.collectAsState()
-    val playlistsError by st.playlists.error.collectAsState()
+    // As playlists na ordem escolhida: as do YouTube vêm de lá; "Mais antigas" e "A–Z" precisam da lista inteira (ver loadAll abaixo).
+    val playlistList = st.playlistsBy(st.playlistSort)
+    val loadedPlaylists by playlistList.items.collectAsState()
+    val allPlaylists = remember(loadedPlaylists, st.playlistSort) { orderPlaylists(loadedPlaylists, st.playlistSort) }
+    val playlistsLoading by playlistList.loading.collectAsState()
+    val playlistsError by playlistList.error.collectAsState()
+    LaunchedEffect(tab, playlistList, st.playlistSort) {
+        if (isYt && tab == 2 && (st.playlistSort == PlaylistSort.Oldest || st.playlistSort == PlaylistSort.Name)) { playlistList.loadIfNeeded(); st.loadAll(playlistList) }
+    }
 
     // Pesquisar no canal: na aba "Vídeos" a busca é a do YouTube dentro do canal inteiro; nas outras abas filtra pelo nome o que a aba lista.
     val words = remember(st.query) { searchWords(st.query) }
@@ -111,7 +119,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     LaunchedEffect(tab, searching, st, list) {
         if (!searching) return@LaunchedEffect
         when {
-            isYt && tab == 2 -> { st.playlists.loadIfNeeded(); st.loadAll(st.playlists) }
+            isYt && tab == 2 -> { playlistList.loadIfNeeded(); st.loadAll(playlistList) }
             // Na aba "Vídeos" a busca é a do YouTube; nas outras filtra pelo nome a lista inteira (na ordem que está na tela).
             tab != 0 && list != null -> { list.loadIfNeeded(); st.loadAll(list) }
         }
@@ -119,7 +127,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     val playlists = if (searching) allPlaylists.filter { matchesWords(words, it.title) } else allPlaylists
     val activeList = channelSearch ?: list
     LaunchedEffect(tab, st, list) {
-        if (isYt && tab == 2) st.playlists.loadIfNeeded()
+        if (isYt && tab == 2) playlistList.loadIfNeeded()
         list?.loadIfNeeded()
     }
     val loadedItems by (activeList?.items ?: st.videos.items).collectAsState()
@@ -137,8 +145,8 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     }
     val state = rememberLazyGridState()
     // Trocar de ordem recomeça a lista: volta para o topo.
-    LaunchedEffect(list) { state.scrollToItem(0) }
-    OnNearEnd(state) { if (isYt && tab == 2) st.playlists.loadMore() else activeList?.loadMore() }
+    LaunchedEffect(list, st.playlistSort) { state.scrollToItem(0) }
+    OnNearEnd(state) { if (isYt && tab == 2) playlistList.loadMore() else activeList?.loadMore() }
 
     ApexGrid(state) {
         fullSpan("header") {
@@ -213,6 +221,9 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                 }
             })
         }
+        if (isYt && tab == 2) fullSpan("playlist-sort") {
+            ChipRow(PlaylistSort.entries.map { it.label }, st.playlistSort.ordinal, { i -> st.playlistSort = PlaylistSort.entries[i] })
+        }
         if (clipsTab) fullSpan("clip-sort") {
             val sort by st.clipSort.collectAsState()
             if (searching) {
@@ -242,7 +253,7 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                 playlists.isNotEmpty() -> playlistItems(playlists)
                 playlistsLoading -> skeletons(6)
                 searching && allPlaylists.isNotEmpty() -> fullSpan("pl-nomatch") { NoMatch(st.query) }
-                playlistsError != null -> fullSpan("pl-err") { ErrorBox(playlistsError.orEmpty(), { st.playlists.refresh() }) }
+                playlistsError != null -> fullSpan("pl-err") { ErrorBox(playlistsError.orEmpty(), { playlistList.refresh() }) }
                 else -> fullSpan("pl-none") { EmptyState(Icons.Rounded.VideoLibrary, "Sem playlists", "${channel.name} não tem playlists públicas.") }
             }
             !isYt && tab == 0 -> if (liveNow == null) fullSpan("offline") {

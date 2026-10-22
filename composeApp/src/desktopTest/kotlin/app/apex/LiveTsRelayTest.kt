@@ -6,9 +6,7 @@ import app.apex.player.RELAY_CACHE_MS
 import app.apex.player.ServerClock
 import app.apex.player.parseHttpDate
 import app.apex.player.parseLivePlaylist
-import app.apex.player.readyForEdge
 import app.apex.player.relayStart
-import app.apex.player.trimLivePlaylist
 import app.apex.player.vlcOptions
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -72,22 +70,17 @@ class LiveTsRelayTest {
     fun a_troca_de_video_antes_de_um_adiantado_nao_se_perde() {
         // Começo de um anúncio: o segundo adiantado já é dele.
         val live = parseLivePlaylist(playlist(100, "LLLLP|P"), base)!!
+        // (é nela que o fluxo para e a live é reaberta, ver na_troca_para_o_anuncio_o_fluxo_para_e_devolve_a_live_ao_player)
         assertEquals(listOf(false, false, false, false, false, true), live.segments.map { it.discontinuity })
-        // e vai para a lista curta, separando os dois
-        val out = trimLivePlaylist(live, keep = 2, keepWithPrefetch = 1).lines()
-        assertEquals(1, out.count { it == "#EXT-X-DISCONTINUITY" })
-        assertTrue(out.indexOf("#EXT-X-DISCONTINUITY") in out.indexOf("https://cdn.example/seg104")..out.indexOf("https://cdn.example/seg105"))
     }
 
     @Test
     fun logo_depois_do_anuncio_ainda_nao_e_hora_de_abrir_perto_do_ao_vivo() {
-        // O anúncio acabou agora: o último completo ainda é dele. Pela lista curta o VLC não tocaria; pelo fluxo, a hora do adiantado sairia errada.
+        // O anúncio acabou agora: o último completo ainda é dele, e a hora do adiantado (que sai do completo anterior) viria errada.
         val justAfter = parseLivePlaylist(playlist(0, "AAAA|PP"), base)!!
-        assertFalse(readyForEdge(justAfter, 2, 1))
         assertNull(relayStart(justAfter, 0))
         // Um trecho depois, o completo já é da live.
         val next = parseLivePlaylist(playlist(0, "AAA|LPP"), base)!!
-        assertTrue(readyForEdge(next, 2, 1))
         assertEquals(4, relayStart(next, 0), "começa no primeiro adiantado")
         assertEquals(3, relayStart(next, 1), "ou no completo antes dele, que já é da live")
         // Sem adiantados (no anúncio, ou o canal sem baixa latência), nunca.
@@ -122,8 +115,8 @@ class LiveTsRelayTest {
     private fun client(playlists: () -> String) = HttpClient(
         MockEngine { request ->
             val url = request.url.toString()
-            if (url.startsWith("https://cdn.example/seg")) {
-                respond("[" + url.substringAfter("seg") + "]", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "video/mp2t"))
+            if (url.startsWith("https://cdn.example/seg") || url == "https://cdn.example/init") {
+                respond("[" + url.substringAfterLast("/").removePrefix("seg") + "]", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "video/mp2t"))
             } else {
                 respond(
                     playlists(), HttpStatusCode.OK,
@@ -203,7 +196,7 @@ class LiveTsRelayTest {
     }
 
     @Test
-    fun recusa_o_que_nao_e_do_proprio_servidor_e_lista_sem_adiantados_ou_fmp4() = runBlocking<Unit> {
+    fun recusa_o_que_nao_e_do_proprio_servidor_e_lista_sem_adiantados() = runBlocking<Unit> {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val relay = LiveTsRelay(scope, client { playlist(100, "LLLLPP") }, startBack = 0)
         try {
@@ -219,19 +212,34 @@ class LiveTsRelayTest {
         assertFalse(noAhead.start("https://playlist.example/v1/live.m3u8", emptyMap()))
         assertTrue(noAhead.noPrefetch, "sem adiantados (anúncio do começo): vale esperar")
         noAhead.close()
-
-        val fmp4 = LiveTsRelay(scope, client { playlist(100, "LLLLPP").replace("#EXT-X-MEDIA-SEQUENCE:100", "#EXT-X-MEDIA-SEQUENCE:100\n#EXT-X-MAP:URI=\"https://cdn.example/init\"") })
-        assertFalse(fmp4.start("https://playlist.example/v1/live.m3u8", emptyMap()))
-        assertTrue(fmp4.fmp4, "fMP4 fica com a lista curta")
-        fmp4.close()
         scope.cancel()
     }
 
     @Test
-    fun pelo_fluxo_o_vlc_ja_sabe_que_e_mpeg_ts_e_usa_o_buffer_pequeno() {
-        val options = vlcOptions(PlaySource("http://127.0.0.1:1/x/live.ts", live = true, lowLatency = true), viaRelay = true)
-        assertTrue(":network-caching=$RELAY_CACHE_MS" in options)
-        assertTrue(":demux=ts" in options)
-        assertTrue(options.none { it.startsWith(":adaptive-livedelay") })
+    fun no_fmp4_o_arquivo_de_inicio_vai_antes_dos_fragmentos() = runBlocking<Unit> {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        // a Twitch manda alguns canais em fMP4: a lista traz o arquivo de início (EXT-X-MAP)
+        val fmp4 = playlist(100, "LLLLPP").replace("#EXT-X-MEDIA-SEQUENCE:100", "#EXT-X-MEDIA-SEQUENCE:100\n#EXT-X-MAP:URI=\"https://cdn.example/init\"")
+        val relay = LiveTsRelay(scope, client { fmp4 }, startBack = 0)
+        try {
+            assertTrue(relay.start("https://playlist.example/v1/live.m3u8", emptyMap()))
+            assertTrue(relay.fmp4)
+            assertEquals(listOf("init", "104", "105"), read(relay.url, 3).second)
+        } finally {
+            relay.close()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun pelo_fluxo_o_vlc_ja_sabe_o_formato_e_usa_o_buffer_pequeno() {
+        val source = PlaySource("http://127.0.0.1:1/x/live", live = true, lowLatency = true)
+        val ts = vlcOptions(source, viaRelay = true)
+        assertTrue(":network-caching=$RELAY_CACHE_MS" in ts)
+        assertTrue(":demux=ts" in ts)
+        assertTrue(ts.none { it.startsWith(":adaptive-livedelay") })
+        assertTrue(":demux=mp4" in vlcOptions(source, viaRelay = true, relayMp4 = true))
+        // sem o fluxo (anúncio, modo seguro), o VLC lê a lista da plataforma com o atraso mínimo dele
+        assertTrue(":adaptive-livedelay=3000" in vlcOptions(source))
     }
 }

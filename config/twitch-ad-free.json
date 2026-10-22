@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updated": "2026-10-22",
+  "about": "Servidores que pedem a lista das lives da Twitch sem anúncio (os mesmos que o Xtra usa). O Apex só aceita este arquivo com a assinatura (.sig) da chave das atualizações. Para mudar: edite, aumente o version e assine com tools/Sign.java (veja docs/PUBLICAR.md).",
+  "servers": [
+    "eu.luminous.dev/live/$channel",
+    "eu2.luminous.dev/live/$channel",
+    "eu3.luminous.dev/live/$channel",
+    "as.luminous.dev/live/$channel",
+    "lb-eu.cdn-perfprod.com/live/$channel",
+    "lb-eu2.cdn-perfprod.com/live/$channel",
+    "lb-eu3.cdn-perfprod.com/live/$channel",
+    "lb-eu4.cdn-perfprod.com/live/$channel",
+    "lb-eu5.cdn-perfprod.com/live/$channel"
+  ]
+}

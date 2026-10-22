@@ -20,6 +20,10 @@ class DesktopSystem(
     private val _fullscreen = MutableStateFlow(false)
     override val fullscreen: StateFlow<Boolean> = _fullscreen.asStateFlow()
 
+    /** A mesma chave pública Ed25519 que confere as atualizações do app. */
+    override val publishedSignature: (ByteArray, String) -> Boolean =
+        { data, signature -> app.apex.update.UpdateVerifier.verify(app.apex.update.UpdateKeys.PUBLIC_KEY, data, signature) }
+
     /**
      * Tela cheia como o F11: o que muda a janela (tirar a barra de título e as bordas, cobrir o monitor inteiro com a barra de tarefas)
      * é feito pela janela em Main.kt, que observa este valor.

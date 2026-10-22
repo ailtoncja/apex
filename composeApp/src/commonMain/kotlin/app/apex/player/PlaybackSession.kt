@@ -140,6 +140,41 @@ class PlaybackSession(
                 saveProgress()
             }
         }
+        scope.launch {
+            var last = player.state.value.adsSeen
+            player.state.map { it.adsSeen }.distinctUntilChanged().collect { seen ->
+                if (seen > last) onAd()
+                last = seen
+            }
+        }
+    }
+
+    /** Trocas de servidor sem anúncio na live aberta (ver [onAd]); zera ao abrir outra. */
+    private var adSwitches = 0
+
+    /**
+     * A live caiu num anúncio. Se ela veio por um servidor sem anúncio, ele fica de fora por um tempo e a live é reaberta pelos outros (sem
+     * nenhum, direto da Twitch), na mesma qualidade. No máximo [MAX_AD_SWITCHES] trocas por live, para não ficar trocando se todos falharem.
+     */
+    private fun onAd() {
+        val ready = (_load.value as? LoadState.Ready)?.resolved ?: return
+        val server = ready.adFreeServer ?: return
+        if (!ready.isLive || ready.media.platform != Platform.Twitch || adSwitches >= MAX_AD_SWITCHES) return
+        adSwitches++
+        twitch.reportAd(server)
+        Timing.mark("anúncio pelo servidor ${server.substringBefore('/')}: trocando de servidor")
+        val media = ready.media
+        val label = _quality.value?.label
+        job?.cancel()
+        job = scope.launch {
+            val fresh = runCatching { resolveNow(media) }.getOrNull() ?: return@launch
+            if (_current.value?.key != media.key) return@launch
+            // O preparo guardado ainda aponta para o servidor que falhou.
+            resolved.clear()
+            _load.value = LoadState.Ready(fresh)
+            val quality = fresh.qualities.firstOrNull { it.label == label } ?: pickDefaultQuality(fresh.qualities, data.settings.value.defaultQuality)
+            startPlayback(fresh, quality, 0)
+        }
     }
 
     private fun saveProgress() {
@@ -153,7 +188,10 @@ class PlaybackSession(
         Timing.start("abrir ${media.platform} ${media.id.take(30)}")
         saveProgress()
         _current.value?.let { prev -> if (prev.key != media.key) played = (played + prev).takeLast(30) }
-        if (_current.value?.key != media.key) _loop.value = false
+        if (_current.value?.key != media.key) {
+            _loop.value = false
+            adSwitches = 0
+        }
         if (upNext != null) _upNext.value = upNext
         _current.value = media
         _load.value = LoadState.Loading
@@ -328,6 +366,9 @@ class PlaybackSession(
 
     private companion object {
         const val NEXT_PREPARE_DELAY_MS = 8_000L
+
+        /** Trocas de servidor sem anúncio por live, no máximo. */
+        const val MAX_AD_SWITCHES = 3
     }
 
     fun close() {

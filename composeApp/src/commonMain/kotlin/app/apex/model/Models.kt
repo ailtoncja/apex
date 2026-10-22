@@ -75,6 +75,15 @@ enum class ClipSort(val label: String) { Popular("Mais vistos"), Recent("Mais re
 enum class ChannelSort(val label: String) { Recent("Mais recentes"), Popular("Mais vistos"), Oldest("Mais antigos") }
 
 /**
+ * A ordem da aba "Playlists" de um canal do YouTube. As duas primeiras são as do próprio YouTube (criação e último vídeo adicionado);
+ * "Mais antigas" e "A–Z" são feitas aqui, com a lista inteira.
+ */
+enum class PlaylistSort(val label: String) { Created("Mais recentes"), Updated("Atualizadas recentemente"), Oldest("Mais antigas"), Name("A–Z") }
+
+/** Como os vídeos de uma playlist aparecem: na ordem dela (`null`) ou numa das ordens de [ChannelSort]. */
+fun playlistOrder(items: List<Media>, sort: ChannelSort?): List<Media> = if (sort == null) items else sortedBy(items, sort)
+
+/**
  * [items] (o resultado de uma busca no canal) na ordem [sort]: pela data de publicação ou pelas visualizações. Quem não informa a data (ou as
  * visualizações) vai para o fim, na ordem em que veio.
  */

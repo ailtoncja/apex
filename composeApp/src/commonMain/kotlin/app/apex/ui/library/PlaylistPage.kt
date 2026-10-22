@@ -58,6 +58,9 @@ import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
 import app.apex.model.Channel
 import app.apex.model.Media
+import app.apex.model.ChannelSort
+import app.apex.model.playlistOrder
+import app.apex.ui.components.ChipRow
 import app.apex.source.PlaylistInfo
 import androidx.compose.material.icons.rounded.Search
 import app.apex.ui.components.FilterTextField
@@ -102,11 +105,16 @@ private fun PlaylistPageLayout(
     val listState = rememberLazyListState()
     OnNearEnd(listState) { onNearEnd() }
     val unique = items.distinctBy { it.key }
-    // Pesquisar dentro da playlist: pelo título e pelo canal; enquanto há texto, vai buscando as páginas que faltam para achar tudo.
+    // A ordem: a da playlist (`null`) ou mais recentes, mais vistos, mais antigos. "Reproduzir tudo" e "Aleatório" seguem a ordem escolhida.
+    var order by remember { mutableStateOf<ChannelSort?>(null) }
+    val ordered = remember(unique, order) { playlistOrder(unique, order) }
+    // Pesquisar dentro da playlist: pelo título e pelo canal; enquanto há texto (ou uma ordem escolhida), vai buscando as páginas que faltam
+    // para achar e ordenar tudo.
     var query by remember { mutableStateOf("") }
     val words = remember(query) { searchWords(query) }
-    val shown = if (words.isEmpty()) unique else unique.filter { matchesWords(words, it.title, it.channel?.name) }
-    LaunchedEffect(words.isNotEmpty(), unique.size, loading) { if (words.isNotEmpty() && !loading) onNearEnd() }
+    val shown = if (words.isEmpty()) ordered else ordered.filter { matchesWords(words, it.title, it.channel?.name) }
+    val needAll = words.isNotEmpty() || order != null
+    LaunchedEffect(needAll, unique.size, loading) { if (needAll && !loading) onNearEnd() }
 
     val header: @Composable (Modifier) -> Unit = { modifier ->
         Column(
@@ -137,10 +145,10 @@ private fun PlaylistPageLayout(
             Text(line, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (unique.isNotEmpty()) {
-                    ActionButton("Reproduzir tudo", { app.openMedia(unique.first(), unique.drop(1)) }, icon = Icons.Rounded.PlayArrow, primary = true)
+                    ActionButton("Reproduzir tudo", { app.openMedia(ordered.first(), ordered.drop(1)) }, icon = Icons.Rounded.PlayArrow, primary = true)
                     ActionButton("Aleatório", { unique.shuffled().let { app.openMedia(it.first(), it.drop(1)) } }, icon = Icons.Rounded.Shuffle)
                     // A playlist como música de fundo: toca só o som, enquanto a pessoa assiste a outra coisa.
-                    ActionButton("Ouvir em segundo plano", { app.background.playAll(unique); app.toast("Tocando em segundo plano") }, icon = Icons.Rounded.Headphones)
+                    ActionButton("Ouvir em segundo plano", { app.background.playAll(ordered); app.toast("Tocando em segundo plano") }, icon = Icons.Rounded.Headphones)
                 }
                 actions()
             }
@@ -164,6 +172,12 @@ private fun PlaylistPageLayout(
             if (unique.size > 6 || query.isNotEmpty()) scope.item("filter") {
                 FilterTextField(query, { query = it }, "Pesquisar nesta playlist", Modifier.fillMaxWidth().padding(start = 34.dp))
             }
+            if (unique.size > 1) scope.item("order") {
+                val options = listOf<ChannelSort?>(null) + ChannelSort.entries
+                Box(Modifier.padding(start = 34.dp)) {
+                    ChipRow(options.map { it?.label ?: "Ordem da playlist" }, options.indexOf(order), { i -> order = options[i] })
+                }
+            }
             if (words.isNotEmpty() && shown.isEmpty() && unique.isNotEmpty() && !loading) scope.item("no-match") {
                 EmptyState(Icons.Rounded.Search, "Nada encontrado", "Nenhum vídeo desta playlist combina com “${query.trim()}”.", alignStart = true)
             }
@@ -173,8 +187,9 @@ private fun PlaylistPageLayout(
                         "${unique.indexOf(m) + 1}", Modifier.width(34.dp), style = MaterialTheme.typography.labelLarge,
                         color = ApexColors.Muted, textAlign = TextAlign.Center,
                     )
+                    // O número é a posição na playlist (mesmo numa outra ordem); o "a seguir" segue a ordem da tela.
                     VideoRow(
-                        m, Modifier.weight(1f), thumbWidth = 168.dp, compact = true, upNext = unique.filter { it.key != m.key },
+                        m, Modifier.weight(1f), thumbWidth = 168.dp, compact = true, upNext = ordered.dropWhile { it.key != m.key }.drop(1),
                         trailing = trailing?.invoke(m),
                     )
                 }

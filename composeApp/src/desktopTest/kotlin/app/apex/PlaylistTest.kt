@@ -64,6 +64,47 @@ class PlaylistTest {
         assertEquals("https://i.ytimg.com/vi/bbb/b.jpg", playlists[1].thumbnailUrl)
     }
 
+    @Test
+    fun ordens_das_playlists_do_canal_e_dos_videos_de_uma_playlist() {
+        val recentFirst = listOf(
+            app.apex.source.RemotePlaylist("p3", "dragon's Dogma 2", null, null),
+            app.apex.source.RemotePlaylist("p2", "Borderlands 4", null, null),
+            app.apex.source.RemotePlaylist("p1", "  Elden Ring", null, null),
+        )
+        assertEquals(listOf("p3", "p2", "p1"), app.apex.source.orderPlaylists(recentFirst, app.apex.model.PlaylistSort.Created).map { it.id })
+        assertEquals(listOf("p1", "p2", "p3"), app.apex.source.orderPlaylists(recentFirst, app.apex.model.PlaylistSort.Oldest).map { it.id })
+        assertEquals(listOf("p2", "p3", "p1"), app.apex.source.orderPlaylists(recentFirst, app.apex.model.PlaylistSort.Name).map { it.id }, "A–Z sem diferença de maiúsculas e espaços")
+
+        val inPlaylist = listOf(video(1).copy(publishedAt = 1_000, viewCount = 5), video(2).copy(publishedAt = 3_000, viewCount = 50), video(3).copy(publishedAt = 2_000, viewCount = 500))
+        assertEquals(inPlaylist, app.apex.model.playlistOrder(inPlaylist, null), "sem ordem escolhida, a da playlist")
+        assertEquals(listOf(2, 3, 1), app.apex.model.playlistOrder(inPlaylist, app.apex.model.ChannelSort.Recent).map { inPlaylist.indexOf(it) + 1 })
+        assertEquals(listOf(1, 3, 2), app.apex.model.playlistOrder(inPlaylist, app.apex.model.ChannelSort.Oldest).map { inPlaylist.indexOf(it) + 1 })
+        assertEquals(listOf(3, 2, 1), app.apex.model.playlistOrder(inPlaylist, app.apex.model.ChannelSort.Popular).map { inPlaylist.indexOf(it) + 1 })
+    }
+
+    @Test
+    fun a_playlist_que_o_youtube_mostra_como_serie_tambem_aparece() {
+        // Como "Dragon's Dogma 2 - Resumão (Mago)" do Cantinho do Exploit (10/2026): cartão do tipo SHOW, com "N episódios".
+        val root = parseJson(
+            """{"a":[
+              {"lockupViewModel":{"contentId":"PLTR8B0IW8mAo","contentType":"LOCKUP_CONTENT_TYPE_SHOW",
+                "metadata":{"lockupMetadataViewModel":{"title":{"content":"Dragon's Dogma 2 - Resumão (Mago)"}}},
+                "contentImage":{"collectionThumbnailViewModel":{"primaryThumbnail":{"thumbnailViewModel":{
+                  "image":{"sources":[{"url":"https://i.ytimg.com/tvfilm_banner/PLTR8B0IW8mAo/16_9_.jpg"}]},
+                  "overlays":[{"thumbnailOverlayBadgeViewModel":{"thumbnailBadges":[{"thumbnailBadgeViewModel":{"text":"14 episódios"}}]}}]}}}}}},
+              {"lockupViewModel":{"contentId":"PLvelha","contentType":"LOCKUP_CONTENT_TYPE_PLAYLIST",
+                "metadata":{"lockupMetadataViewModel":{"title":{"content":"Borderlands 4"}}}}},
+              {"lockupViewModel":{"contentId":"PLWieWKZeFoVTrnO2YfbHmCFZVcm0CgDZ5","contentType":"LOCKUP_CONTENT_TYPE_PODCAST",
+                "metadata":{"lockupMetadataViewModel":{"title":{"content":"Flow Podcast (como no canal do Flow)"}}}}}
+            ]}""",
+        )!!
+        val playlists = YouTubeSource(InnerTube()).parsePlaylists(root)
+        assertEquals(listOf("PLTR8B0IW8mAo", "PLvelha", "PLWieWKZeFoVTrnO2YfbHmCFZVcm0CgDZ5"), playlists.map { it.id }, "série e podcast também, na ordem do YouTube")
+        assertEquals("Dragon's Dogma 2 - Resumão (Mago)", playlists[0].title)
+        assertEquals("14 vídeos", playlists[0].countText)
+        assertEquals("https://i.ytimg.com/tvfilm_banner/PLTR8B0IW8mAo/16_9_.jpg", playlists[0].thumbnailUrl)
+    }
+
     private fun video(i: Int) = Media(
         Platform.YouTube, "vid%08d".format(i), "Título longo do vídeo número $i para ocupar espaço na lista",
         channel = Channel(Platform.YouTube, "UCcanal", "Canal", "https://yt3.ggpht.com/avatar-bem-comprido-$i", "@canal", 123_456, true, "https://www.youtube.com/channel/UCcanal"),

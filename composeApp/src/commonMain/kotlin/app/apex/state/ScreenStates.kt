@@ -9,6 +9,7 @@ import app.apex.model.Channel
 import app.apex.model.ChannelDetails
 import app.apex.model.ChannelSort
 import app.apex.model.sortedBy
+import app.apex.model.PlaylistSort
 import app.apex.model.ClipSort
 import app.apex.model.Comment
 import app.apex.source.CommentPoster
@@ -524,11 +525,25 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
         }
     }
 
-    /** Playlists do canal (só YouTube). */
+    /** Playlists do canal (só YouTube), das criadas mais recentemente para as mais antigas. */
     val playlists = Paged<RemotePlaylist>(app.scope, { it.id }) { token ->
         if (seed.platform != Platform.YouTube) Page(emptyList(), null)
         else app.youtube.channelPlaylists(seed.id, token).let { Page(it.items, it.continuation) }
     }
+
+    /** As mesmas, na ordem "último vídeo adicionado" do YouTube. */
+    private val playlistsByUpdate by lazy {
+        Paged<RemotePlaylist>(app.scope, { it.id }) { token ->
+            if (seed.platform != Platform.YouTube) Page(emptyList(), null)
+            else app.youtube.channelPlaylists(seed.id, token, byLastAdded = true).let { Page(it.items, it.continuation) }
+        }
+    }
+
+    /** A ordem escolhida na aba "Playlists". */
+    var playlistSort by mutableStateOf(PlaylistSort.Created)
+
+    /** De onde vêm as playlists na ordem [sort]: "Mais antigas" e "A–Z" reordenam aqui a lista das mais recentes (ver [orderPlaylists]). */
+    fun playlistsBy(sort: PlaylistSort): Paged<RemotePlaylist> = if (sort == PlaylistSort.Updated) playlistsByUpdate else playlists
 
     // ---------- ordem das listas (como os filtros "Mais recentes / Mais vistos / Mais antigos" do YouTube) ----------
 

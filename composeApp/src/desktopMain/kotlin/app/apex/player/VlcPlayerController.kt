@@ -61,6 +61,9 @@ internal const val EDGE_KEEP_WITH_PREFETCH = 1
 /** O buffer do VLC pela lista curta. */
 internal const val EDGE_CACHE_MS = 500
 
+/** O buffer do VLC pelo fluxo contínuo. */
+internal const val RELAY_CACHE_MS = 500
+
 private val DOWNSCALE: SamplingMode = FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR)
 private val UPSCALE: SamplingMode = SamplingMode.CATMULL_ROM
 
@@ -69,7 +72,7 @@ private val UPSCALE: SamplingMode = SamplingMode.CATMULL_ROM
  * declara segmentos de 6 s) e ainda guarda 3 s; com [PlaySource.lowLatency] ele começa 3 segmentos (~6 s) antes, o mínimo que o VLC
  * aceita, e guarda 1 s (medido nos logs do próprio VLC: de ~19 s para ~7 s de atraso).
  */
-internal fun vlcOptions(source: PlaySource, viaEdge: Boolean = false): List<String> = buildList {
+internal fun vlcOptions(source: PlaySource, viaEdge: Boolean = false, viaRelay: Boolean = false): List<String> = buildList {
     source.audioUrl?.let { add(":input-slave=$it") }
     source.userAgent?.let { add(":http-user-agent=$it") }
     if (source.startMs > 1000) add(":start-time=${source.startMs / 1000.0}")
@@ -78,6 +81,12 @@ internal fun vlcOptions(source: PlaySource, viaEdge: Boolean = false): List<Stri
     if (source.audioOnly) add(":no-video")
     when {
         !source.live -> add(":network-caching=1500")
+        // Pelo fluxo contínuo ([LiveTsRelay]) o vídeo chega conforme é gerado: um buffer pequeno, e o VLC já sabe que é MPEG-TS (não perde
+        // tempo adivinhando o formato).
+        viaRelay -> {
+            add(":network-caching=$RELAY_CACHE_MS")
+            add(":demux=ts")
+        }
         // Pela lista curta ([LiveEdgeProxy]) o VLC já começa perto do fim: só o buffer pequeno.
         viaEdge -> add(":network-caching=$EDGE_CACHE_MS")
         source.lowLatency -> {
@@ -145,9 +154,22 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         /** Relógio sem nenhum quadro de vídeo (com o VLC tocando e sem buffer a encher): passado isso, o vídeo é reaberto uma vez em [SAFE_MODE_OPTIONS]. */
         const val NO_PICTURE_MS = 6_000L
         const val CATCH_UP_START_MS = 1_500L
+        const val RELAY_CATCH_UP_START_MS = 300L
+        const val RELAY_CATCH_UP_STOP_MS = 100L
+
+        /** Atraso medido abaixo disto é erro de medida (só o buffer do VLC já é isso). */
+        const val MIN_PLAUSIBLE_LATENCY_MS = RELAY_CACHE_MS.toLong()
         const val CATCH_UP_STOP_MS = 400L
         const val CATCH_UP_MAX_MS = 20_000L
         const val CATCH_UP_RATE = 1.05f
+
+        /** Numa live, quanto tempo escondido antes de desligar a imagem no VLC (ver [requestHide]). */
+        const val LIVE_HIDE_GRACE_MS = 60_000L
+
+        /** Live aberta sem trechos adiantados (anúncio da Twitch): de quanto em quanto a lista é consultada, e por quanto tempo no máximo. */
+        const val PREFETCH_POLL_MS = 1_000L
+        const val PREFETCH_WAIT_MS = 180_000L
+
 
         /** Quanto [release] espera o VLC soltar o player de fato (ao fechar o app, para o processo não sair no meio disso). */
         const val RELEASE_WAIT_MS = 1_500L
@@ -207,7 +229,21 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     /** Só para medir: quando a imagem foi religada (para marcar quanto ela levou para voltar). */
     @Volatile private var reshownAt = 0L
 
-    private val viewingListener: (Viewing) -> Unit = { v -> if (v == Viewing.Hidden) requestHide() else vlc { showVideo() } }
+    /** Desde quando o Apex está escondido ([Viewing.Hidden]); `-1` = à vista. */
+    @Volatile private var hiddenSinceMs = -1L
+
+    /** A imagem foi religada numa live e o quadro novo ainda não veio: até ele chegar, o player mostra "carregando" (não a imagem velha parada). */
+    @Volatile private var awaitingPicture = false
+
+    private val viewingListener: (Viewing) -> Unit = { v ->
+        if (v == Viewing.Hidden) {
+            if (hiddenSinceMs < 0) hiddenSinceMs = System.currentTimeMillis()
+            requestHide()
+        } else {
+            hiddenSinceMs = -1
+            vlc { showVideo() }
+        }
+    }
 
     init {
         ViewingWatch.listeners += viewingListener
@@ -222,6 +258,11 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
 
     private fun requestHide() {
         if (hideQueued || videoOff || !canDropVideoTrack()) return
+        // Numa live, religar a imagem espera o próximo quadro-chave (até 2 s na Twitch), e nesse tempo a imagem de antes ficava parada na tela:
+        // a cada troca rápida de janela a live parecia travar. Só depois de [LIVE_HIDE_GRACE_MS] escondido a imagem é desligada; até lá o VLC
+        // segue decodificando, mas nenhum quadro é copiado nem desenhado.
+        val since = hiddenSinceMs
+        if (lastSource?.live == true && (since < 0 || System.currentTimeMillis() - since < LIVE_HIDE_GRACE_MS)) return
         hideQueued = true
         vlc {
             hideQueued = false
@@ -247,6 +288,12 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         noPictureSinceMs = -1
         mediaPlayer.video().setTrack(savedVideoTrack)
         if (lastSource?.live == false && _state.value.durationMs > 0) mediaPlayer.controls().setTime(mediaPlayer.status().time())
+        // Numa live a imagem volta no próximo quadro-chave: até lá, "carregando" em vez da imagem de quando o Apex foi escondido, parada.
+        if (lastSource?.live == true) {
+            awaitingPicture = true
+            clearFrame()
+            _state.update { it.copy(loading = true) }
+        }
         if (Timing.enabled) reshownAt = System.currentTimeMillis()
         Timing.mark("imagem religada")
     }
@@ -315,7 +362,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
 
     /** Trabalho de rede do player (a lista curta da live). */
     private val netScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    @Volatile private var edge: LiveEdgeProxy? = null
+    @Volatile private var edge: LowLatencyFeed? = null
     @Volatile private var retriedWithoutPicture = false
 
     init {
@@ -346,7 +393,8 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                 if (stale()) return
                 Timing.mark("VLC tocando")
                 liveTimeStart = -1 // voltou a tocar (ou começou): a conta do atraso recomeça
-                if (desiredRate != 1f || catchingUp) vlc { mediaPlayer.controls().setRate(desiredRate * if (catchingUp) CATCH_UP_RATE else 1f) }
+                // Sempre: o libVLC guarda a velocidade de um vídeo para o seguinte (reabrindo a live enquanto alcançava, ela ficava em 1,05x).
+                vlc { mediaPlayer.controls().setRate(desiredRate * if (catchingUp) CATCH_UP_RATE else 1f) }
                 _state.update { it.copy(playing = true, loading = false, ended = false, error = null) }
                 if (pendingSeekMs >= 0) issuePendingSeek(_state.value.positionMs + sectionStartMs)
             }
@@ -382,7 +430,9 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                     seekTargetMs = -1
                 }
                 if (pendingSeekMs >= 0 && issuePendingSeek(newTime)) return
-                _state.update { it.copy(positionMs = (newTime - sectionStartMs).coerceAtLeast(0), behindLiveMs = trackBehind(newTime)) }
+                _state.update {
+                    it.copy(positionMs = (newTime - sectionStartMs).coerceAtLeast(0), behindLiveMs = trackBehind(newTime), liveLatencyMs = trackLatency(newTime))
+                }
                 recoverIfNoPicture(newTime)
                 if (Timing.enabled) logDrift(newTime)
                 trackLiveLag(newTime)
@@ -421,6 +471,13 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     private var liveMinDrift = 0L
     @Volatile private var catchingUp = false
 
+    /**
+     * A partir de quanto atraso acumulado ele acelera, e até quanto. Pelo fluxo contínuo o ritmo é estável (sem os soluços da lista): dá para
+     * reagir a cada travada pequena e voltar quase ao atraso do começo; senão cada uma deixava uns décimos de segundo para sempre.
+     */
+    @Volatile private var catchUpStartMs = CATCH_UP_START_MS
+    @Volatile private var catchUpStopMs = CATCH_UP_STOP_MS
+
     private fun trackLiveLag(newTime: Long) {
         val source = lastSource
         if (source == null || !source.live || !source.lowLatency || framesSincePlay == 0L || !_state.value.playing) { liveTimeStart = -1; return }
@@ -430,8 +487,8 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         if (drift < liveMinDrift) liveMinDrift = drift // o VLC pulou para a frente: a nova posição é o novo ponto de partida
         val behind = drift - liveMinDrift
         val want = when {
-            catchingUp -> behind > CATCH_UP_STOP_MS
-            else -> behind in CATCH_UP_START_MS..CATCH_UP_MAX_MS
+            catchingUp -> behind > catchUpStopMs
+            else -> behind in catchUpStartMs..CATCH_UP_MAX_MS
         }
         if (want != catchingUp) {
             catchingUp = want
@@ -439,6 +496,31 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
             val rate = desiredRate * if (want) CATCH_UP_RATE else 1f
             vlc { mediaPlayer.controls().setRate(rate) }
         }
+    }
+
+    // ---------- atraso em relação à transmissão ----------
+    // A lista diz a hora (do servidor) em que começa o trecho onde o VLC abriu, que é o que toca no primeiro aviso de tempo; dali em diante a
+    // tela está nessa hora mais o quanto o vídeo andou. O atraso é a hora do servidor agora menos essa. (Conta pelo tempo, não pelo primeiro
+    // quadro: com o Apex escondido a imagem pode nem estar sendo entregue, e o som já toca.)
+    @Volatile private var firstFrameServerMs = -1L
+    private var latencyMedia0 = -1L
+    private var latencyLoggedAt = 0L
+
+    private fun trackLatency(newTime: Long): Long? {
+        if (firstFrameServerMs < 0) edge?.startServerMs?.let { firstFrameServerMs = it; latencyMedia0 = newTime }
+        val shownAt0 = firstFrameServerMs
+        val skew = edge?.clock?.skewMs
+        if (shownAt0 < 0 || skew == null) return null
+        val now = System.currentTimeMillis()
+        if (latencyMedia0 < 0) latencyMedia0 = newTime
+        val latency = (now - skew) - (shownAt0 + (newTime - latencyMedia0))
+        if (Timing.enabled && now - latencyLoggedAt >= 5_000) {
+            latencyLoggedAt = now
+            Timing.mark("atraso agora $latency ms${if (catchingUp) " (alcançando)" else ""}")
+        }
+        // Menos que o próprio buffer do VLC não existe: é a hora dos trechos que veio errada (a Twitch a refaz depois de um anúncio). Melhor não
+        // mostrar nada que mostrar um número falso.
+        return latency.takeIf { it >= MIN_PLAUSIBLE_LATENCY_MS }
     }
 
     override fun play(source: PlaySource) = request(source, safeMode = false)
@@ -494,9 +576,12 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         liveTimeStart = -1
         behindWall0 = 0
         catchingUp = false
+        firstFrameServerMs = -1
+        latencyMedia0 = -1
         noPictureSinceMs = -1
         retriedWithoutPicture = safeMode
         videoOff = false
+        awaitingPicture = false
         savedVideoTrack = -1
         // `APEX_TEST_NOVIDEO=1` (só para ensaio): a primeira abertura sai sem vídeo, para ver a recuperação acontecer.
         val noVideo = if (!safeMode && System.getenv("APEX_TEST_NOVIDEO") == "1") listOf(":no-video") else emptyList()
@@ -506,11 +591,33 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         // Live de uma qualidade só (lista de trechos): o VLC lê uma lista curta e local, e fica perto do "ao vivo". No modo seguro vai direto.
         if (source.live && source.lowLatency && !safeMode && !source.audioOnly) {
             netScope.launch {
-                val proxy = LiveEdgeProxy(netScope, Http.client, EDGE_KEEP, EDGE_KEEP_WITH_PREFETCH)
-                val ok = proxy.start(source.videoUrl, source.userAgent?.let { mapOf("User-Agent" to it) } ?: emptyMap())
-                if (mine != generation.get()) { proxy.close(); return@launch }
-                if (ok) edge = proxy else proxy.close()
-                vlc { if (mine == generation.get()) open(mine, if (ok) proxy.url else source.videoUrl, vlcOptions(source, viaEdge = ok) + extra) }
+                val headers = source.userAgent?.let { mapOf("User-Agent" to it) } ?: emptyMap()
+                val (feed, ok) = lowLatencyFeed(source, headers, mine)
+                if (mine != generation.get()) { feed.close(); return@launch }
+                if (ok) edge = feed
+                val relay = feed is LiveTsRelay
+                catchUpStartMs = if (ok && relay) RELAY_CATCH_UP_START_MS else CATCH_UP_START_MS
+                catchUpStopMs = if (ok && relay) RELAY_CATCH_UP_STOP_MS else CATCH_UP_STOP_MS
+                val name = if (relay) "fluxo contínuo" else "lista curta"
+                Timing.mark(if (ok) "$name: ligado" else "$name: não deu (${feed.failure}), o VLC toca direto")
+                // No anúncio o VLC toca a lista da plataforma com o buffer normal: com o mínimo da baixa latência travava a cada trecho, e um
+                // anúncio não precisa estar perto do "ao vivo" (a live é reaberta quando ele acaba).
+                val played = if (!ok && feed.inAd) source.copy(lowLatency = false) else source
+                val options = vlcOptions(played, viaEdge = ok && !relay, viaRelay = ok && relay) + extra
+                vlc { if (mine == generation.get()) open(mine, if (ok) feed.url else source.videoUrl, options) }
+                // A Twitch abre a live com um anúncio, e a lista dele não tem trechos adiantados: sem isto o VLC ficaria tocando direto (e
+                // atrasado) a live inteira. Quando a lista da live chega, a live é reaberta perto do "ao vivo".
+                if (feed.noPrefetch) {
+                    val ready: (LivePlaylist) -> Boolean =
+                        if (relay) { p -> relayStart(p, RELAY_START_BACK) != null } else { p -> readyForEdge(p, EDGE_KEEP, EDGE_KEEP_WITH_PREFETCH) }
+                    val stillWanted = { mine == generation.get() && _state.value.playing }
+                    if (waitForPrefetch(Http.client, source.videoUrl, headers, ready, PREFETCH_POLL_MS, PREFETCH_WAIT_MS) { mine == generation.get() } &&
+                        stillWanted()
+                    ) {
+                        Timing.mark("a lista passou a ter trechos adiantados (fim do anúncio): reabrindo perto do ao vivo")
+                        request(source, safeMode = false)
+                    }
+                }
             }
         } else {
             // Endereços que só aceitam pedidos de um trecho (a via rápida do YouTube): o VLC toca pela ponte local, que busca em pedaços.
@@ -526,6 +633,11 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     private fun open(mine: Int, mrl: String, options: List<String>) {
         showing = true
         val started = mediaPlayer.media().play(mrl, *options.toTypedArray())
+        // Quadros do vídeo anterior ainda chegam enquanto a lista curta é preparada: a contagem (e o "primeiro quadro", onde o atraso é medido)
+        // recomeça aqui, com o novo já aberto.
+        framesSincePlay = 0
+        firstFrameServerMs = -1
+        latencyMedia0 = -1
         playingGen = mine
         if (!started && mine == generation.get()) _state.update { it.copy(loading = false, error = "Não foi possível reproduzir este vídeo.") }
     }
@@ -540,6 +652,23 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         val video = rangeProxy.register(source.videoUrl, headers, source.fullAccess) ?: return source
         val audio = source.audioUrl?.let { rangeProxy.register(it, headers, source.fullAccess) ?: return source }
         return source.copy(videoUrl = video, audioUrl = audio, userAgent = null)
+    }
+
+    /**
+     * O jeito de tocar a live perto do "ao vivo": o fluxo contínuo ([LiveTsRelay]) quando a live é MPEG-TS (Twitch e Kick); senão a lista curta
+     * ([LiveEdgeProxy]). Devolve o que tentou por último e se abriu (fechado se não abriu; o motivo fica em [LowLatencyFeed.failure]).
+     */
+    private suspend fun lowLatencyFeed(source: PlaySource, headers: Map<String, String>, mine: Int): Pair<LowLatencyFeed, Boolean> {
+        val url = source.videoUrl
+        // Numa troca de vídeo (anúncio) o fluxo para: a live é reaberta (ver LiveTsRelay).
+        val relay = LiveTsRelay(netScope, Http.client) { if (mine == generation.get()) request(source, safeMode = false) }
+        if (relay.start(url, headers)) return relay to true
+        relay.close()
+        if (!relay.fmp4) return relay to false
+        val proxy = LiveEdgeProxy(netScope, Http.client, EDGE_KEEP, EDGE_KEEP_WITH_PREFETCH)
+        val ok = proxy.start(url, headers)
+        if (!ok) proxy.close()
+        return proxy to ok
     }
 
     private fun closeEdge() {
@@ -803,6 +932,10 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                 Viewing.Normal -> {}
             }
             if (reshownAt > 0) { Timing.mark("imagem de volta ${System.currentTimeMillis() - reshownAt} ms depois de religar"); reshownAt = 0 }
+            if (awaitingPicture) {
+                awaitingPicture = false
+                _state.update { it.copy(loading = false) }
+            }
             val info = imageInfo ?: return
             val t0 = if (FrameMeter.enabled) System.nanoTime() else 0L
             nativeBuffers[0].rewind()
@@ -825,9 +958,10 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
             }
             if (framesSincePlay++ == 0L) {
                 Timing.mark("primeiro quadro (${info.width}x${info.height})")
-                edge?.estimate?.let { e ->
-                    val serverNow = System.currentTimeMillis() - e.skewMs
-                    Timing.mark("atraso estimado ${serverNow - e.trimmedStartServerMs} ms (direto no VLC seria ${serverNow - e.directStartServerMs} ms)")
+                edge?.let { feed ->
+                    val shown = feed.startServerMs ?: return@let
+                    val skew = feed.clock.skewMs ?: return@let
+                    Timing.mark("atraso no primeiro quadro: ${System.currentTimeMillis() - skew - shown} ms")
                 }
             }
             frameTick++

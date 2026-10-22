@@ -1,5 +1,6 @@
 package app.apex.ui.multi
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -79,6 +80,10 @@ import app.apex.model.Platform
 import app.apex.multi.MultiStream
 import app.apex.multi.Tile
 import app.apex.player.LoadState
+import app.apex.player.NORMAL_VOLUME
+import app.apex.player.maxVolume
+import app.apex.player.sliderFromVolume
+import app.apex.player.volumeFromSlider
 import app.apex.theme.ApexColors
 import app.apex.theme.color
 import app.apex.ui.components.ActionButton
@@ -86,8 +91,10 @@ import app.apex.ui.components.Avatar
 import app.apex.ui.components.ChipBar
 import app.apex.ui.components.EmptyState
 import app.apex.ui.components.IconBtn
+import app.apex.ui.components.ResolutionBadge
 import app.apex.ui.watch.ChatPanel
 import app.apex.ui.watch.LiveEdgeButton
+import app.apex.ui.watch.MiniSlider
 import app.apex.util.Timing
 import app.apex.util.formatCount
 
@@ -333,6 +340,8 @@ private fun TileView(tile: Tile, audioOn: Boolean, chatOn: Boolean, focused: Boo
         ) {
             Box(Modifier.size(9.dp).background(media.platform.color(), CircleShape))
             Text(media.channel?.name ?: media.id, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // A resolução que está tocando de verdade (HD, 2K, 4K).
+            ResolutionBadge(ps.videoHeight, Modifier.testTag("tile-resolution-${tile.key}"))
             // Espectadores e título só da live que está no ar (os guardados são da última vez e enganam num canal offline).
             if (load !is LoadState.Error) {
                 media.viewCount?.let { Text("${formatCount(it)} assistindo", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1) }
@@ -348,11 +357,7 @@ private fun TileView(tile: Tile, audioOn: Boolean, chatOn: Boolean, focused: Boo
             Modifier.align(Alignment.BottomEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(50)).padding(horizontal = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            IconBtn(
-                if (audioOn) Icons.Rounded.VolumeUp else Icons.Rounded.VolumeOff, if (audioOn) "Silenciar" else "Som nesta live",
-                { multi.toggleAudio(tile.key) }, Modifier.testTag("tile-audio-${tile.key}"), size = 32.dp, iconSize = 18.dp,
-                tint = if (audioOn) ApexColors.Accent else Color.White,
-            )
+            TileVolume(tile, audioOn)
             IconBtn(
                 Icons.Rounded.Chat, if (chatOn) "Esconder o chat" else "Chat desta live",
                 { if (chatOn) app.ui.multiChat = false else { multi.setChat(tile.key); app.ui.multiChat = true } },
@@ -363,6 +368,40 @@ private fun TileView(tile: Tile, audioOn: Boolean, chatOn: Boolean, focused: Boo
                 { multi.toggleFocus(tile.key) }, Modifier.testTag("tile-focus-${tile.key}"), size = 32.dp, iconSize = 16.dp, tint = Color.White,
             )
             IconBtn(Icons.Rounded.Close, "Remover do Multi", { multi.remove(tile.key) }, Modifier.testTag("tile-remove-${tile.key}"), size = 32.dp, iconSize = 18.dp, tint = Color.White)
+        }
+    }
+}
+
+/**
+ * O som de uma live do Multi: o botão liga e desliga; passando o mouse aparece o volume só dela (cada live tem o seu, para equilibrar um
+ * streamer alto com um baixo). Com o reforço dos Ajustes vai até 200%.
+ */
+@Composable
+private fun TileVolume(tile: Tile, audioOn: Boolean) {
+    val app = LocalApp.current
+    val multi = app.multi
+    val volumes by multi.volumes.collectAsState()
+    val settings by app.data.settings.collectAsState()
+    val volume = volumes[tile.key] ?: settings.volume
+    val max = maxVolume(settings.volumeBoost)
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    Row(Modifier.hoverable(source), verticalAlignment = Alignment.CenterVertically) {
+        IconBtn(
+            if (audioOn) Icons.Rounded.VolumeUp else Icons.Rounded.VolumeOff, if (audioOn) "Silenciar" else "Som nesta live",
+            { multi.toggleAudio(tile.key) }, Modifier.testTag("tile-audio-${tile.key}"), size = 32.dp, iconSize = 18.dp,
+            tint = if (audioOn) ApexColors.Accent else Color.White,
+        )
+        AnimatedVisibility(hovered) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                MiniSlider(
+                    if (audioOn) sliderFromVolume(volume, max) else 0f,
+                    { v -> multi.setVolume(tile.key, volumeFromSlider(v, max)) },
+                    Modifier.width(80.dp).padding(horizontal = 4.dp).testTag("tile-volume-${tile.key}"),
+                    markAt = if (max > NORMAL_VOLUME) sliderFromVolume(NORMAL_VOLUME, max) else null,
+                )
+                Text(if (audioOn) "$volume%" else "0%", Modifier.width(38.dp), color = Color.White, fontSize = 11.sp)
+            }
         }
     }
 }

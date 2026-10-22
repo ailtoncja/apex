@@ -23,8 +23,13 @@ import kotlinx.serialization.json.JsonElement
 /** De onde vem um emote: os da própria plataforma e os das extensões que a comunidade da Twitch usa. */
 enum class EmoteProvider(val label: String) { Twitch("Twitch"), SevenTv("7TV"), Bttv("BetterTTV"), Ffz("FrankerFaceZ"), Kick("Kick") }
 
-/** Um emote das extensões (7TV, BetterTTV, FrankerFaceZ): a palavra [name] no chat vira a imagem [url] (largura/altura [ratio]). */
-data class Emote(val name: String, val url: String, val ratio: Float = 1f, val provider: EmoteProvider, val animated: Boolean = false)
+/**
+ * Um emote: a palavra [name] no chat vira a imagem [url] (largura/altura [ratio]). [sendAs] é como ele vai na mensagem quando não basta o nome
+ * (a Kick pede `[emote:id:nome]`); `null` = o nome.
+ */
+data class Emote(
+    val name: String, val url: String, val ratio: Float = 1f, val provider: EmoteProvider, val animated: Boolean = false, val sendAs: String? = null,
+)
 
 /**
  * A proporção de cada imagem de emote, aprendida quando ela carrega (a BetterTTV não informa o tamanho, e emotes largos são comuns): o texto
@@ -146,8 +151,11 @@ internal fun parseFfzEmotes(list: List<JsonElement>): List<Emote> = list.mapNotN
     Emote(code, url, 1f, EmoteProvider.Ffz, e["animated"].bool() == true)
 }
 
-/** Os emotes das extensões de um canal, já na ordem em que valem: os do canal antes dos globais, e 7TV, depois BetterTTV, depois FrankerFaceZ. */
-class ChannelEmotes(val channel: List<Emote>, val global: List<Emote>) {
+/**
+ * Os emotes de um canal, já na ordem em que valem: os do canal antes dos globais, e 7TV, depois BetterTTV, depois FrankerFaceZ. [mine] são os
+ * que a conta logada pode usar além desses (na Twitch: os dos canais em que é inscrita).
+ */
+class ChannelEmotes(val channel: List<Emote>, val global: List<Emote>, val mine: List<Emote> = emptyList()) {
     /** O nome de cada emote para a imagem que vale (o primeiro da ordem acima ganha quando dois têm o mesmo nome). */
     val byName: Map<String, Emote> = buildMap { (global.reversed() + channel.reversed()).forEach { put(it.name, it) } }
 
@@ -187,23 +195,41 @@ class ExtensionEmotes(private val http: HttpClient = Http.client) {
     }
 
     /** Os emotes das extensões para o canal da Twitch de id [twitchUserId] (o número, não o nome). */
-    suspend fun forTwitchChannel(twitchUserId: String): ChannelEmotes {
-        val existing = lock.withLock { channels[twitchUserId] }
+    suspend fun forTwitchChannel(twitchUserId: String): ChannelEmotes = cached("twitch:$twitchUserId") {
+        val seven = async { parse7tvEmotes(json("https://7tv.io/v3/users/twitch/$twitchUserId")?.get("emote_set")) }
+        val bttv = async {
+            val user = json("https://api.betterttv.net/3/cached/users/twitch/$twitchUserId")
+            parseBttvEmotes(user["channelEmotes"].list() + user["sharedEmotes"].list())
+        }
+        val ffz = async { parseFfzEmotes(json("https://api.betterttv.net/3/cached/frankerfacez/users/twitch/$twitchUserId").list()) }
+        seven.await() + bttv.await() + ffz.await()
+    }
+
+    /**
+     * Os emotes das extensões para um canal da Kick (o número do usuário dele) ou do YouTube (o id UC…): a 7TV atende as duas plataformas (a
+     * BetterTTV e a FrankerFaceZ só a Twitch); os globais das três valem em qualquer chat.
+     */
+    suspend fun forKickChannel(kickUserId: Long): ChannelEmotes = cached("kick:$kickUserId") {
+        parse7tvEmotes(json("https://7tv.io/v3/users/kick/$kickUserId")?.get("emote_set"))
+    }
+
+    suspend fun forYouTubeChannel(channelId: String): ChannelEmotes = cached("youtube:$channelId") {
+        parse7tvEmotes(json("https://7tv.io/v3/users/youtube/$channelId")?.get("emote_set"))
+    }
+
+    /** Os emotes do canal [key] (buscados uma vez por canal) junto com os globais. */
+    private suspend fun cached(key: String, load: suspend kotlinx.coroutines.CoroutineScope.() -> List<Emote>): ChannelEmotes {
+        val existing = lock.withLock { channels[key] }
         if (existing != null) return existing.await()
         val mine = CompletableDeferred<ChannelEmotes>()
-        val winner = lock.withLock { channels.getOrPut(twitchUserId) { mine } }
+        val winner = lock.withLock { channels.getOrPut(key) { mine } }
         if (winner !== mine) return winner.await()
         val result = coroutineScope {
             val glob = async { globals() }
-            val seven = async { parse7tvEmotes(json("https://7tv.io/v3/users/twitch/$twitchUserId")?.get("emote_set")) }
-            val bttv = async {
-                val user = json("https://api.betterttv.net/3/cached/users/twitch/$twitchUserId")
-                parseBttvEmotes(user["channelEmotes"].list() + user["sharedEmotes"].list())
-            }
-            val ffz = async { parseFfzEmotes(json("https://api.betterttv.net/3/cached/frankerfacez/users/twitch/$twitchUserId").list()) }
-            ChannelEmotes(seven.await() + bttv.await() + ffz.await(), glob.await())
+            val own = async { load() }
+            ChannelEmotes(own.await(), glob.await())
         }
-        Timing.mark("emotes: canal $twitchUserId com ${result.channel.size} das extensões")
+        Timing.mark("emotes: canal $key com ${result.channel.size} das extensões")
         mine.complete(result)
         return result
     }

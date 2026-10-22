@@ -2,12 +2,9 @@ package app.apex.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -25,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.Codec
@@ -50,16 +48,6 @@ private class EmoteFrames(val frames: List<Image>, val durations: IntArray) {
             t -= durations[i]
         }
         return frames.lastIndex
-    }
-
-    /** Quanto falta para o quadro mudar. */
-    fun untilNext(nowMs: Long): Long {
-        var t = (nowMs % loopMs).toInt()
-        for (d in durations) {
-            if (t < d) return (d - t).toLong()
-            t -= d
-        }
-        return 16
     }
 }
 
@@ -167,21 +155,59 @@ private object EmoteCache {
 private val DOWNSCALE: SamplingMode = FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR)
 private val UPSCALE: SamplingMode = SamplingMode.CATMULL_ROM
 
+/**
+ * O relógio único dos emotes animados. Antes cada emote tinha o seu, no tempo de cada quadro: com dezenas de emotes diferentes no chat a
+ * janela era redesenhada perto de 160 vezes por segundo (medido), roubando placa de vídeo e processador de um jogo aberto. Agora todos andam
+ * juntos a [ANIMATION_FPS] quadros por segundo (o ritmo de um GIF comum), a metade disso com um jogo em outro monitor, e param com o Apex
+ * escondido. Só anda enquanto algum emote animado está na tela.
+ */
+private object EmoteClock {
+    const val ANIMATION_FPS = 20
+
+    /** A hora (ms) que os emotes desenham agora: ler isto no desenho redesenha o emote quando muda. */
+    var now by androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis())
+        private set
+
+    private val users = java.util.concurrent.atomic.AtomicInteger()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var ticker: kotlinx.coroutines.Job? = null
+
+    @Synchronized
+    fun subscribe() {
+        if (users.incrementAndGet() == 1 && ticker?.isActive != true) {
+            ticker = scope.launch {
+                while (users.get() > 0) {
+                    val step = when (app.apex.player.ViewingWatch.viewing) {
+                        app.apex.player.Viewing.Normal -> 1000L / ANIMATION_FPS
+                        app.apex.player.Viewing.Gaming -> 2000L / ANIMATION_FPS
+                        app.apex.player.Viewing.Hidden -> 500L // parado: só confere de vez em quando se voltou à vista
+                    }
+                    if (app.apex.player.ViewingWatch.viewing != app.apex.player.Viewing.Hidden) now = System.currentTimeMillis()
+                    delay(step)
+                }
+            }
+        }
+    }
+
+    fun unsubscribe() {
+        users.decrementAndGet()
+    }
+}
+
 @Composable
 actual fun EmoteImage(url: String, modifier: Modifier) {
     val loaded by produceState<EmoteFrames?>(null, url) { value = EmoteCache.get(url).await() }
     val frames = loaded
-    var index by remember(frames) { mutableIntStateOf(0) }
-    if (frames != null && frames.frames.size > 1) {
-        LaunchedEffect(frames) {
-            while (true) {
-                val now = System.currentTimeMillis()
-                index = frames.indexAt(now)
-                delay(frames.untilNext(now).coerceAtLeast(10))
-            }
+    val animated = frames != null && frames.frames.size > 1
+    if (animated) {
+        androidx.compose.runtime.DisposableEffect(frames) {
+            EmoteClock.subscribe()
+            onDispose { EmoteClock.unsubscribe() }
         }
     }
     Canvas(modifier) {
+        // Lido aqui, no desenho: o relógio só redesenha o emote, sem recompor nada.
+        val index = if (animated) frames!!.indexAt(EmoteClock.now) else 0
         val image = frames?.frames?.getOrNull(index) ?: return@Canvas
         // Cabe no espaço sem esticar, centralizado; reduzido com suavização (a imagem é a 2x).
         val scale = min(size.width / image.width, size.height / image.height)

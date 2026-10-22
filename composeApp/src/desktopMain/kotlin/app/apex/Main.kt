@@ -87,7 +87,7 @@ private object AppIcon : Painter() {
     }
 }
 
-/** O Apex não conseguiu abrir. O motivo mais comum: o VLC (o player) não está instalado. */
+/** O Apex não conseguiu abrir. O motivo mais comum: o VLC (o player) não carregou (a cópia que vem com o app faltando e nenhum instalado). */
 @Composable
 private fun StartupProblem(error: Throwable) {
     val vlc = error.message?.contains("vlc", ignoreCase = true) == true || error is UnsatisfiedLinkError
@@ -99,7 +99,7 @@ private fun StartupProblem(error: Throwable) {
             Text(if (vlc) "O Apex precisa do VLC" else "Não foi possível abrir o Apex", style = MaterialTheme.typography.headlineSmall, color = Color.White)
             Spacer(Modifier.height(12.dp))
             Text(
-                if (vlc) "O player do Apex usa o VLC (versão de 64 bits), que é gratuito e não foi encontrado neste computador. Instale o VLC e abra o Apex de novo."
+                if (vlc) "O player do Apex usa o VLC, que vem junto com o app mas não abriu (a pasta do Apex pode estar incompleta). Reinstale o Apex ou instale o VLC (versão de 64 bits) e abra o Apex de novo."
                 else "Algo impediu o Apex de iniciar. Feche e abra de novo; se continuar, avise quem mantém o app e informe o texto abaixo.",
                 color = ApexColors.Muted, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 520.dp),
             )
@@ -165,7 +165,10 @@ private fun selfTest(updateRehearsal: Boolean = false): Nothing {
             "HTTP ${status.status.value}"
         }
     }
-    step("vlc") { VlcPlayerController(hardwareDecode = false).also { it.release() }.let { "libVLC carregou (${loadedVlcVersion()})" } }
+    step("vlc") {
+        VlcPlayerController(hardwareDecode = false).also { it.release() }
+            .let { "libVLC carregou (${loadedVlcVersion()}; ${app.apex.player.BundledVlc.dir?.let { "embutido em $it" } ?: "o instalado no PC"})" }
+    }
     if (updateRehearsal) {
         // Ensaio da atualização de ponta a ponta: confere, baixa, verifica a assinatura e reinicia como o app faria.
         val updater = DesktopUpdater(

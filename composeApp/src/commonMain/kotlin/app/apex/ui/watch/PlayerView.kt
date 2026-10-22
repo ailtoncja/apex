@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -75,11 +76,17 @@ import app.apex.player.PLAYBACK_SPEEDS
 import app.apex.nav.Route
 import app.apex.player.LoadState
 import app.apex.theme.ApexColors
+import app.apex.ui.components.ResolutionBadge
 import app.apex.ui.components.ActionButton
+import app.apex.ui.components.ResolutionBadge
 import app.apex.ui.components.Avatar
+import app.apex.ui.components.ResolutionBadge
 import app.apex.ui.components.ContextMenuHost
+import app.apex.ui.components.ResolutionBadge
 import app.apex.ui.components.IconBtn
+import app.apex.ui.components.ResolutionBadge
 import app.apex.ui.components.LiveTag
+import app.apex.ui.components.ResolutionBadge
 import app.apex.ui.components.RemoteImage
 import app.apex.util.currentTimeMillis
 import app.apex.util.formatClock
@@ -279,8 +286,12 @@ private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: Player
                     )
                 }
             }
-            PlayerBtn(Icons.Rounded.Settings, "Configurações", tint = if (menu != null) ApexColors.Accent else Color.White) {
-                setMenu(if (menu != null) null else PlayerMenu.Main)
+            // Como no YouTube: o selo da resolução que está tocando (HD, 2K, 4K) no canto da engrenagem.
+            Box {
+                PlayerBtn(Icons.Rounded.Settings, "Configurações", tint = if (menu != null) ApexColors.Accent else Color.White) {
+                    setMenu(if (menu != null) null else PlayerMenu.Main)
+                }
+                ResolutionBadge(ps.videoHeight, Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 2.dp).testTag("player-resolution-badge"), small = true)
             }
             if (!fullscreen) {
                 PlayerBtn(Icons.Rounded.Crop169, "Modo cinema", tint = if (app.ui.theater) ApexColors.Accent else Color.White) {
@@ -407,7 +418,7 @@ private fun BoxScope.SettingsPanel(menu: PlayerMenu, onMenu: (PlayerMenu?) -> Un
             PlayerMenu.Quality -> {
                 MenuHeader("Qualidade") { onMenu(PlayerMenu.Main) }
                 resolved.qualities.forEach { q ->
-                    MenuRow(q.label, "", checked = q == quality) { session.setQuality(q); onMenu(null) }
+                    MenuRow(q.label, "", checked = q == quality, badgeHeight = q.height) { session.setQuality(q); onMenu(null) }
                 }
             }
             PlayerMenu.Speed -> {
@@ -439,7 +450,7 @@ private fun MenuHeader(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun MenuRow(label: String, value: String, chevron: Boolean = false, checked: Boolean = false, onClick: () -> Unit) {
+private fun MenuRow(label: String, value: String, chevron: Boolean = false, checked: Boolean = false, badgeHeight: Int = 0, onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
     Row(
@@ -449,7 +460,11 @@ private fun MenuRow(label: String, value: String, chevron: Boolean = false, chec
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box(Modifier.size(20.dp)) { if (checked) Icon(Icons.Rounded.Check, null, tint = ApexColors.Accent, modifier = Modifier.size(20.dp)) }
-        Text(label, Modifier.weight(1f), color = Color.White, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+        Text(label, Modifier.weight(1f, fill = badgeHeight <= 0), color = Color.White, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+        if (badgeHeight > 0) {
+            ResolutionBadge(badgeHeight)
+            Spacer(Modifier.weight(1f))
+        }
         if (value.isNotEmpty()) Text(value, color = Color(0xFFB0B0C0), style = MaterialTheme.typography.bodySmall, maxLines = 1)
         if (chevron) Icon(Icons.Rounded.ChevronRight, null, tint = Color(0xFFB0B0C0), modifier = Modifier.size(18.dp))
     }

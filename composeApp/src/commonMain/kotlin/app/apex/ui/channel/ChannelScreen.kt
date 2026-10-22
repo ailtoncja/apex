@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import app.apex.LocalApp
 import app.apex.model.Channel
 import app.apex.model.ChannelSort
+import app.apex.model.sortedBy
 import app.apex.model.ClipSort
 import app.apex.model.Platform
 import app.apex.ui.components.FilterTextField
@@ -104,6 +105,8 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     val searching = words.isNotEmpty()
     val channelSearch = if (isYt && tab == 0 && st.searchedQuery.isNotEmpty() && searching) remember(st.searchedQuery) { st.searchPaged(st.searchedQuery) } else null
     LaunchedEffect(channelSearch) { channelSearch?.loadIfNeeded() }
+    // Ordenar o resultado da busca do YouTube (mais recentes, vistos, antigos) precisa dele inteiro.
+    LaunchedEffect(channelSearch, st.searchSort) { if (channelSearch != null && st.searchSort != null) st.loadAll(channelSearch) }
     LaunchedEffect(tab, searching, st, list) {
         if (!searching) return@LaunchedEffect
         when {
@@ -121,8 +124,13 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     val loadedItems by (activeList?.items ?: st.videos.items).collectAsState()
     val loading by (activeList?.loading ?: st.videos.loading).collectAsState()
     val error by (activeList?.error ?: st.videos.error).collectAsState()
-    // O resultado da busca do YouTube já vem filtrado; as demais listas são filtradas aqui.
-    val items = if (searching && channelSearch == null) loadedItems.filter { matchesWords(words, it.title, it.category) } else loadedItems
+    // O resultado da busca do YouTube já vem filtrado (e é reordenado aqui se a pessoa escolheu uma ordem); as demais listas são filtradas
+    // aqui, na ordem escolhida para a aba.
+    val items = when {
+        channelSearch != null -> st.searchSort?.let { sortedBy(loadedItems, it) } ?: loadedItems
+        searching -> loadedItems.filter { matchesWords(words, it.title, it.category) }
+        else -> loadedItems
+    }
     val state = rememberLazyGridState()
     // Trocar de ordem recomeça a lista: volta para o topo.
     LaunchedEffect(list) { state.scrollToItem(0) }
@@ -187,7 +195,12 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
         }
 
         val aboutTab = 3
-        if (sortOptions.isNotEmpty() && !searching) fullSpan("sort") {
+        // A ordem vale também durante a busca: na aba "Vídeos" do YouTube ordena o resultado da busca (com "Relevância", a ordem do
+        // YouTube); nas outras abas a busca filtra a lista já na ordem escolhida.
+        if (channelSearch != null) fullSpan("search-sort") {
+            val options = listOf<ChannelSort?>(null) + ChannelSort.entries
+            ChipRow(options.map { it?.label ?: "Relevância" }, options.indexOf(st.searchSort), { i -> st.searchSort = options[i] })
+        } else if (sortOptions.isNotEmpty()) fullSpan("sort") {
             ChipRow(sortOptions.map { it.label }, sortOptions.indexOf(sort), { i ->
                 when {
                     isYt && tab == 0 -> st.videoSort = sortOptions[i]

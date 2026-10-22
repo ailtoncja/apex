@@ -496,6 +496,18 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         }
     }
 
+    // ---------- emotes da própria Twitch (para o seletor do chat) ----------
+
+    /** Os emotes globais da Twitch (Kappa, LUL…), que qualquer conta usa. */
+    suspend fun globalEmotes(): List<app.apex.chat.Emote> = parseTwitchEmoteSet(gql("""{ emoteSet(id: "0") { emotes { id token } } }""")["emoteSet"])
+
+    /** Os emotes que a conta logada pode usar: os globais, os dos canais em que é inscrita e os de seguidor. Vazio sem login. */
+    suspend fun myEmotes(): List<app.apex.chat.Emote> {
+        if (authToken == null) return emptyList()
+        return gql("{ currentUser { emoteSets { emotes { id token } } } }")["currentUser"]["emoteSets"].list()
+            .flatMap { parseTwitchEmoteSet(it) }.distinctBy { it.name }
+    }
+
     private class AdFreeMaster(val server: String, val url: String, val text: String)
 
     /** Servidores que deixaram passar anúncio, e até quando (relógio do PC) ficam de fora. Ver [reportAd]. */

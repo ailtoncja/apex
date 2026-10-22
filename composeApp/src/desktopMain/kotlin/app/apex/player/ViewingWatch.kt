@@ -110,9 +110,30 @@ object ViewingWatch {
                 Timing.mark("visão do vídeo: $now")
                 listeners.forEach { runCatching { it(now) } }
             }
+            applyPriority(enabled() && !ownsForeground)
             Thread.sleep(PERIOD_MS)
         }
     }
+
+    /** O programa em foco é o próprio Apex (ver [measure]). */
+    @Volatile private var ownsForeground = true
+    private var lowered = false
+
+    /**
+     * Com outro programa em foco (um jogo, por exemplo) o Apex fica com prioridade "abaixo do normal": o Windows dá o processador primeiro ao
+     * programa em foco, e o Apex usa o que sobra (que costuma ser bastante). Volta ao normal quando o Apex está em foco. O som do app tem a
+     * thread dele com prioridade alta (ver SoftAudio), para não picotar com o resto mais baixo.
+     */
+    private fun applyPriority(lower: Boolean) {
+        if (lower == lowered) return
+        lowered = lower
+        val kernel = Kernel32.INSTANCE
+        val ok = runCatching { kernel.SetPriorityClass(kernel.GetCurrentProcess(), WinDef.DWORD(if (lower) BELOW_NORMAL else NORMAL)) }.getOrDefault(false)
+        Timing.mark("prioridade do Apex: ${if (lower) "abaixo do normal (outro programa em foco)" else "normal"}${if (ok) "" else " (o Windows recusou)"}")
+    }
+
+    private const val NORMAL = 0x00000020L
+    private const val BELOW_NORMAL = 0x00004000L
 
     private fun rectOf(r: WinDef.RECT) = ScreenRect(r.left, r.top, r.right, r.bottom)
 
@@ -131,6 +152,7 @@ object ViewingWatch {
         val pid = IntByReference()
         if (fg != null) user32.GetWindowThreadProcessId(fg, pid)
         val ours = fg == null || pid.value == Kernel32.INSTANCE.GetCurrentProcessId()
+        ownsForeground = ours
         val shell = fg != null && CharArray(64).let { buf ->
             val n = user32.GetClassName(fg, buf, buf.size)
             String(buf, 0, n) in SHELL_CLASSES

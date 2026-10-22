@@ -45,9 +45,28 @@ abstract class ChatClient(protected val scope: CoroutineScope) {
 
     abstract val canSend: Boolean
 
+    /** De qual plataforma é este chat. */
+    abstract val platform: app.apex.model.Platform
+
     protected val _extensionEmotes = MutableStateFlow(ChannelEmotes.Empty)
-    /** Os emotes da 7TV, BetterTTV e FrankerFaceZ deste canal (só na Twitch; vazio enquanto carrega ou quando estão desligados nos Ajustes). */
+    /** Os emotes da 7TV, BetterTTV e FrankerFaceZ deste canal (vazio enquanto carrega ou quando estão desligados nos Ajustes). */
     val extensionEmotes: StateFlow<ChannelEmotes> = _extensionEmotes.asStateFlow()
+
+    protected val _nativeEmotes = MutableStateFlow(ChannelEmotes.Empty)
+    /** Os emotes da própria plataforma para escrever: os do canal, os globais e (na Twitch, com a conta) os que a conta pode usar. */
+    val nativeEmotes: StateFlow<ChannelEmotes> = _nativeEmotes.asStateFlow()
+
+    private var emotesLoaded = false
+
+    /** Busca os emotes ([loadEmotes]) uma vez só, na primeira conexão; uma falha só deixa a lista vazia. */
+    protected fun loadEmotesOnce() {
+        if (emotesLoaded) return
+        emotesLoaded = true
+        scope.launch { runCatching { loadEmotes() } }
+    }
+
+    /** Onde cada plataforma busca os emotes dela (e os das extensões para o canal). */
+    protected open suspend fun loadEmotes() {}
 
     /** O que o campo de escrever diz quando não dá para escrever. */
     open val sendHint: String get() = "Entre na conta para escrever no chat"
@@ -143,7 +162,15 @@ class TwitchChat(
     private val history: suspend () -> List<ChatMessage> = { emptyList() },
     /** Os emotes das extensões para o canal de id dado (o número do canal chega pelo próprio chat); `null` = desligados. */
     private val extensions: (suspend (String) -> ChannelEmotes)? = null,
+    /** Os emotes da própria Twitch para escrever (os globais e os da conta). */
+    private val natives: (suspend () -> ChannelEmotes)? = null,
 ) : ChatClient(scope) {
+    override suspend fun loadEmotes() {
+        natives?.let { _nativeEmotes.value = it() }
+    }
+
+    override val platform = app.apex.model.Platform.Twitch
+
     @Volatile private var roomId: String? = null
 
     /** O número do canal chegou (na entrada no chat, ou em cada mensagem): busca os emotes das extensões dele, uma vez. */
@@ -163,6 +190,7 @@ class TwitchChat(
 
     override suspend fun connect() {
         val channel = channel ?: throw ChatUnavailable("Canal inválido para o chat da Twitch")
+        loadEmotesOnce()
         loadHistory(history)
         http.webSocket("wss://irc-ws.chat.twitch.tv:443") {
             session = this
@@ -256,7 +284,17 @@ class YouTubeChat(
     scope: CoroutineScope,
     private val videoId: String,
     private val youtube: app.apex.source.YouTubeSource,
+    /** O canal (UC…) da live e os emotes das extensões para ele (a 7TV atende o YouTube); `null` = desligados. */
+    private val channelId: String? = null,
+    private val extensions: (suspend (String) -> ChannelEmotes)? = null,
 ) : ChatClient(scope) {
+    override suspend fun loadEmotes() {
+        val id = channelId ?: return
+        extensions?.let { _extensionEmotes.value = it(id) }
+    }
+
+    override val platform = app.apex.model.Platform.YouTube
+
     /** O código de envio do chat desta live; só aparece com a conta logada e o chat aberto para ela. */
     private var sendParams by mutableStateOf<String?>(null)
     private var restriction by mutableStateOf<String?>(null)
@@ -267,6 +305,7 @@ class YouTubeChat(
         get() = if (youtube.tube.loggedIn) restriction ?: "O chat desta live não está aberto para você escrever" else super.sendHint
 
     override suspend fun connect() {
+        loadEmotesOnce()
         var continuation = when (val start = youtube.liveChat(videoId)) {
             is app.apex.source.LiveChatStart.Ready -> start.token
             is app.apex.source.LiveChatStart.Unavailable -> throw ChatUnavailable(start.message)
@@ -309,13 +348,25 @@ class KickChat(
     private val slug: String,
     private val kick: KickSource,
     private val http: HttpClient = Http.client,
+    /** Os emotes das extensões para o usuário da Kick de número dado (a 7TV atende a Kick); `null` = desligados. */
+    private val extensions: (suspend (Long) -> ChannelEmotes)? = null,
 ) : ChatClient(scope) {
+    override val platform = app.apex.model.Platform.Kick
+
     /** A sala do chat do canal (conhecida depois que conectou). */
     @Volatile private var chatroom: Long? = null
 
     override val canSend: Boolean get() = kick.sessionToken != null
 
+    override suspend fun loadEmotes() {
+        val found = kick.emotes(slug)
+        _nativeEmotes.value = ChannelEmotes(found.channel, found.global)
+        val userId = found.userId ?: return
+        extensions?.let { _extensionEmotes.value = it(userId) }
+    }
+
     override suspend fun connect() {
+        loadEmotesOnce()
         val chatroom = (chatroom ?: kick.chatroomId(slug)) ?: error("Chat da Kick indisponível")
         this.chatroom = chatroom
         loadHistory { kick.recentChat(slug) }
@@ -353,10 +404,19 @@ class KickChat(
         lastSendError = null
         val room = chatroom ?: kick.chatroomId(slug)?.also { chatroom = it }
         if (room == null) { lastSendError = "O chat da Kick ainda não conectou."; return false }
-        val reason = runCatching { kick.sendChat(room, text) }.getOrElse { "Sem conexão com a Kick." }
+        val reason = runCatching { kick.sendChat(room, encodeKickEmotes(text, nativeEmotes.value.byName)) }.getOrElse { "Sem conexão com a Kick." }
         lastSendError = reason
         return reason == null
     }
+}
+
+/**
+ * A mensagem como a Kick a quer: cada palavra que é o nome de um emote da Kick ([kickEmotes]) vira `[emote:id:nome]`, senão o chat mostra só o
+ * texto. O resto fica como está.
+ */
+internal fun encodeKickEmotes(text: String, kickEmotes: Map<String, Emote>): String {
+    if (kickEmotes.isEmpty()) return text
+    return Regex("""\S+""").replace(text) { m -> kickEmotes[m.value]?.sendAs ?: m.value }
 }
 
 /** As figurinhas da Kick vêm como `[emote:1234:nome]`; deixa só o nome. */

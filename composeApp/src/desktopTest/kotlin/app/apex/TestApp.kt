@@ -55,7 +55,9 @@ internal class FakePlayer2 : app.apex.player.PlayerController {
     val seeks = mutableListOf<Long>()
     override fun seekTo(positionMs: Long) { seeks += positionMs }
     override fun seekBy(deltaMs: Long) {}
-    override fun setVolume(percent: Int) {}
+    /** O último volume pedido (%); -1 = nenhum. */
+    var lastVolume = -1
+    override fun setVolume(percent: Int) { lastVolume = percent }
     override fun setMuted(muted: Boolean) { silenced = muted }
     override fun setRate(rate: Float) { state.value = state.value.copy(rate = rate) }
     /** Quantas vezes pediram para voltar ao ao vivo. */

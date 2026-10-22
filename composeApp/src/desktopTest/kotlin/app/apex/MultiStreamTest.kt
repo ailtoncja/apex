@@ -58,6 +58,40 @@ class MultiStreamTest {
     }
 
     @Test
+    fun cada_live_tem_o_proprio_volume() = runBlocking<Unit> {
+        val h = Harness()
+        val a = live(Platform.Twitch, "a"); val b = live(Platform.Kick, "b")
+        h.multi.add(a); h.multi.add(b)
+        h.multi.start()
+        h.ready()
+        val app = h.data.settings.value.volume
+        assertEquals(app, h.player(a.key).lastVolume, "de início, o volume do app")
+        h.multi.setVolume(a.key, 40)
+        assertEquals(40, h.player(a.key).lastVolume)
+        assertEquals(app, h.player(b.key).lastVolume, "a outra não muda")
+        assertEquals(40, h.multi.volumeOf(a.key))
+        // subir o volume de uma live muda liga o som dela (sem tirar o das outras)
+        assertTrue(h.player(b.key).silenced)
+        h.multi.setVolume(b.key, 150)
+        assertEquals(150, h.player(b.key).lastVolume)
+        assertEquals(setOf(a.key, b.key), h.multi.audio.value)
+        assertFalse(h.player(b.key).silenced)
+        // reabrir a live (tentar de novo) mantém o volume dela
+        h.multi.retry(a.key)
+        h.ready()
+        assertEquals(40, h.player(a.key).lastVolume)
+    }
+
+    @Test
+    fun selo_da_resolucao() {
+        assertNull(app.apex.ui.components.resolutionBadge(720))
+        assertEquals("HD", app.apex.ui.components.resolutionBadge(1080))
+        assertEquals("2K", app.apex.ui.components.resolutionBadge(1440))
+        assertEquals("4K", app.apex.ui.components.resolutionBadge(2160))
+        assertEquals("8K", app.apex.ui.components.resolutionBadge(4320))
+    }
+
+    @Test
     fun o_som_comeca_na_primeira_pode_estar_em_varias_e_passa_adiante_quando_a_unica_sai() = runBlocking {
         val h = Harness()
         val a = live(Platform.Twitch, "a"); val b = live(Platform.Kick, "b"); val c = live(Platform.Twitch, "c")

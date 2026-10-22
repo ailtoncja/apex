@@ -8,6 +8,7 @@ import app.apex.AppContainer
 import app.apex.model.Channel
 import app.apex.model.ChannelDetails
 import app.apex.model.ChannelSort
+import app.apex.model.sortedBy
 import app.apex.model.ClipSort
 import app.apex.model.Comment
 import app.apex.source.CommentPoster
@@ -556,12 +557,17 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
         }
     }
 
-    /** Os VODs na ordem [sort]: na Twitch a ordem vem do servidor (os 100 mais vistos); a Kick só entrega os 30 mais recentes, que são reordenados aqui. */
+    /**
+     * Os VODs na ordem [sort]. Na Twitch os mais vistos vêm do servidor (os 100 mais vistos); os mais antigos são os 100 mais recentes (a Twitch
+     * guarda só uns 60 dias) de trás para a frente. A Kick só entrega os 30 mais recentes, que são reordenados aqui.
+     */
     fun vodsBy(sort: ChannelSort): Paged<Media> = if (sort == ChannelSort.Recent) vods else sortedVods.getOrPut(sort) {
         Paged(app.scope, { it.key }) {
             when (seed.platform) {
-                Platform.Twitch -> Page(app.twitch.vods(seed.id, sort = sort), null)
-                Platform.Kick -> Page(app.kick.vods(seed).let { list -> if (sort == ChannelSort.Popular) list.sortedByDescending { it.viewCount ?: 0 } else list }, null)
+                Platform.Twitch -> Page(
+                    if (sort == ChannelSort.Oldest) sortedBy(app.twitch.vods(seed.id), ChannelSort.Oldest) else app.twitch.vods(seed.id, sort = sort), null,
+                )
+                Platform.Kick -> Page(sortedBy(app.kick.vods(seed), sort), null)
                 Platform.YouTube -> Page(emptyList(), null)
             }
         }

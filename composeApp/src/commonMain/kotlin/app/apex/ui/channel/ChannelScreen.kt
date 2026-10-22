@@ -77,12 +77,13 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     var tab by remember(seed.key) { mutableIntStateOf(initialTab) }
     val tabs = if (isYt) listOf("Vídeos", "Transmissões", "Playlists", "Sobre") else listOf("Ao vivo", "VODs", "Clipes", "Sobre")
 
-    // A ordem de cada aba (o YouTube oferece mais recentes, mais vistos e mais antigos; a Twitch e a Kick, nos VODs, mais recentes e mais vistos).
+    // A ordem de cada aba: mais recentes, mais vistos e mais antigos (nos vídeos e transmissões do YouTube e nos VODs da Twitch e da Kick).
     val sortOptions = when {
         isYt && (tab == 0 || tab == 1) -> ChannelSort.entries
-        !isYt && tab == 1 -> listOf(ChannelSort.Recent, ChannelSort.Popular)
+        !isYt && tab == 1 -> ChannelSort.entries
         else -> emptyList()
     }
+    val clipsTab = !isYt && tab == 2
     val sort = when {
         isYt && tab == 0 -> st.videoSort
         isYt && tab == 1 -> st.liveSort
@@ -128,7 +129,10 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
     // aqui, na ordem escolhida para a aba.
     val items = when {
         channelSearch != null -> st.searchSort?.let { sortedBy(loadedItems, it) } ?: loadedItems
-        searching -> loadedItems.filter { matchesWords(words, it.title, it.category) }
+        // Nos clipes, o que a busca achou pode ser reordenado (mais vistos, recentes, antigos) sem buscar de novo.
+        searching -> loadedItems.filter { matchesWords(words, it.title, it.category) }.let { found ->
+            if (clipsTab) st.searchSort?.let { sortedBy(found, it) } ?: found else found
+        }
         else -> loadedItems
     }
     val state = rememberLazyGridState()
@@ -209,9 +213,16 @@ fun ChannelScreen(seed: Channel, initialTab: Int = 0) {
                 }
             })
         }
-        if (!isYt && tab == 2) fullSpan("clip-sort") {
+        if (clipsTab) fullSpan("clip-sort") {
             val sort by st.clipSort.collectAsState()
-            ChipRow(ClipSort.entries.map { it.label }, sort.ordinal, { st.setClipSort(ClipSort.entries[it]) })
+            if (searching) {
+                // Pesquisando, a lista inteira já está carregada: a ordem é feita aqui, e dá para ver os mais antigos também.
+                val options = listOf(ChannelSort.Popular, ChannelSort.Recent, ChannelSort.Oldest)
+                val current = st.searchSort ?: if (sort == ClipSort.Popular) ChannelSort.Popular else ChannelSort.Recent
+                ChipRow(options.map { it.label }, options.indexOf(current), { i -> st.searchSort = options[i] })
+            } else {
+                ChipRow(ClipSort.entries.map { it.label }, sort.ordinal, { st.setClipSort(ClipSort.entries[it]) })
+            }
         }
         when {
             tab == aboutTab -> fullSpan("about") {

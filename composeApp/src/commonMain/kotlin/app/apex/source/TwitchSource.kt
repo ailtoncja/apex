@@ -422,15 +422,26 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         )
     }
 
-    /** Clipes de um canal (uma página só, até [limit]; a seguinte exigiria a verificação de integridade do navegador). */
-    suspend fun clips(login: String, sort: ClipSort = ClipSort.Popular, limit: Int = 100): List<Media> {
-        // A Twitch recusa ordenar por data ("server error"); o "em alta" dela privilegia os clipes novos, então aqui eles são reordenados pela data.
-        val order = if (sort == ClipSort.Popular) "VIEWS_DESC" else "TRENDING"
+    /**
+     * Clipes de um canal. A Twitch só entrega uma página de cada lista (a seguinte exige a verificação de integridade do navegador), não ordena
+     * por data ("server error") e o "em alta" vem vazio em canais sem clipe recente. Então aqui vão juntos os mais vistos do dia, da semana, do
+     * mês e de sempre, mais os em alta, e a ordem ([sort]) é feita aqui: assim os recentes aparecem em qualquer canal e a busca acha mais.
+     */
+    suspend fun clips(login: String, sort: ClipSort = ClipSort.Popular, limit: Int = 100): List<Media> = kotlinx.coroutines.coroutineScope {
+        val lists = CLIP_LISTS.map { (period, order) -> async { runCatching { clipList(login, period, order, limit) }.getOrDefault(emptyList()) } }
+            .map { it.await() }
+        val all = lists.flatten().distinctBy { it.key }
+        when (sort) {
+            ClipSort.Popular -> all.sortedByDescending { it.viewCount ?: 0L }
+            ClipSort.Recent -> all.sortedByDescending { it.publishedAt ?: 0L }
+        }
+    }
+
+    private suspend fun clipList(login: String, period: String, order: String, limit: Int): List<Media> {
         val data = gql(
-            """{ user(login: ${lit(login)}) { clips(first: $limit, criteria: {period: ALL_TIME, sort: $order}) { edges { node { $CLIP_FIELDS } } } } }""",
+            """{ user(login: ${lit(login)}) { clips(first: $limit, criteria: {period: $period, sort: $order}) { edges { node { $CLIP_FIELDS } } } } }""",
         )
-        val list = data["user"]["clips"]["edges"].list().mapNotNull { clipToMedia(it["node"]) }
-        return if (sort == ClipSort.Recent) list.sortedByDescending { it.publishedAt ?: 0L } else list
+        return data["user"]["clips"]["edges"].list().mapNotNull { clipToMedia(it["node"]) }
     }
 
     private suspend fun resolveClip(media: Media): Resolved {
@@ -634,6 +645,9 @@ class TwitchSource(private val http: HttpClient = Http.client) {
 
     companion object {
         const val CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+
+        /** As listas de clipes que a Twitch entrega sem a verificação de integridade (período, ordem), juntadas em [clips]. */
+        val CLIP_LISTS = listOf("ALL_TIME" to "VIEWS_DESC", "LAST_MONTH" to "VIEWS_DESC", "LAST_WEEK" to "VIEWS_DESC", "LAST_DAY" to "VIEWS_DESC", "ALL_TIME" to "TRENDING")
 
         /** Quanto os servidores sem anúncio têm, juntos, para responder; e a vantagem do que respondeu da última vez. */
         const val AD_FREE_TIMEOUT_MS = 3_000L

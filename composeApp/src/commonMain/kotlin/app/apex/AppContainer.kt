@@ -78,6 +78,9 @@ class UiState {
     /** O chat ao lado das lives do Multi. */
     var multiChat by mutableStateOf(true)
 
+    /** Tela cheia do Multi: só a grade de lives (e o chat, se estiver aberto), todas tocando. */
+    var multiFullscreen by mutableStateOf(false)
+
     /** Abas de vídeo em sequência: quando um vídeo acaba, toca a aba seguinte (ver [app.apex.tabs.VideoTabs]). */
     var tabsSequence by mutableStateOf(false)
 
@@ -339,20 +342,29 @@ class AppContainer(
     /** Liga/desliga a tela cheia do player. Ao sair, volta ao que era antes (janela normal, ou F11 se estava ligado). */
     fun setPlayerFullscreen(on: Boolean) {
         ui.playerFullscreen = on
-        system.setFullscreen(ui.playerFullscreen || ui.windowFullscreen)
+        applyFullscreen()
     }
 
-    /** F11. Dentro da tela cheia do player, o F11 sai de tudo. */
+    /** Liga/desliga a tela cheia do Multi (as lives continuam tocando: só some o resto do app). */
+    fun setMultiFullscreen(on: Boolean) {
+        ui.multiFullscreen = on
+        applyFullscreen()
+    }
+
+    /** F11. Dentro da tela cheia do player ou do Multi, o F11 sai de tudo. */
     fun toggleWindowFullscreen() {
-        if (ui.playerFullscreen) {
+        if (ui.playerFullscreen || ui.multiFullscreen) {
             ui.playerFullscreen = false
+            ui.multiFullscreen = false
             ui.windowFullscreen = false
         } else {
             ui.windowFullscreen = !ui.windowFullscreen
             if (ui.windowFullscreen) toast("Tela cheia: aperte F11 para sair")
         }
-        system.setFullscreen(ui.playerFullscreen || ui.windowFullscreen)
+        applyFullscreen()
     }
+
+    private fun applyFullscreen() = system.setFullscreen(ui.playerFullscreen || ui.multiFullscreen || ui.windowFullscreen)
 
     fun openChannel(channel: Channel) {
         // Os clipes da conta do YouTube vêm sem o endereço do canal; ele aparece quando o clipe é aberto.

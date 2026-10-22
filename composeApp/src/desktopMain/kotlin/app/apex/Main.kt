@@ -328,6 +328,11 @@ private fun runApp() = application {
                 kotlinx.coroutines.delay(1_500)
                 app.setPlayerFullscreen(true)
             }
+            // Tela cheia do Multi (com `APEX_START=multi`).
+            "multi" -> {
+                kotlinx.coroutines.delay(1_500)
+                app.setMultiFullscreen(true)
+            }
             "cycle" -> {
                 kotlinx.coroutines.delay(2_000)
                 app.toggleWindowFullscreen()
@@ -456,11 +461,13 @@ private fun navigateFromEnv(app: AppContainer) {
             else YOUTUBE_TOPIC_CATEGORIES.firstOrNull { it.id == "yt:$name" } ?: LiveCategory("yt:" + name, name.substringAfter(':'), null, null)
             app.nav.push(Route.Category(platform, category))
         }
-        // `tchannel:gaules:2` abre o canal da Twitch na aba 2 (Clipes); `kchannel:` é o da Kick.
+        // `tchannel:gaules:2` abre o canal da Twitch na aba 2 (Clipes); `kchannel:` é o da Kick. `tchannel:gaules:1:furia` já pesquisa "furia".
         "tchannel", "kchannel" -> {
             val platform = if (kind == "tchannel") Platform.Twitch else Platform.Kick
-            val login = arg.substringBefore(':')
-            app.nav.push(Route.ChannelPage(Channel(platform, login, login), arg.substringAfter(':', "0").toIntOrNull() ?: 0))
+            val parts = arg.split(':')
+            val channel = Channel(platform, parts[0], parts[0])
+            parts.getOrNull(2)?.takeIf { it.isNotBlank() }?.let { app.screens.channel(channel).updateQuery(it) }
+            app.nav.push(Route.ChannelPage(channel, parts.getOrNull(1)?.toIntOrNull() ?: 0))
         }
         // `home:2` abre o início já no assunto de número 2 (Música).
         "home" -> {

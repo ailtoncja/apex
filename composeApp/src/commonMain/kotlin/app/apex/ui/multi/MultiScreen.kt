@@ -1,6 +1,14 @@
 package app.apex.ui.multi
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -115,24 +124,74 @@ fun MultiScreen() {
     val chatKey by multi.chat.collectAsState()
     val focus by multi.focus.collectAsState()
     val chatVisible = app.ui.multiChat
+    val fullscreen = app.ui.multiFullscreen
+    // Na tela cheia os controles do Multi somem e voltam quando o mouse mexe (como os do player). Só os controles leem o contador:
+    // mexer o mouse não redesenha a grade.
+    val moves = remember { mutableIntStateOf(0) }
 
-    Column(Modifier.fillMaxSize()) {
-        Header(tiles, audio)
-        Row(Modifier.weight(1f).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Box(Modifier.weight(1f).fillMaxHeight()) {
-                if (tiles.isEmpty()) {
-                    EmptyState(
-                        Icons.Rounded.GridView, "Nenhuma live no Multi",
-                        "Digite o nome de um canal que você segue (ou cole um link) no campo acima, ou use o botão direito em qualquer live: \"Assistir no Multi\". Cabem até ${MultiStream.MAX}, de qualquer plataforma, misturadas.",
-                    )
-                } else {
-                    TileGrid(tiles, focus, audio, chatKey)
+    Box(
+        Modifier.fillMaxSize().background(if (fullscreen) Color.Black else Color.Transparent).pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (event.type == PointerEventType.Move) moves.intValue++
                 }
             }
-            if (chatVisible && tiles.isNotEmpty()) MultiChat(tiles, chatKey, Modifier.width(360.dp).fillMaxHeight())
+        },
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            if (!fullscreen) Header(tiles, audio)
+            Row(
+                Modifier.weight(1f).fillMaxWidth().then(if (fullscreen) Modifier.padding(4.dp) else Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp)),
+                horizontalArrangement = Arrangement.spacedBy(if (fullscreen) 4.dp else 14.dp),
+            ) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    if (tiles.isEmpty()) {
+                        EmptyState(
+                            Icons.Rounded.GridView, "Nenhuma live no Multi",
+                            "Digite o nome de um canal que você segue (ou cole um link) no campo acima, ou use o botão direito em qualquer live: \"Assistir no Multi\". Cabem até ${MultiStream.MAX}, de qualquer plataforma, misturadas.",
+                        )
+                    } else {
+                        TileGrid(tiles, focus, audio, chatKey)
+                    }
+                }
+                if (chatVisible && tiles.isNotEmpty()) MultiChat(tiles, chatKey, Modifier.width(360.dp).fillMaxHeight())
+            }
+        }
+        if (fullscreen) FullscreenControls(moves, chatVisible, Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
+    }
+}
+
+/** Os controles por cima da tela cheia do Multi (chat e sair); aparecem quando o mouse mexe ([moves] muda) e somem depois de um tempo parado. */
+@Composable
+private fun FullscreenControls(moves: androidx.compose.runtime.MutableIntState, chatVisible: Boolean, modifier: Modifier) {
+    val app = LocalApp.current
+    var visible by remember { mutableStateOf(true) }
+    val tick = moves.intValue
+    LaunchedEffect(tick) {
+        visible = true
+        delay(FULLSCREEN_CONTROLS_MS)
+        visible = false
+    }
+    AnimatedVisibility(visible, modifier, enter = fadeIn(), exit = fadeOut()) {
+        Row(
+            Modifier.background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(50)).padding(horizontal = 6.dp, vertical = 2.dp).testTag("multi-fullscreen-controls"),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            IconBtn(
+                Icons.Rounded.Chat, if (chatVisible) "Esconder o chat" else "Mostrar o chat", { app.ui.multiChat = !app.ui.multiChat },
+                Modifier.testTag("multi-fullscreen-chat"), size = 34.dp, iconSize = 18.dp, tint = if (chatVisible) ApexColors.Accent else Color.White,
+            )
+            IconBtn(
+                Icons.Rounded.FullscreenExit, "Sair da tela cheia (Esc)", { app.setMultiFullscreen(false) },
+                Modifier.testTag("multi-fullscreen-exit"), size = 34.dp, iconSize = 20.dp, tint = Color.White,
+            )
         }
     }
 }
+
+/** Quanto tempo os controles da tela cheia do Multi ficam à vista depois que o mouse para. */
+private const val FULLSCREEN_CONTROLS_MS = 2_500L
 
 @Composable
 private fun Header(tiles: List<Tile>, audio: Set<String>) {
@@ -141,7 +200,8 @@ private fun Header(tiles: List<Tile>, audio: Set<String>) {
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Column {
+        // O título encolhe primeiro (o resumo vira "…") para os botões caberem numa janela estreita.
+        Column(Modifier.weight(1f)) {
             Text("Multi", style = MaterialTheme.typography.headlineMedium)
             val withSound = tiles.filter { it.key in audio }.map { it.media.channel?.name ?: it.media.id }
             val count = "${tiles.size} ${if (tiles.size == 1) "live" else "lives"}"
@@ -154,9 +214,9 @@ private fun Header(tiles: List<Tile>, audio: Set<String>) {
                 style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(Modifier.weight(1f))
-        AddBox()
+        AddBox(Modifier.weight(2f, fill = false))
         IconBtn(Icons.Rounded.Chat, if (app.ui.multiChat) "Esconder o chat" else "Mostrar o chat", { app.ui.multiChat = !app.ui.multiChat }, Modifier.testTag("multi-chat-toggle"), tint = if (app.ui.multiChat) ApexColors.Accent else ApexColors.OnSurface)
+        if (tiles.isNotEmpty()) IconBtn(Icons.Rounded.Fullscreen, "Tela cheia (F)", { app.setMultiFullscreen(true) }, Modifier.testTag("multi-fullscreen"))
         if (tiles.isNotEmpty()) ActionButton("Limpar", { app.multi.clear() }, Modifier.testTag("multi-clear"), icon = Icons.Rounded.Close)
     }
 }
@@ -166,7 +226,7 @@ private fun Header(tiles: List<Tile>, audio: Set<String>) {
  * primeiro. Sem sugestão, vale um link (de qualquer plataforma) ou o nome de um canal da plataforma escolhida.
  */
 @Composable
-private fun AddBox() {
+private fun AddBox(modifier: Modifier = Modifier) {
     val app = LocalApp.current
     var text by remember { mutableStateOf("") }
     var platform by remember { mutableStateOf(Platform.Twitch) }
@@ -200,8 +260,9 @@ private fun AddBox() {
         if (app.addToMulti(t, platform)) text = ""
     }
 
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.width(300.dp).onSizeChanged { fieldWidth = it.width }.hoverable(fieldSource).clip(RoundedCornerShape(50)).background(ApexColors.Surface).padding(horizontal = 14.dp, vertical = 9.dp)) {
+    // Numa janela estreita o campo encolhe (até 140 dp) em vez de empurrar os botões do Multi para fora da tela.
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.weight(1f, fill = false).widthIn(min = 140.dp, max = 300.dp).width(300.dp).onSizeChanged { fieldWidth = it.width }.hoverable(fieldSource).clip(RoundedCornerShape(50)).background(ApexColors.Surface).padding(horizontal = 14.dp, vertical = 9.dp)) {
             if (text.isEmpty()) Text("Canal que você segue, nome ou link", color = ApexColors.Faint, fontSize = 14.sp, maxLines = 1)
             BasicTextField(
                 value = text, onValueChange = { text = it }, singleLine = true,

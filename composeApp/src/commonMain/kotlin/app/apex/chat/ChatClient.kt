@@ -5,7 +5,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.apex.model.ChatMessage
 import app.apex.source.Http
+import app.apex.source.KickRealtime
+import app.apex.source.bool
 import app.apex.source.KickSource
+import io.ktor.client.request.header
 import app.apex.source.get
 import app.apex.source.long
 import app.apex.source.list
@@ -370,7 +373,60 @@ class KickChat(
         val chatroom = (chatroom ?: kick.chatroomId(slug)) ?: error("Chat da Kick indisponível")
         this.chatroom = chatroom
         loadHistory { kick.recentChat(slug) }
-        http.webSocket("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false") {
+        // A Kick diz em qual servidor o chat está (ela já trocou do Pusher para o Centrifugo); sem resposta, vale o Centrifugo conhecido.
+        val clientId = java.util.UUID.randomUUID().toString()
+        val realtime = kick.channelId(slug)?.let { id -> runCatching { kick.chatRealtime(id, clientId) }.getOrNull() } ?: KickRealtime.DEFAULT
+        app.apex.util.Timing.mark("chat kick: $realtime")
+        when (realtime) {
+            is KickRealtime.Centrifugo -> connectCentrifugo(realtime.url, clientId, chatroom)
+            is KickRealtime.Pusher -> connectPusher(realtime, chatroom)
+        }
+    }
+
+    /** O Centrifugo da Kick (protocolo JSON): conecta com o passe, entra na sala do chat e responde aos pings; o passe é renovado antes de vencer. */
+    private suspend fun connectCentrifugo(url: String, clientId: String, chatroom: Long) {
+        val token = kick.realtimeToken(clientId) ?: error("A Kick não deu o passe do chat")
+        http.webSocket(url, request = { header("Origin", "https://kick.com"); header("User-Agent", Http.UA) }) {
+            send(Frame.Text(kotlinx.serialization.json.buildJsonObject {
+                put("id", 1); put("connect", kotlinx.serialization.json.buildJsonObject { put("token", token); put("name", "js") })
+            }.toString()))
+            send(Frame.Text("""{"id":2,"subscribe":{"channel":"chatrooms.$chatroom.v2"}}"""))
+            var nextId = 3
+            for (frame in incoming) {
+                if (frame !is Frame.Text) continue
+                // Um quadro pode trazer várias respostas, uma por linha; `{}` é o ping do servidor, respondido com `{}`.
+                for (line in frame.readText().split('\n')) {
+                    if (line.isBlank()) continue
+                    if (line.trim() == "{}") { send(Frame.Text("{}")); continue }
+                    val json = parseJson(line) ?: continue
+                    json["error"]?.let { error("Centrifugo: ${it["message"].str()}") }
+                    json["connect"]?.let { c ->
+                        // O passe vence (ttl em segundos): um novo vai um minuto antes.
+                        val ttl: Long = c["ttl"].long() ?: 0L
+                        if (ttl > 0 && c["expires"].bool() == true) launch {
+                            while (true) {
+                                delay((ttl - 60).coerceAtLeast(30) * 1_000)
+                                val fresh = kick.realtimeToken(clientId) ?: return@launch
+                                send(Frame.Text(kotlinx.serialization.json.buildJsonObject {
+                                    put("id", nextId++); put("refresh", kotlinx.serialization.json.buildJsonObject { put("token", fresh) })
+                                }.toString()))
+                            }
+                        }
+                    }
+                    if (json["id"].long() == 2L && json["subscribe"] != null) _status.value = "Chat ao vivo"
+                    json["push"]?.let { p ->
+                        p["disconnect"]?.let { error("A Kick fechou o chat: ${it["reason"].str()}") }
+                        val data = p["pub"]["data"]
+                        onKickEvent(data["event"].str(), data["data"].str())
+                    }
+                }
+            }
+        }
+    }
+
+    /** O Pusher, por onde o chat da Kick passava (fica para o caso de ela voltar a mandar usá-lo). */
+    private suspend fun connectPusher(pusher: KickRealtime.Pusher, chatroom: Long) {
+        http.webSocket("wss://ws-${pusher.cluster}.pusher.com/app/${pusher.appKey}?protocol=7&client=js&version=8.4.0&flash=false") {
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
                 val json = parseJson(frame.readText()) ?: continue
@@ -379,26 +435,24 @@ class KickChat(
                         send(Frame.Text("""{"event":"pusher:subscribe","data":{"auth":"","channel":"chatrooms.$chatroom.v2"}}"""))
                     "pusher:ping" -> send(Frame.Text("""{"event":"pusher:pong","data":{}}"""))
                     "pusher_internal:subscription_succeeded" -> _status.value = "Chat ao vivo"
-                    "App\\Events\\ChatMessageEvent" -> {
-                        val data = parseJson(json["data"].str().orEmpty()) ?: continue
-                        val name = data["sender"]["username"].str() ?: continue
-                        val color = parseHexColor(data.path("sender", "identity", "color").str()) ?: colorFromName(name)
-                        val (text, emotes) = parseKickEmotes(data["content"].str().orEmpty())
-                        push(
-                            ChatMessage(
-                                id = data["id"].str() ?: localId("kick"),
-                                author = name,
-                                text = text,
-                                color = color,
-                                badges = data.path("sender", "identity", "badges").list().mapNotNull { it["type"].str() },
-                                emotes = emotes,
-                            ),
-                        )
-                    }
+                    "pusher:error" -> error("Pusher: ${json["data"]["message"].str()}")
+                    else -> onKickEvent(json["event"].str(), json["data"].str())
                 }
             }
         }
     }
+
+    /** Um evento da sala do chat (igual nos dois servidores): por enquanto só as mensagens. */
+    private fun onKickEvent(event: String?, data: String?) {
+        if (event != "App\\Events\\ChatMessageEvent") return
+        val m = parseKickChatMessage(data ?: return) ?: return
+        if (push(if (m.id.isEmpty()) m.copy(id = localId("kick")) else m) && !liveSeen) {
+            liveSeen = true
+            app.apex.util.Timing.mark("chat kick: primeira mensagem ao vivo")
+        }
+    }
+
+    @Volatile private var liveSeen = false
 
     override suspend fun send(text: String): Boolean {
         lastSendError = null
@@ -417,6 +471,22 @@ class KickChat(
 internal fun encodeKickEmotes(text: String, kickEmotes: Map<String, Emote>): String {
     if (kickEmotes.isEmpty()) return text
     return Regex("""\S+""").replace(text) { m -> kickEmotes[m.value]?.sendAs ?: m.value }
+}
+
+/** Uma mensagem do chat ao vivo da Kick (o `data` do evento ChatMessageEvent, em texto JSON); id vazio quando ela não trouxe. */
+internal fun parseKickChatMessage(raw: String): ChatMessage? {
+    val data = parseJson(raw) ?: return null
+    val name = data["sender"]["username"].str() ?: return null
+    val color = parseHexColor(data.path("sender", "identity", "color").str()) ?: colorFromName(name)
+    val (text, emotes) = parseKickEmotes(data["content"].str().orEmpty())
+    return ChatMessage(
+        id = data["id"].str().orEmpty(),
+        author = name,
+        text = text,
+        color = color,
+        badges = data.path("sender", "identity", "badges").list().mapNotNull { it["type"].str() },
+        emotes = emotes,
+    )
 }
 
 /** As figurinhas da Kick vêm como `[emote:1234:nome]`; deixa só o nome. */

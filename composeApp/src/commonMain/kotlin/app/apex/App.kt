@@ -86,6 +86,9 @@ fun ApexApp() {
     LaunchedEffect(app.ui.typing, route, fullscreen) { if (!app.ui.typing) runCatching { focus.requestFocus() } }
     // A tela cheia do player só existe na página do vídeo.
     LaunchedEffect(route) { if (route !is Route.Watch && app.ui.playerFullscreen) app.setPlayerFullscreen(false) }
+    LaunchedEffect(route) { if (route !is Route.Multi && app.ui.multiFullscreen) app.setMultiFullscreen(false) }
+    // Tela cheia do Multi: some a moldura do app (barra lateral, topo, abas), mas a tela do Multi continua a mesma, sem reabrir as lives.
+    val multiFull = app.ui.multiFullscreen && route is Route.Multi
     // Modo cinema: a faixa do player vai de ponta a ponta e toda preta, como no YouTube (sem a barra lateral e com o topo preto).
     val theaterBand = route is Route.Watch && app.ui.theater
 
@@ -114,15 +117,17 @@ fun ApexApp() {
                     WatchScreen(fullscreen = true)
                 } else {
                     Row(Modifier.fillMaxSize()) {
-                        if (!theaterBand) Sidebar(expanded = !settings.sidebarCollapsed)
+                        if (!theaterBand && !multiFull) Sidebar(expanded = !settings.sidebarCollapsed)
                         Column(Modifier.weight(1f)) {
-                            Box(if (theaterBand) Modifier.background(if (ApexColors.palette.isLight) ApexColors.Background else Color.Black) else Modifier) {
-                                TopBar(onToggleSidebar = { app.data.updateSettings { it.copy(sidebarCollapsed = !it.sidebarCollapsed) } })
+                            if (!multiFull) {
+                                Box(if (theaterBand) Modifier.background(if (ApexColors.palette.isLight) ApexColors.Background else Color.Black) else Modifier) {
+                                    TopBar(onToggleSidebar = { app.data.updateSettings { it.copy(sidebarCollapsed = !it.sidebarCollapsed) } })
+                                }
+                                UpdateBanner()
+                                TabStrip()
                             }
-                            UpdateBanner()
-                            TabStrip()
                             Box(Modifier.weight(1f).fillMaxSize()) { Content(route) }
-                            BackgroundAudioBar()
+                            if (!multiFull) BackgroundAudioBar()
                         }
                     }
                     MiniPlayer()
@@ -191,6 +196,7 @@ internal fun handleShortcut(app: AppContainer, event: KeyEvent): Boolean {
         when {
             app.ui.shortcutsOpen -> app.ui.shortcutsOpen = false
             app.ui.playerFullscreen -> app.setPlayerFullscreen(false)
+            app.ui.multiFullscreen -> app.setMultiFullscreen(false)
             app.ui.typing -> app.ui.typing = false
             app.nav.current is Route.Search -> if (app.nav.canGoBack) app.nav.back() else app.nav.goRoot(Route.Home)
             app.nav.current is Route.Watch && app.ui.theater -> app.ui.theater = false
@@ -220,6 +226,8 @@ internal fun handleShortcut(app: AppContainer, event: KeyEvent): Boolean {
     }
     // Com Ctrl, Alt ou Win a tecla não é atalho do player (Ctrl+C copia o texto selecionado, por exemplo).
     if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
+    // F no Multi: tela cheia com todas as lives, como o F do player.
+    if (event.key == Key.F && app.nav.current is Route.Multi) { app.setMultiFullscreen(!app.ui.multiFullscreen); return true }
     val media = app.session.current.value ?: return false
     val player = app.player
     val state = player.state.value

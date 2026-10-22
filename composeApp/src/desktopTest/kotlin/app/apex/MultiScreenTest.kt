@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.filterToOne
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -82,5 +83,52 @@ class MultiScreenTest {
         waitForIdle()
         waitUntil(timeoutMillis = 3_000) { app.multi.tiles.value.all { (it.player as FakePlayer2).stops >= 1 } }
         assertEquals(2, app.data.multiStreams.value.size)
+    }
+
+    @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
+    private fun key(k: androidx.compose.ui.input.key.Key) = androidx.compose.ui.input.key.KeyEvent(k, androidx.compose.ui.input.key.KeyEventType.KeyDown)
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun a_tela_cheia_do_multi_mostra_so_as_lives_sem_reabrir_nenhuma() = runComposeUiTest {
+        val (app, system) = newTestApp()
+        app.ui.multiChat = false
+        val a = live(Platform.Twitch, "a"); val b = live(Platform.Kick, "b")
+        app.multi.add(a); app.multi.add(b)
+        app.nav.goRoot(Route.Multi)
+        setContent { CompositionLocalProvider(LocalApp provides app) { Box(Modifier.requiredSize(1000.dp, 740.dp)) { ApexApp() } } }
+        waitUntil(timeoutMillis = 5_000) { app.multi.tiles.value.all { it.load.value is LoadState.Ready } }
+        val players = app.multi.tiles.value.map { it.player as FakePlayer2 }
+        val playedBefore = players.map { it.played.size }
+
+        onNodeWithTag("multi-fullscreen").performClick()
+        waitForIdle()
+        assertTrue(app.ui.multiFullscreen)
+        assertTrue(system.fullscreen.value, "a janela vai para a tela cheia")
+        onNodeWithTag("multi-add-field").assertDoesNotExist()
+        assertTrue(onAllNodesWithText("Início").fetchSemanticsNodes().isEmpty(), "sem a barra lateral")
+        onNodeWithTag("tile-${a.key}").assertExists()
+        onNodeWithTag("tile-${b.key}").assertExists()
+        onNodeWithTag("multi-fullscreen-exit").assertExists("os controles aparecem por cima")
+        // O chat cabe na tela cheia também.
+        onNodeWithTag("multi-fullscreen-chat").performClick()
+        waitForIdle()
+        assertTrue(app.ui.multiChat)
+        app.ui.multiChat = false
+        waitForIdle()
+        assertEquals(playedBefore, players.map { it.played.size }, "entrar na tela cheia não reabre as lives")
+        assertTrue(players.all { it.stops == 0 }, "nem para nenhuma")
+
+        // Esc sai; F entra de novo; e sair da tela do Multi também sai da tela cheia.
+        assertTrue(handleShortcut(app, key(androidx.compose.ui.input.key.Key.Escape)))
+        waitForIdle()
+        assertTrue(!app.ui.multiFullscreen && !system.fullscreen.value)
+        onNodeWithTag("multi-add-field").assertExists()
+        assertTrue(handleShortcut(app, key(androidx.compose.ui.input.key.Key.F)))
+        assertTrue(app.ui.multiFullscreen)
+        app.nav.goRoot(Route.Home)
+        waitForIdle()
+        assertTrue(!app.ui.multiFullscreen, "a tela cheia do Multi só existe na tela do Multi")
+        assertEquals(playedBefore, players.map { it.played.size })
     }
 }

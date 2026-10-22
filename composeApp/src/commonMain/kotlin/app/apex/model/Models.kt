@@ -74,6 +74,16 @@ enum class ClipSort(val label: String) { Popular("Mais vistos"), Recent("Mais re
 /** Como a lista de vídeos (ou transmissões) de um canal é ordenada, como os filtros "Mais recentes / Populares / Mais antigos" do YouTube. */
 enum class ChannelSort(val label: String) { Recent("Mais recentes"), Popular("Mais vistos"), Oldest("Mais antigos") }
 
+/**
+ * [items] (o resultado de uma busca no canal) na ordem [sort]: pela data de publicação ou pelas visualizações. Quem não informa a data (ou as
+ * visualizações) vai para o fim, na ordem em que veio.
+ */
+fun sortedBy(items: List<Media>, sort: ChannelSort): List<Media> = when (sort) {
+    ChannelSort.Recent -> items.sortedWith(compareBy<Media> { it.publishedAt == null }.thenByDescending { it.publishedAt ?: 0 })
+    ChannelSort.Oldest -> items.sortedWith(compareBy<Media> { it.publishedAt == null }.thenBy { it.publishedAt ?: 0 })
+    ChannelSort.Popular -> items.sortedWith(compareBy<Media> { it.viewCount == null }.thenByDescending { it.viewCount ?: 0 })
+}
+
 data class ChannelDetails(
     val channel: Channel,
     val bannerUrl: String? = null,
@@ -145,6 +155,8 @@ data class ChatMessage(
     val badges: List<String> = emptyList(),
     /** Os emotes que a plataforma marcou no texto (os das extensões entram na hora de mostrar, ver [app.apex.chat.withExtensionEmotes]). */
     val emotes: List<ChatEmote> = emptyList(),
+    /** De qual chat veio (no chat unificado aparece a cor da plataforma ao lado); `null` = não se sabe. */
+    val platform: Platform? = null,
 )
 
 /** Um emote no texto de uma mensagem: [start] até [end] (sem incluir) do texto vira a imagem [url], com largura/altura [ratio]. */
@@ -212,6 +224,13 @@ data class AppSettings(
     /** A lista publicada no repositório (assinada; ver [app.apex.source.fetchAdFreeList]) e a versão dela; vazia = ainda não veio. */
     val twitchAdFreePublished: List<String> = emptyList(),
     val twitchAdFreePublishedVersion: Int = 0,
+    /**
+     * Os canais do mesmo streamer em plataformas diferentes, cujos chats o app junta (ver [app.apex.chat.LinkedChat]): cada grupo é uma lista
+     * de chaves `Plataforma:id` (`Twitch:login`, `Kick:slug`, `YouTube:UC…`).
+     */
+    val chatLinks: List<List<String>> = emptyList(),
+    /** Os pares (`chave|chave`) que o app achou pelo nome e a pessoa disse que não são o mesmo streamer: não são sugeridos de novo. */
+    val chatLinkRejected: List<String> = emptyList(),
     /** O tema das cores (id de [app.apex.theme.Themes]): escuro, claro ou um dos dois Subaru. */
     val theme: String = "dark",
     /**

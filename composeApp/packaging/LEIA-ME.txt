@@ -2,9 +2,8 @@ APEX - vídeos e lives do YouTube, Twitch e Kick num lugar só
 =============================================================
 
 COMO USAR
-1. Instale o VLC (gratuito, versão de 64 bits): https://www.videolan.org/vlc/
-2. Extraia esta pasta para qualquer lugar (por exemplo, a Área de Trabalho). Não precisa instalar o Java: ele já vem junto.
-3. Abra a pasta "Apex" e dê dois cliques em Apex.exe.
+1. Extraia esta pasta para qualquer lugar (por exemplo, a Área de Trabalho). Não precisa instalar nada: o Java e o VLC (o player) já vêm junto.
+2. Abra a pasta "Apex" e dê dois cliques em Apex.exe.
 
 AVISO DO WINDOWS NA PRIMEIRA VEZ
 O Windows pode mostrar "O Windows protegeu o computador" porque o programa ainda não tem assinatura digital.
@@ -19,6 +18,7 @@ Ficam em %APPDATA%\Apex. Para apagar tudo, feche o Apex e apague essa pasta.
 A conta do Apex (sincronização entre aparelhos) é opcional.
 
 LICENÇA E CÓDIGO-FONTE
-O Apex é software livre sob a GNU GPL versão 3 (arquivo LICENSE). As bibliotecas usadas estão em NOTICE.md.
+O Apex é software livre sob a GNU GPL versão 3 (arquivo LICENSE). As bibliotecas usadas estão em NOTICE.md
+(o VLC que vem junto, com a licença dele, fica em Apex\app\resources\vlc).
 Código-fonte: https://github.com/ailtoncja/apex
 O Apex é independente e não tem ligação com YouTube, Google, Twitch ou Kick.

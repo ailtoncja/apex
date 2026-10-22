@@ -65,6 +65,18 @@ suspend fun fetchAdFreeList(http: HttpClient, verify: (ByteArray, String) -> Boo
 private val TWITCH_LOGIN_CHARS = Regex("[A-Za-z0-9_]{1,25}")
 
 /**
+ * Um conjunto de emotes da Twitch (`{ emotes { id token } }`). Ficam de fora os "carinhas" antigos (`:)`, `<3`), que a Twitch guarda como
+ * expressões e não como palavras.
+ */
+internal fun parseTwitchEmoteSet(set: kotlinx.serialization.json.JsonElement?): List<app.apex.chat.Emote> = set["emotes"].list().mapNotNull { e ->
+    val id = e["id"].str() ?: return@mapNotNull null
+    val token = e["token"].str()?.takeIf { TWITCH_EMOTE_TOKEN.matches(it) } ?: return@mapNotNull null
+    app.apex.chat.Emote(token, app.apex.chat.twitchEmoteUrl(id), 1f, app.apex.chat.EmoteProvider.Twitch)
+}
+
+private val TWITCH_EMOTE_TOKEN = Regex("[A-Za-z0-9_]{2,64}")
+
+/**
  * O endereço da lista mestra de [login] por [server] (`host/caminho` com `$channel`, com ou sem `https://`), pedindo o mesmo que o Apex pede à
  * Twitch: a qualidade máxima, o "só áudio" e os trechos adiantados (a baixa latência). Só H.264, que o VLC toca em qualquer PC. `null` se o
  * servidor ou o canal não servem.

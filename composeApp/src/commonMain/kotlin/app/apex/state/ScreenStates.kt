@@ -585,6 +585,12 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
     var query by mutableStateOf("")
         private set
 
+    /**
+     * A ordem do resultado da busca na aba "Vídeos" do YouTube: `null` = a do YouTube (relevância); as outras ordenam aqui o resultado inteiro,
+     * pela data e pelas visualizações que cada vídeo mostra.
+     */
+    var searchSort by mutableStateOf<ChannelSort?>(null)
+
     /** A busca já feita no YouTube (aba "Vídeos"): só muda depois que a pessoa para de digitar. */
     var searchedQuery by mutableStateOf("")
         private set
@@ -615,8 +621,8 @@ class ChannelState(private val app: AppContainer, val seed: Channel) {
     }
 
     /**
-     * Carrega todas as páginas de [paged] (até [maxPages]): quem filtra uma lista pelo nome precisa dela inteira, não só do que a rolagem já
-     * trouxe. Para se a lista der erro.
+     * Carrega todas as páginas de [paged] (até [maxPages]): quem filtra uma lista pelo nome (ou ordena um resultado) precisa dela inteira, não
+     * só do que a rolagem já trouxe. Para se a lista der erro.
      */
     suspend fun loadAll(paged: Paged<*>, maxPages: Int = 25) {
         withTimeoutOrNull(LOAD_PAGE_TIMEOUT_MS) { paged.loading.first { !it } }

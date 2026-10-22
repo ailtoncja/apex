@@ -1,5 +1,10 @@
 package app.apex
 
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.platform.testTag
+
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -150,10 +155,24 @@ class EmotesTest {
             channel = listOf(Emote("tribo", "https://x/tribo", 1f, EmoteProvider.SevenTv)),
             global = listOf(Emote("EZ", "https://x/ez", 1f, EmoteProvider.Bttv), Emote("Clap", "https://x/clap", 1f, EmoteProvider.Bttv)),
         )
-        setContent { CompositionLocalProvider(LocalApp provides app) { EmotePicker(set, onPick = { picked += it.name }) } }
+        // Os da própria plataforma: o global da Twitch e um de inscrito que a conta pode usar.
+        val natives = ChannelEmotes(
+            channel = emptyList(),
+            global = listOf(Emote("Kappa", "https://x/kappa", 1f, EmoteProvider.Twitch)),
+            mine = listOf(Emote("canalHype", "https://x/hype", 1f, EmoteProvider.Twitch)),
+        )
+        val emojis = mutableListOf<String>()
+        setContent {
+            CompositionLocalProvider(LocalApp provides app) { EmotePicker(set, natives, onEmoji = { emojis += it }, onPick = { picked += it.name }) }
+        }
+        waitForIdle()
+        onNodeWithTag("picker-tab-Emotes").performClick()
         waitForIdle()
         onNodeWithText("Deste canal").assertExists()
+        onNodeWithText("Seus emotes").assertExists()
         onNodeWithText("Globais").assertExists()
+        onNodeWithTag("emote-Kappa").assertExists()
+        onNodeWithTag("emote-canalHype").assertExists()
         onNodeWithTag("emote-tribo").performClick()
         assertEquals(listOf("tribo"), picked)
         onNodeWithTag("emote-search").performTextInput("cla")
@@ -161,5 +180,40 @@ class EmotesTest {
         onNodeWithTag("emote-Clap").assertExists()
         onNodeWithTag("emote-EZ").assertDoesNotExist()
         onNodeWithTag("emote-tribo").assertDoesNotExist()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun emoji_sai_colorido() = runComposeUiTest {
+        // O Skia usa a fonte de emoji do Windows (Segoe UI Emoji): o 😀 tem de sair amarelo, não um contorno cinza.
+        setContent { androidx.compose.material3.Text("😀", androidx.compose.ui.Modifier.testTag("emoji"), fontSize = 48.sp) }
+        waitForIdle()
+        val pixels = onNodeWithTag("emoji").captureToImage().toPixelMap()
+        var yellow = 0
+        for (x in 0 until pixels.width) for (y in 0 until pixels.height) {
+            val c = pixels[x, y]
+            if (c.red > 0.7f && c.green > 0.5f && c.blue < 0.35f) yellow++
+        }
+        assertTrue(yellow > 50, "pontos amarelos: $yellow")
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun a_aba_de_emoji_busca_em_portugues_e_escreve_o_emoji() = runComposeUiTest {
+        val (app, _) = newTestApp()
+        val emojis = mutableListOf<String>()
+        setContent {
+            CompositionLocalProvider(LocalApp provides app) {
+                EmotePicker(ChannelEmotes.Empty, ChannelEmotes.Empty, onEmoji = { emojis += it }, onPick = {})
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("picker-tab-Emoji").performClick()
+        waitForIdle()
+        onNodeWithText("Rostos").assertExists()
+        onNodeWithTag("emote-search").performTextInput("bandeira brasil")
+        waitForIdle()
+        onNodeWithText("🇧🇷").performClick()
+        assertEquals(listOf("🇧🇷"), emojis)
     }
 }

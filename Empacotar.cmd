@@ -1,5 +1,5 @@
 @echo off
-rem Gera o que distribuir, em dist\ (todos trazem o Java dentro; o usuario so precisa do VLC):
+rem Gera o que distribuir, em dist\ (todos trazem o Java e o VLC dentro; o usuario nao instala nada):
 rem   Apex-X.Y.Z-windows-x64.zip   versao portatil (extrair e abrir)
 rem   Apex-X.Y.Z.msi / Apex-X.Y.Z.exe   instaladores (atalho no menu Iniciar e na area de trabalho)  [precisam do WiX]
 rem   SHA256SUMS.txt e SHA256SUMS.txt.sig   hashes dos arquivos e a assinatura deles (o app so instala atualizacoes com a assinatura certa)

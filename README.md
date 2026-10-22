@@ -8,7 +8,7 @@ Windows primeiro; o código compartilhado já está organizado para o Android en
 
 ## Baixar
 
-Para Windows 10/11 (64 bits). Instale antes o **[VLC](https://www.videolan.org/vlc/) de 64 bits** (é o player; o Java já vem dentro do app).
+Para Windows 10/11 (64 bits). Não precisa instalar mais nada: o Java e o VLC (o player) já vêm dentro do app.
 Na página de [Releases](https://github.com/ailtoncja/apex/releases/latest) escolha:
 
 - **`Apex-1.0.6.msi`** (ou `Apex-1.0.6.exe`): instalador, com atalho no menu Iniciar e na área de trabalho; não pede administrador.
@@ -79,8 +79,9 @@ depois, curtidos, clipes, playlists; os atalhos ficam na barra lateral, aberta o
 
 ## Rodar
 
-Requisitos: **VLC 3.x de 64 bits** instalado (o app avisa e leva ao download se faltar) e um **JDK 21+** (o do Android Studio serve).
-Quem só quer usar o app baixa o pacote `Apex-1.0.6-windows-x64.zip` (traz o Java dentro; veja `Empacotar.cmd`) e precisa apenas do VLC.
+Requisito: um **JDK 21+** (o do Android Studio serve). O VLC 3.0.24 é baixado da VideoLAN no primeiro build (conferido pelo SHA-256,
+tarefa `prepareBundledVlc`) e vai dentro do app, também no `run`; `APEX_SYSTEM_VLC=1` usa o VLC instalado no PC.
+Quem só quer usar o app baixa o pacote `Apex-X.Y.Z-windows-x64.zip` (traz o Java e o VLC dentro; veja `Empacotar.cmd`).
 
 ```
 gradlew.bat :composeApp:run                              # modo desenvolvimento

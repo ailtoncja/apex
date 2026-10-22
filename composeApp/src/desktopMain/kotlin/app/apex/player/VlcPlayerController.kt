@@ -25,15 +25,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
-import org.jetbrains.skia.ColorAlphaType
-import org.jetbrains.skia.ColorType
-import org.jetbrains.skia.FilterMipmap
-import org.jetbrains.skia.FilterMode
-import org.jetbrains.skia.Image
-import org.jetbrains.skia.ImageInfo
-import org.jetbrains.skia.MipmapMode
-import org.jetbrains.skia.Rect
-import org.jetbrains.skia.SamplingMode
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.player.base.MediaPlayer
 import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
@@ -44,7 +35,6 @@ import uk.co.caprica.vlcj.player.embedded.videosurface.VideoSurfaceAdapters
 import uk.co.caprica.vlcj.player.embedded.videosurface.callback.BufferFormat
 import uk.co.caprica.vlcj.player.embedded.videosurface.callback.BufferFormatCallbackAdapter
 import uk.co.caprica.vlcj.player.embedded.videosurface.callback.RenderCallback
-import uk.co.caprica.vlcj.player.embedded.videosurface.callback.format.RV32BufferFormat
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -54,9 +44,6 @@ import kotlin.math.roundToInt
 
 /** O buffer do VLC pelo fluxo contínuo. */
 internal const val RELAY_CACHE_MS = 500
-
-private val DOWNSCALE: SamplingMode = FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR)
-private val UPSCALE: SamplingMode = SamplingMode.CATMULL_ROM
 
 /**
  * As opções do libVLC para tocar [source]. Numa live, o VLC por padrão começa 8 segmentos (~16 s) antes do "ao vivo" na Twitch (a lista
@@ -101,23 +88,6 @@ internal fun trueFrameSize(offeredWidth: Int, offeredHeight: Int, trackWidth: In
 private const val SIZE_SLACK_W = 32
 private const val SIZE_SLACK_H = 64
 
-/**
- * O quadro BGRA [bytes] ([width] x [height]) tem alguma imagem? Espia uma grade de 8 x 8 pontos: se todos estão abaixo de [level] nos três
- * canais, é um quadro preto (como os que a decodificação por hardware entrega quando falha em silêncio).
- */
-internal fun hasPicture(bytes: ByteArray, width: Int, height: Int, level: Int = 24): Boolean {
-    if (width <= 0 || height <= 0 || bytes.size < width * height * 4) return false
-    for (gy in 0 until 8) {
-        val y = (height * (2 * gy + 1)) / 16
-        for (gx in 0 until 8) {
-            val x = (width * (2 * gx + 1)) / 16
-            val i = (y * width + x) * 4
-            if ((bytes[i].toInt() and 0xFF) >= level || (bytes[i + 1].toInt() and 0xFF) >= level || (bytes[i + 2].toInt() and 0xFF) >= level) return true
-        }
-    }
-    return false
-}
-
 /** Onde o quadro é desenhado no campo [canvasWidth] x [canvasHeight]: o maior retângulo com a proporção do vídeo, centralizado. */
 internal class VideoFit(val x: Int, val y: Int, val width: Int, val height: Int, val scale: Float)
 
@@ -138,7 +108,7 @@ internal fun fitVideo(canvasWidth: Float, canvasHeight: Float, imageWidth: Int, 
  * tempo (a interface parando enquanto outra abria, ou a recuperação sem imagem reabrindo) corrompiam o VLC e derrubavam o processo. Por isso
  * os métodos públicos voltam na hora: o [state] muda já, e o VLC acompanha em seguida, na ordem.
  */
-class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
+class VlcPlayerController(private val hardwareDecode: Boolean = true) : PlayerController {
     private companion object {
         /** Relógio sem nenhum quadro de vídeo (com o VLC tocando e sem buffer a encher): passado isso, o vídeo é reaberto uma vez em [SAFE_MODE_OPTIONS]. */
         const val NO_PICTURE_MS = 6_000L
@@ -158,7 +128,6 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         /** Live aberta sem trechos adiantados (anúncio da Twitch): de quanto em quanto a lista é consultada, e por quanto tempo no máximo. */
         const val PREFETCH_POLL_MS = 1_000L
         const val PREFETCH_WAIT_MS = 180_000L
-
 
         /** Quanto [release] espera o VLC soltar o player de fato (ao fechar o app, para o processo não sair no meio disso). */
         const val RELEASE_WAIT_MS = 1_500L
@@ -324,10 +293,15 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     private fun stale() = playingGen != generation.get()
 
     private val frameLock = Any()
-    private var frame: Image? = null
+    private var frame: YuvFrame? = null
     private var frameTick by mutableIntStateOf(0)
-    private var imageInfo: ImageInfo? = null
-    private var frameBytes = ByteArray(0)
+
+    /** O tamanho do quadro combinado com o VLC e as três partes dele (Y, U, V) copiadas a cada quadro. Ver [YuvFrame]. */
+    @Volatile private var frameWidth = 0
+    @Volatile private var frameHeight = 0
+    private var yBytes = ByteArray(0)
+    private var uBytes = ByteArray(0)
+    private var vBytes = ByteArray(0)
 
     /** A velocidade pedida: o libVLC só aceita mudar depois que o vídeo começa, por isso é reaplicada no evento "tocando". */
     @Volatile private var desiredRate = 1f
@@ -576,7 +550,10 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         val noVideo = if (!safeMode && System.getenv("APEX_TEST_NOVIDEO") == "1") listOf(":no-video") else emptyList()
         // Pela saída do app, o VLC adianta o áudio um pouco (o que fica na fila curta e na linha de som).
         val sync = if (softAudio != null && softAudio.start()) listOf(":audio-desync=${SoftAudio.DESYNC_MS}") else emptyList()
-        val extra = (if (safeMode) SAFE_MODE_OPTIONS else emptyList()) + noVideo + sync
+        // O libVLC desliga a decodificação pela placa de vídeo quando o vídeo é entregue ao app (o "vmem"), mesmo com --avcodec-hw na fábrica:
+        // por mídia ela volta (medido: o motor de vídeo da placa sai de 0% e o processador cai junto com o YUV, ver YuvFrame).
+        val hw = if (hardwareDecode) listOf(":avcodec-hw=any") else emptyList()
+        val extra = (if (safeMode) SAFE_MODE_OPTIONS else hw) + noVideo + sync
         // Live de uma qualidade só (lista de trechos): o app entrega ao VLC um fluxo contínuo, perto do "ao vivo" (ver LiveTsRelay). No modo
         // seguro vai direto.
         if (source.live && source.lowLatency && !safeMode && !source.audioOnly) {
@@ -840,17 +817,9 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                 val image = frame ?: return@Canvas
                 val d0 = if (FrameMeter.enabled) System.nanoTime() else 0L
                 val fit = fitVideo(size.width, size.height, image.width, image.height, pixelAspect)
-                // Sem filtro o Skia usa o "vizinho mais próximo": reduzindo 1080p para a janela o vídeo fica serrilhado e parece de bitrate
-                // baixo. Reduzindo usa mipmap com filtro linear (suave); ampliando usa Catmull-Rom (nítido, sem "blocos").
-                val sampling = if (fit.scale < 0.98f) DOWNSCALE else UPSCALE
+                // A conversão para RGB (e o filtro que evita o serrilhado ao reduzir) é feita na placa de vídeo: ver YuvPainter.
                 drawIntoCanvas { canvas ->
-                    canvas.skiaCanvas.drawImageRect(
-                        image,
-                        Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
-                        Rect.makeXYWH(fit.x.toFloat(), fit.y.toFloat(), fit.width.toFloat(), fit.height.toFloat()),
-                        // strict = false: com `true` o Skia ignora os mipmaps e o vídeo reduzido sai serrilhado, como se tivesse bitrate baixo.
-                        sampling, null, false,
-                    )
+                    YuvPainter.draw(canvas.skiaCanvas, image, fit.x.toFloat(), fit.y.toFloat(), fit.width.toFloat(), fit.height.toFloat())
                 }
                 if (d0 != 0L) {
                     FrameMeter.videoDraws.incrementAndGet()
@@ -871,14 +840,19 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
             val sarNum = track?.sampleAspectRatio() ?: 0
             val sarDen = track?.sampleAspectRatioBase() ?: 0
             pixelAspect = if (sarNum > 0 && sarDen > 0) sarNum.toFloat() / sarDen else 1f
-            // O RV32 do VLC não usa o canal alfa, por isso OPAQUE (senão o vídeo sairia transparente).
-            imageInfo = ImageInfo(width, height, ColorType.BGRA_8888, ColorAlphaType.OPAQUE)
             if (!stale()) _state.update { it.copy(videoWidth = width, videoHeight = height) }
-            return RV32BufferFormat(width, height)
+            frameWidth = width
+            frameHeight = height
+            // YUV 4:2:0 como o vídeo vem (ver YuvFrame): o VLC não converte nada para RGB, e a cópia é de 3 MB por quadro em 1080p, não 8.
+            val cw = YuvFrame.chromaSize(width)
+            val ch = YuvFrame.chromaSize(height)
+            return BufferFormat("I420", width, height, intArrayOf(width, cw, cw), intArrayOf(height, ch, ch))
         }
 
         override fun allocatedBuffers(buffers: Array<ByteBuffer>) {
-            frameBytes = ByteArray(buffers[0].remaining())
+            yBytes = ByteArray(frameWidth * frameHeight)
+            uBytes = ByteArray(YuvFrame.chromaSize(frameWidth) * YuvFrame.chromaSize(frameHeight))
+            vBytes = ByteArray(uBytes.size)
         }
     }
 
@@ -911,11 +885,14 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                 awaitingPicture = false
                 _state.update { it.copy(loading = false) }
             }
-            val info = imageInfo ?: return
+            val width = frameWidth
+            val height = frameHeight
+            if (width <= 0 || nativeBuffers.size < 3 || yBytes.size != width * height) return
             val t0 = if (FrameMeter.enabled) System.nanoTime() else 0L
-            nativeBuffers[0].rewind()
-            nativeBuffers[0].get(frameBytes)
-            val next = Image.makeRaster(info, frameBytes, info.width * 4)
+            nativeBuffers[0].rewind(); nativeBuffers[0].get(yBytes)
+            nativeBuffers[1].rewind(); nativeBuffers[1].get(uBytes)
+            nativeBuffers[2].rewind(); nativeBuffers[2].get(vBytes)
+            val next = YuvFrame.of(width, height, yBytes, uBytes, vBytes)
             val previous = synchronized(frameLock) {
                 val old = frame
                 frame = next
@@ -927,12 +904,12 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
                 FrameMeter.videoFrames.incrementAndGet()
                 FrameMeter.videoCopyNanos.addAndGet(System.nanoTime() - t0)
             }
-            if (!pictureSeen && framesSincePlay % BLACK_CHECK_EVERY == 0L && hasPicture(frameBytes, info.width, info.height)) {
+            if (!pictureSeen && framesSincePlay % BLACK_CHECK_EVERY == 0L && hasPictureLuma(yBytes, width, height)) {
                 pictureSeen = true
                 if (framesSincePlay > 0) Timing.mark("primeira imagem de verdade no quadro ${framesSincePlay + 1} (antes só quadros pretos)")
             }
             if (framesSincePlay++ == 0L) {
-                Timing.mark("primeiro quadro (${info.width}x${info.height})")
+                Timing.mark("primeiro quadro (${width}x$height)")
                 edge?.let { feed ->
                     val shown = feed.startServerMs ?: return@let
                     val skew = feed.clock.skewMs ?: return@let

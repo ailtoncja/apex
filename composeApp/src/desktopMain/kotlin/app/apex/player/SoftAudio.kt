@@ -49,7 +49,8 @@ internal class SoftAudio {
         line = l
         running = true
         if (Timing.enabled) Timing.mark("som: saída $id aberta")
-        writer = Thread({ pump(l) }, "apex-audio-$id").apply { isDaemon = true; start() }
+        // Prioridade alta: com o Apex em segundo plano o processo fica "abaixo do normal" (ver ViewingWatch), e o som não pode atrasar.
+        writer = Thread({ pump(l) }, "apex-audio-$id").apply { isDaemon = true; priority = Thread.MAX_PRIORITY; start() }
         return true
     }
 

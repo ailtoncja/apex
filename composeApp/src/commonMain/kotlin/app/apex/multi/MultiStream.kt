@@ -53,6 +53,21 @@ class MultiStream(
     private val _audio = MutableStateFlow<Set<String>>(emptySet())
     val audio: StateFlow<Set<String>> = _audio.asStateFlow()
 
+    /** O volume de cada live (%), independente das outras; quem não está aqui usa o volume do app. */
+    private val _volumes = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val volumes: StateFlow<Map<String, Int>> = _volumes.asStateFlow()
+
+    /** O volume de [key] (o próprio, ou o do app). */
+    fun volumeOf(key: String): Int = _volumes.value[key] ?: data.settings.value.volume
+
+    /** Muda o volume só de [key]; aumentar o volume de uma live muda também liga o som dela. */
+    fun setVolume(key: String, percent: Int) {
+        val tile = _tiles.value.firstOrNull { it.key == key } ?: return
+        _volumes.update { it + (key to percent) }
+        tile.player.setVolume(percent)
+        if (percent > 0 && key !in _audio.value) setAudio(_audio.value + key)
+    }
+
     /** A live cujo chat está aberto. */
     private val _chat = MutableStateFlow<String?>(null)
     val chat: StateFlow<String?> = _chat.asStateFlow()
@@ -96,6 +111,7 @@ class MultiStream(
         if (key in _audio.value) setAudio((_audio.value - key).ifEmpty { setOfNotNull(remaining.firstOrNull()?.key) })
         if (_chat.value == key) _chat.value = remaining.firstOrNull()?.key
         if (_focus.value == key) _focus.value = null
+        _volumes.update { it - key }
         save()
     }
 
@@ -174,7 +190,7 @@ class MultiStream(
                     if (resolved.qualities.isEmpty()) error("Nenhuma qualidade disponível.")
                     val quality = pickTileQuality(resolved.qualities, _tiles.value.size)
                     val settings = data.settings.value
-                    tile.player.setVolume(settings.volume)
+                    tile.player.setVolume(volumeOf(tile.key))
                     tile.player.setMuted(tile.key !in _audio.value)
                     tile.player.play(
                         PlaySource(

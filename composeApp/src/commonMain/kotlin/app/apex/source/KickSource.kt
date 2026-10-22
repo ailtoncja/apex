@@ -23,6 +23,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.request.delete
 import io.ktor.client.request.post
 import io.ktor.http.encodeURLParameter
+import io.ktor.http.encodeURLPathPart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -35,6 +36,9 @@ class KickLivePage(val items: List<Media>, val next: String?)
 class KickClipPage(val items: List<Media>, val next: String?)
 
 class KickChannelInfo(val hit: ChannelHit, val chatroomId: Long?, val playbackUrl: String?)
+
+/** Os emotes da Kick de um canal ([KickSource.emotes]): os do canal, os da Kick para todos, e o número do usuário do canal. */
+class KickEmotes(val channel: List<app.apex.chat.Emote>, val global: List<app.apex.chat.Emote>, val userId: Long?)
 
 class KickSource(private val http: HttpClient = Http.client) {
     /** Token de sessão da conta (cookie `session_token`), quando o usuário entrou. */
@@ -379,6 +383,21 @@ class KickSource(private val http: HttpClient = Http.client) {
     }
 
     suspend fun chatroomId(slug: String): Long? = channel(slug, withThumbnail = false)?.chatroomId
+
+    /**
+     * Os emotes da Kick para escrever no chat do canal [slug]: os do canal, os globais e os "emojis" da própria Kick. Cada um vai na mensagem
+     * como `[emote:id:nome]` (é assim que a Kick reconhece). Também devolve o número do usuário do canal (a 7TV o usa).
+     */
+    suspend fun emotes(slug: String): KickEmotes {
+        val sets = json("https://kick.com/emotes/${slug.encodeURLPathPart()}").list()
+        fun parse(set: JsonElement?) = set["emotes"].list().mapNotNull { e ->
+            val id = e["id"].long() ?: return@mapNotNull null
+            val name = e["name"].str()?.takeIf { it.isNotBlank() && ']' !in it && ':' !in it } ?: return@mapNotNull null
+            app.apex.chat.Emote(name, app.apex.chat.kickEmoteUrl(id.toString()), 1f, app.apex.chat.EmoteProvider.Kick, sendAs = "[emote:$id:$name]")
+        }
+        val channelSet = sets.firstOrNull { it["user_id"].long() != null }
+        return KickEmotes(parse(channelSet), sets.filter { it !== channelSet }.flatMap { parse(it) }, channelSet["user_id"].long())
+    }
 
     /**
      * Escreve [text] no chat da sala [chatroomId] como a conta logada. Devolve `null` quando a Kick aceitou, ou o motivo da recusa em português

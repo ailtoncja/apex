@@ -390,6 +390,51 @@ class AppContainer(
     /** Os emotes da 7TV, BetterTTV e FrankerFaceZ, buscados uma vez por canal enquanto o app está aberto. */
     val extensionEmotes = app.apex.chat.ExtensionEmotes()
 
+    // ---------- o chat unificado (o mesmo streamer em várias plataformas) ----------
+
+    /** Os chats das outras plataformas do streamer de [media] que estão ao vivo agora: os vinculados e as sugestões pelo mesmo nome. */
+    suspend fun linkedChats(media: Media): List<app.apex.chat.LinkedChat> {
+        val s = data.settings.value
+        return app.apex.chat.findLinkedChats(media, s.chatLinks, s.chatLinkRejected, ::liveChatOf)
+    }
+
+    /** Há live agora no canal [id] (login, slug, @ ou UC…) da [platform]? Devolve o chat dela; `null` se não há (ou o canal não existe). */
+    suspend fun liveChatOf(platform: Platform, id: String): app.apex.chat.LinkedChat? = when (platform) {
+        Platform.Twitch -> twitch.channels(listOf(id)).firstOrNull()?.takeIf { it.live != null }?.let { hit ->
+            app.apex.chat.LinkedChat(platform, app.apex.chat.channelKey(platform, hit.channel.id), hit.channel.name, hit.channel.id, hit.channel.id, false)
+        }
+        Platform.Kick -> kick.channel(id, withThumbnail = false)?.hit?.takeIf { it.live != null }?.let { hit ->
+            app.apex.chat.LinkedChat(platform, app.apex.chat.channelKey(platform, hit.channel.id), hit.channel.name, hit.channel.id, hit.channel.id, false)
+        }
+        Platform.YouTube -> {
+            val channelId = if (id.startsWith("UC")) id else youtube.channelIdByHandle(id)
+            val live = channelId?.let { youtube.channelLive(it) }
+            if (channelId == null || live == null) null
+            else app.apex.chat.LinkedChat(platform, app.apex.chat.channelKey(platform, channelId), live.channel?.name ?: id, live.id, channelId, false)
+        }
+    }
+
+    /**
+     * O canal [nameOrId] da [platform] existe? Devolve a chave dele (`Plataforma:id`) e o nome, para vincular à mão (não precisa estar ao vivo).
+     * `null` se não achou.
+     */
+    suspend fun findChannelForLink(platform: Platform, nameOrId: String): Pair<String, String>? {
+        val text = nameOrId.trim().removePrefix("@").substringAfterLast('/').ifBlank { return null }
+        return when (platform) {
+            Platform.Twitch -> twitch.channels(listOf(text.lowercase())).firstOrNull()?.channel?.let { app.apex.chat.channelKey(platform, it.id) to it.name }
+            Platform.Kick -> kick.channel(text.lowercase(), withThumbnail = false)?.hit?.channel?.let { app.apex.chat.channelKey(platform, it.id) to it.name }
+            Platform.YouTube -> (if (text.startsWith("UC")) text else youtube.channelIdByHandle(text))?.let { app.apex.chat.channelKey(platform, it) to "@$text" }
+        }
+    }
+
+    /** Junta os chats de [a] e [b] (o mesmo streamer). */
+    fun linkChats(a: String, b: String) = data.updateSettings { it.copy(chatLinks = app.apex.chat.linkChannels(it.chatLinks, a, b)) }
+
+    /** [key] não é o mesmo streamer que os do grupo dele (ou que [other], numa sugestão): separa e não sugere de novo. */
+    fun unlinkChat(key: String, other: String) = data.updateSettings {
+        it.copy(chatLinks = app.apex.chat.unlinkChannel(it.chatLinks, key), chatLinkRejected = (it.chatLinkRejected + app.apex.chat.rejectedPair(key, other)).distinct())
+    }
+
     /** Os emotes das extensões do canal da Twitch [login] (o chat gravado dos VODs, que não informa o número do canal). */
     suspend fun extensionEmotesForLogin(login: String?): app.apex.chat.ChannelEmotes {
         val id = login?.let { runCatching { twitch.userId(it) }.getOrNull() } ?: return app.apex.chat.ChannelEmotes.Empty

@@ -12,7 +12,7 @@ O servidor já está pronto para receber qualquer pessoa. Aqui está o que **já
   cota de dados por conta (10 MB ou 50 mil linhas), pedidos grandes demais recusados (64 KB; 4 MB na sincronização).
 - Limpeza automática a cada 6 horas: sessões vencidas, links de e-mail usados e marcas antigas de itens apagados (180 dias).
 - Cabeçalhos de segurança (HSTS, CSP, sem cache nas páginas de token) e logs sem os tokens dos links de e-mail.
-- Licença **GPL-3.0** (`LICENSE`) e lista de bibliotecas (`NOTICE.md`). O app mostra uma tela clara se o VLC não estiver instalado.
+- Licença **GPL-3.0** (`LICENSE`) e lista de bibliotecas (`NOTICE.md`). O VLC vai dentro do app; se ele não carregar, o app mostra uma tela clara.
 
 ## O que falta você fazer
 
@@ -59,7 +59,7 @@ a cada 5 minutos. Se crescer, o plano pago do Render (US$ 7/mês) acaba com isso
   (o histórico foi verificado antes: não tem senhas, chaves nem strings de conexão, e os commits usam o e-mail `noreply` do GitHub).
   Nunca commite arquivos `.env` nem a string de conexão do Neon.
 - `Empacotar.cmd` gera em `dist\`: o **zip portátil**, os instaladores **`.msi` e `.exe`** (atalho no menu Iniciar e na área de trabalho, instalação só para o
-  usuário atual, sem administrador) e o `SHA256SUMS.txt`. Todos trazem o Java 21; quem receber só precisa do **VLC 64 bits**.
+  usuário atual, sem administrador) e o `SHA256SUMS.txt`. Todos trazem o Java 21 e o VLC 3.0.24; quem receber não precisa instalar nada.
 - Ele usa duas ferramentas que ficam **fora do projeto**, em `%USERPROFILE%\.apex\`: o JDK Temurin 21 (`jdk\`) e o WiX Toolset 3.14 (`wix\`). Em outro PC, baixe
   o zip do Temurin 21 (adoptium.net) e o `wix314-binaries.zip` (github.com/wixtoolset/wix3) e extraia nessas pastas.
 - **Nova versão:** mude `appVersion` em `composeApp/build.gradle.kts` (é a única fonte: vai para o instalador e para o app) e rode `Empacotar.cmd`.

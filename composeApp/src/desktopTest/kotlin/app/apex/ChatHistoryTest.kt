@@ -109,6 +109,7 @@ class ChatHistoryTest {
 
     private class Probe(scope: CoroutineScope) : ChatClient(scope) {
         override val canSend = false
+        override val platform = app.apex.model.Platform.Twitch
         override suspend fun connect() {}
         override suspend fun send(text: String) = false
         fun show(m: ChatMessage) = push(m)

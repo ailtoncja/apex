@@ -121,47 +121,122 @@ private fun EmoteWithName(name: String, url: String) {
     }
 }
 
+/** A aba do seletor que ficou aberta por último (vale para todos os chats enquanto o app está aberto). */
+private var lastPickerTab by mutableStateOf(0)
+
 /**
- * A lista de emotes para escrever (7TV, BetterTTV e FrankerFaceZ, como as extensões oferecem no navegador): os do canal primeiro, depois os
- * globais, com busca pelo nome. Clicar escreve o nome na mensagem; quem tem a extensão (e o app) vê a imagem.
+ * O seletor do chat, com duas abas. "Emoji": todos os emojis do Unicode por grupo (Rostos, Comida, Bandeiras…), com busca em português ou
+ * inglês. "Emotes": os da própria plataforma (Twitch, Kick) e os das extensões (7TV, BetterTTV, FrankerFaceZ): os do canal, os que a conta pode
+ * usar e os globais. Clicar põe na mensagem: o emoji, ou o nome do emote (a Kick recebe o código dela na hora de enviar).
  */
 @Composable
-internal fun EmotePicker(emotes: ChannelEmotes, onPick: (Emote) -> Unit, modifier: Modifier = Modifier) {
+internal fun EmotePicker(
+    extensions: ChannelEmotes, natives: ChannelEmotes, onEmoji: (String) -> Unit, onPick: (Emote) -> Unit, modifier: Modifier = Modifier,
+) {
     var query by remember { mutableStateOf("") }
-    val q = query.trim()
-    fun List<Emote>.matching() = distinctBy { it.name }.filter { q.isEmpty() || it.name.contains(q, ignoreCase = true) }
-    val channel = emotes.channel.matching()
-    val global = emotes.global.matching().filter { g -> channel.none { it.name == g.name } }
+    val tab = lastPickerTab
     Column(
-        modifier.width(340.dp).height(320.dp).clip(RoundedCornerShape(12.dp)).background(ApexColors.SurfaceHigh)
+        modifier.width(360.dp).height(380.dp).clip(RoundedCornerShape(12.dp)).background(ApexColors.SurfaceHigh)
             .border(1.dp, ApexColors.Outline, RoundedCornerShape(12.dp)).testTag("emote-picker"),
     ) {
+        androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("Emoji", "Emotes").forEachIndexed { i, label ->
+                val on = tab == i
+                Text(
+                    label,
+                    Modifier.clip(RoundedCornerShape(50)).background(if (on) ApexColors.Accent else ApexColors.Background)
+                        .clickable { lastPickerTab = i }.padding(horizontal = 14.dp, vertical = 6.dp).testTag("picker-tab-$label"),
+                    color = if (on) Color.White else ApexColors.OnSurface, style = MaterialTheme.typography.labelLarge,
+                )
+            }
+        }
         Box(Modifier.fillMaxWidth().padding(10.dp).clip(RoundedCornerShape(50)).background(ApexColors.Background).padding(horizontal = 12.dp, vertical = 7.dp)) {
-            if (query.isEmpty()) Text("Buscar emote", color = ApexColors.Faint, fontSize = 13.sp)
+            if (query.isEmpty()) Text(if (tab == 0) "Buscar emoji (ex.: coração, risada)" else "Buscar emote", color = ApexColors.Faint, fontSize = 13.sp)
             BasicTextField(
                 query, { query = it }, singleLine = true, textStyle = TextStyle(color = ApexColors.OnSurface, fontSize = 13.sp),
                 cursorBrush = SolidColor(ApexColors.Accent), modifier = Modifier.fillMaxWidth().testTag("emote-search"),
             )
         }
-        if (channel.isEmpty() && global.isEmpty()) {
-            Text(
-                if (emotes.channel.isEmpty() && emotes.global.isEmpty()) "Carregando os emotes…" else "Nenhum emote com esse nome",
-                Modifier.padding(14.dp), color = ApexColors.Muted, style = MaterialTheme.typography.bodySmall,
-            )
-            return@Column
+        if (tab == 0) EmojiGrid(query, onEmoji) else EmoteGrid(extensions, natives, query, onPick)
+    }
+}
+
+/** Os emojis do Unicode, por grupo, filtrados por [query]. */
+@Composable
+private fun EmojiGrid(query: String, onEmoji: (String) -> Unit) {
+    val found = remember(query) { app.apex.chat.searchEmoji(app.apex.chat.EmojiCatalog.all, query) }
+    if (found.isEmpty()) {
+        Text(
+            if (app.apex.chat.EmojiCatalog.all.isEmpty()) "A lista de emojis não carregou." else "Nenhum emoji com esse nome",
+            Modifier.padding(14.dp), color = ApexColors.Muted, style = MaterialTheme.typography.bodySmall,
+        )
+        return
+    }
+    val byGroup = remember(found) { found.groupBy { it.group } }
+    LazyVerticalGrid(
+        GridCells.Adaptive(36.dp), Modifier.fillMaxSize().padding(horizontal = 8.dp).testTag("emoji-grid"),
+        horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        byGroup.forEach { (group, list) ->
+            item(key = "h-$group", span = { GridItemSpan(maxLineSpan) }) { PickerHeader(group) }
+            items(list, key = { "e-" + it.emoji }) { e -> PickerEmoji(e, onEmoji) }
         }
-        LazyVerticalGrid(
-            GridCells.Adaptive(40.dp), Modifier.fillMaxSize().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp),
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PickerEmoji(entry: app.apex.chat.EmojiEntry, onEmoji: (String) -> Unit) {
+    TooltipArea(
+        tooltip = {
+            Text(
+                entry.name,
+                Modifier.clip(RoundedCornerShape(6.dp)).background(ApexColors.SurfaceHighest).padding(horizontal = 8.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+            )
+        },
+        delayMillis = 400,
+    ) {
+        Box(
+            Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).clickable { onEmoji(entry.emoji) },
+            contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
-            if (channel.isNotEmpty()) {
-                item(span = { GridItemSpan(maxLineSpan) }) { PickerHeader("Deste canal") }
-                items(channel, key = { "c-" + it.name }) { PickerEmote(it, onPick) }
-            }
-            if (global.isNotEmpty()) {
-                item(span = { GridItemSpan(maxLineSpan) }) { PickerHeader("Globais") }
-                items(global, key = { "g-" + it.name }) { PickerEmote(it, onPick) }
-            }
+            Text(entry.emoji, fontSize = 22.sp)
+        }
+    }
+}
+
+/** Os emotes da plataforma e das extensões: os do canal, os da conta e os globais (sem repetir nomes), filtrados por [query]. */
+@Composable
+private fun EmoteGrid(extensions: ChannelEmotes, natives: ChannelEmotes, query: String, onPick: (Emote) -> Unit) {
+    val q = query.trim()
+    fun List<Emote>.matching() = distinctBy { it.name }.filter { q.isEmpty() || it.name.contains(q, ignoreCase = true) }
+    val channel = (natives.channel + extensions.channel).matching()
+    val mine = natives.mine.matching().filter { m -> channel.none { it.name == m.name } }
+    val global = (natives.global + extensions.global).matching().filter { g -> channel.none { it.name == g.name } && mine.none { it.name == g.name } }
+    if (channel.isEmpty() && mine.isEmpty() && global.isEmpty()) {
+        val nothing = natives.channel.isEmpty() && natives.global.isEmpty() && extensions.channel.isEmpty() && extensions.global.isEmpty()
+        Text(
+            if (nothing) "Carregando os emotes…" else "Nenhum emote com esse nome",
+            Modifier.padding(14.dp), color = ApexColors.Muted, style = MaterialTheme.typography.bodySmall,
+        )
+        return
+    }
+    LazyVerticalGrid(
+        GridCells.Adaptive(40.dp), Modifier.fillMaxSize().padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        if (channel.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) { PickerHeader("Deste canal") }
+            items(channel, key = { "c-" + it.name }) { PickerEmote(it, onPick) }
+        }
+        if (mine.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) { PickerHeader("Seus emotes") }
+            items(mine, key = { "m-" + it.name }) { PickerEmote(it, onPick) }
+        }
+        if (global.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) { PickerHeader("Globais") }
+            items(global, key = { "g-" + it.name }) { PickerEmote(it, onPick) }
         }
     }
 }

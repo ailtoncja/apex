@@ -55,6 +55,12 @@ interface SystemServices {
 
     /** Relê o login no navegador de onde a conta veio (cookies que o navegador trocou) e devolve a conta atualizada, ou `null`. */
     suspend fun refreshAccount(account: Account): Account?
+
+    /**
+     * Confere se uma assinatura (Base64) de um arquivo publicado pelo Apex foi feita com a chave das atualizações. `null` = não dá para conferir
+     * aqui, e nada publicado é aceito (como a lista dos servidores sem anúncio, ver [app.apex.source.fetchAdFreeList]).
+     */
+    val publishedSignature: ((data: ByteArray, signature: String) -> Boolean)? get() = null
 }
 
 data class BrowserOption(val id: String, val label: String, val note: String)
@@ -163,6 +169,28 @@ class AppContainer(
             }
         }
         scope.launch { data.settings.collect { kick.hideMature = it.hideMature } }
+        // Lives da Twitch sem anúncio pelos servidores (como no Xtra). Com Turbo a conta já assiste sem anúncio direto, sem passar por ninguém.
+        // A lista: a da pessoa (Ajustes), senão a publicada no repositório, senão a que veio no app.
+        scope.launch {
+            kotlinx.coroutines.flow.combine(data.settings, _twitchTurbo) { s, turbo ->
+                if (!s.twitchAdFree || turbo == true) emptyList() else app.apex.source.adFreeServersFor(s)
+            }.collect { twitch.adFreeServers = it }
+        }
+        // A lista publicada é conferida ao abrir e a cada 6 horas; só entra se a assinatura bater e a versão for nova.
+        system.publishedSignature?.let { verify ->
+            scope.launch {
+                kotlinx.coroutines.delay(5_000)
+                while (true) {
+                    app.apex.source.fetchAdFreeList(app.apex.source.Http.client, verify)?.let { list ->
+                        val s = data.settings.value
+                        if (list.version > s.twitchAdFreePublishedVersion || (list.version == s.twitchAdFreePublishedVersion && list.servers != s.twitchAdFreePublished)) {
+                            data.updateSettings { it.copy(twitchAdFreePublished = list.servers, twitchAdFreePublishedVersion = list.version) }
+                        }
+                    }
+                    kotlinx.coroutines.delay(6 * 60 * 60_000L)
+                }
+            }
+        }
         // Confere se saiu versão nova: depois de alguns segundos da abertura e a cada 6 horas.
         scope.launch {
             kotlinx.coroutines.delay(20_000)

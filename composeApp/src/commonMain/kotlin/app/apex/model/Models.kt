@@ -124,6 +124,8 @@ data class Resolved(
      * fim: o player busca em pedaços por uma ponte local e, passado o começo, no endereço completo do yt-dlp (ver [PlaySource.bridgeRanges]).
      */
     val rangeBridge: Boolean = false,
+    /** Live da Twitch aberta por um servidor sem anúncio ([app.apex.source.TWITCH_AD_FREE_SERVERS]): qual. `null` = direto da plataforma. */
+    val adFreeServer: String? = null,
     /** Os endereços de todos os arquivos do vídeo que o yt-dlp achou (os de [qualities] são só alguns deles). */
     val fileUrls: List<String> = emptyList(),
     /** Na abertura rápida: o resultado do yt-dlp para este mesmo vídeo, que já está a caminho (traz [fileUrls], legendas e curtidas). */
@@ -203,6 +205,13 @@ data class AppSettings(
     val liveAlerts: Boolean = true,
     /** Nas lives, começar mais perto do "ao vivo" (menos atraso). Desligar dá mais folga se a internet oscila. */
     val lowLatencyLive: Boolean = true,
+    /** Na Twitch, pedir a lista da live pelos servidores sem anúncio (como o Xtra); se nenhum responder, vai direto. */
+    val twitchAdFree: Boolean = true,
+    /** Esses servidores (`host/caminho` com `$channel`), na ordem; vazio = a lista padrão ([app.apex.source.TWITCH_AD_FREE_SERVERS]). */
+    val twitchAdFreeServers: List<String> = emptyList(),
+    /** A lista publicada no repositório (assinada; ver [app.apex.source.fetchAdFreeList]) e a versão dela; vazia = ainda não veio. */
+    val twitchAdFreePublished: List<String> = emptyList(),
+    val twitchAdFreePublishedVersion: Int = 0,
     /** O tema das cores (id de [app.apex.theme.Themes]): escuro, claro ou um dos dois Subaru. */
     val theme: String = "dark",
     /**

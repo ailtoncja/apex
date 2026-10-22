@@ -1,6 +1,10 @@
 package app.apex.source
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.launch
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import app.apex.model.ChatMessage
@@ -31,6 +35,12 @@ data class ChannelHit(val channel: Channel, val live: Media?)
 class TwitchSource(private val http: HttpClient = Http.client) {
     /** Token de login (cookie `auth-token`), quando o usuário entrou na conta. */
     var authToken: String? = null
+
+    /** Servidores para pedir a lista da live sem anúncio ([TWITCH_AD_FREE_SERVERS]); vazio = sempre direto da Twitch. */
+    @Volatile var adFreeServers: List<String> = emptyList()
+
+    /** O último servidor sem anúncio que respondeu: é o primeiro tentado na próxima live. */
+    @Volatile private var preferredAdFree: String? = null
 
     private fun headers(): Map<String, String> = buildMap {
         put("Client-ID", CLIENT_ID)
@@ -464,7 +474,79 @@ class TwitchSource(private val http: HttpClient = Http.client) {
         }
     }
 
-    private suspend fun resolveLive(media: Media, info: kotlinx.coroutines.Deferred<ChannelHit?>): Resolved {
+    private suspend fun resolveLive(media: Media, info: kotlinx.coroutines.Deferred<ChannelHit?>): Resolved = kotlinx.coroutines.coroutineScope {
+        // A lista sem anúncio (pelos servidores, como no Xtra) e a direta são pedidas juntas: se os servidores falharem, a direta já está
+        // pronta e abrir a live não fica mais lento.
+        val servers = usableAdFreeServers()
+        val adFree = if (servers.isEmpty()) null else async { adFreeMaster(media.id, servers) }
+        val direct = async { runCatching { directMaster(media, info) } }
+        // Se a direta já disse que não dá (canal offline), nem espera os servidores.
+        val viaServer = if (adFree == null) null else kotlinx.coroutines.selects.select<AdFreeMaster?> {
+            adFree.onAwait { it }
+            direct.onAwait { result -> if (result.isFailure) { adFree.cancel(); null } else adFree.await() }
+        }
+        if (viaServer != null) {
+            direct.cancel()
+            app.apex.util.Timing.mark("lista sem anúncio por ${viaServer.server.substringBefore('/')}")
+            liveResolved(media, info, viaServer.url, viaServer.text).copy(adFreeServer = viaServer.server)
+        } else {
+            if (adFree != null) app.apex.util.Timing.mark("servidores sem anúncio não responderam: lista direta da Twitch")
+            val (url, text) = direct.await().getOrThrow()
+            liveResolved(media, info, url, text)
+        }
+    }
+
+    private class AdFreeMaster(val server: String, val url: String, val text: String)
+
+    /** Servidores que deixaram passar anúncio, e até quando (relógio do PC) ficam de fora. Ver [reportAd]. */
+    private val benched = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * A live aberta por [server] caiu num anúncio mesmo assim: ele fica de fora por [AD_FREE_BENCH_MS] e o próximo pedido vai pelos outros.
+     * Com todos de fora, a live vai direto da Twitch até o primeiro voltar.
+     */
+    fun reportAd(server: String) {
+        benched[server] = System.currentTimeMillis() + AD_FREE_BENCH_MS
+        if (preferredAdFree == server) preferredAdFree = null
+    }
+
+    private fun usableAdFreeServers(): List<String> {
+        val now = System.currentTimeMillis()
+        return adFreeServers.filter { (benched[it] ?: 0) <= now }
+    }
+
+    /**
+     * A lista mestra de [login] por [servers], todos ao mesmo tempo e com no máximo [AD_FREE_TIMEOUT_MS] no total: vale a primeira resposta boa
+     * ([trustedTwitchMaster]); o que respondeu da última vez, se responder bem, ganha dos outros. `null` se nenhum serviu (canal offline, só
+     * para inscritos, servidores fora do ar).
+     */
+    private suspend fun adFreeMaster(login: String, servers: List<String>): AdFreeMaster? = kotlinx.coroutines.withTimeoutOrNull(AD_FREE_TIMEOUT_MS) {
+        kotlinx.coroutines.coroutineScope {
+            val winner = kotlinx.coroutines.CompletableDeferred<AdFreeMaster?>()
+            val preferred = preferredAdFree
+            val tries = servers.map { server ->
+                launch {
+                    // Os outros esperam um instante: se o preferido (o de sempre) responder bem nesse tempo, ele ganha.
+                    if (preferred != null && server != preferred && preferred in servers) kotlinx.coroutines.delay(AD_FREE_PREFERRED_HEAD_START_MS)
+                    tryAdFree(server, login)?.let { winner.complete(it) }
+                }
+            }
+            launch { tries.forEach { it.join() }; winner.complete(null) }
+            winner.await().also { coroutineContext[kotlinx.coroutines.Job]?.cancelChildren() }
+        }
+    }?.also { preferredAdFree = it.server }
+
+    private suspend fun tryAdFree(server: String, login: String): AdFreeMaster? {
+        val url = adFreeMasterUrl(server, login) ?: return null
+        return runCatching {
+            val response = http.get(url)
+            val text = response.bodyAsText()
+            if (response.status.value == 200 && trustedTwitchMaster(text)) AdFreeMaster(server, url, text) else null
+        }.getOrNull()
+    }
+
+    /** A lista mestra direto da Twitch, com o token de quem assiste (o caminho de sempre). */
+    private suspend fun directMaster(media: Media, info: kotlinx.coroutines.Deferred<ChannelHit?>): Pair<String, String> {
         val login = media.id
         val query = """query PlaybackAccessToken_Template(${'$'}login: String!, ${'$'}playerType: String!) {
             streamPlaybackAccessToken(channelName: ${'$'}login, params: {platform: "web", playerBackend: "mediaplayer", playerType: ${'$'}playerType}) { value signature }
@@ -483,6 +565,10 @@ class TwitchSource(private val http: HttpClient = Http.client) {
             val channel = info.await()?.channel ?: media.channel
             throw ChannelOfflineException(channel?.name ?: login, channel)
         }
+        return master to text
+    }
+
+    private suspend fun liveResolved(media: Media, info: kotlinx.coroutines.Deferred<ChannelHit?>, master: String, text: String): Resolved {
         val hit = info.await()
         val full = hit?.live?.copy(thumbnailUrl = hit.live.thumbnailUrl ?: media.thumbnailUrl)
             ?: media.copy(channel = hit?.channel ?: media.channel)
@@ -536,6 +622,13 @@ class TwitchSource(private val http: HttpClient = Http.client) {
 
     companion object {
         const val CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+
+        /** Quanto os servidores sem anúncio têm, juntos, para responder; e a vantagem do que respondeu da última vez. */
+        const val AD_FREE_TIMEOUT_MS = 3_000L
+        const val AD_FREE_PREFERRED_HEAD_START_MS = 300L
+
+        /** Quanto tempo um servidor que deixou passar anúncio fica de fora. */
+        const val AD_FREE_BENCH_MS = 30 * 60_000L
         private const val GQL_URL = "https://gql.twitch.tv/gql"
         private const val PAGE = 100
         /** A "consulta salva" do chat gravado de VODs (a mesma que o site da Twitch usa). */

@@ -22,40 +22,15 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
 
-/** O que o player precisa de um jeito de tocar a live perto do "ao vivo" ([LiveTsRelay] ou [LiveEdgeProxy]). */
-internal interface LowLatencyFeed {
-    /** O endereço local que o VLC abre. */
-    val url: String
-
-    /** A hora do servidor, para medir o atraso. */
-    val clock: ServerClock
-
-    /** Hora do servidor em que começa o trecho que o VLC mostra no primeiro quadro; `null` se a lista não informa. */
-    val startServerMs: Long?
-
-    /** Por que [start] devolveu `false` (para o registro de tempos). */
-    val failure: String?
-
-    /** [start] recusou só porque a lista ainda não está pronta (anúncio da Twitch): vale esperar ([waitForPrefetch]). */
-    val noPrefetch: Boolean
-
-    /** A lista que [start] viu era de um anúncio da Twitch: enquanto ele passa, o VLC toca com o buffer normal (com o mínimo, travava). */
-    val inAd: Boolean
-
-    suspend fun start(upstreamUrl: String, headers: Map<String, String>): Boolean
-
-    fun close()
-}
-
 /**
- * A live entregue ao VLC como um fluxo só (MPEG-TS), sem lista. O app consulta a lista da plataforma e baixa os trechos em ordem, inclusive os
+ * A live entregue ao VLC como um fluxo só, sem lista. O app consulta a lista da plataforma e baixa os trechos em ordem, inclusive os
  * adiantados, que a plataforma manda aos poucos enquanto os gera, e repassa cada pedaço ao VLC assim que chega: é o que o player do site da Twitch
- * faz. Pela lista ([LiveEdgeProxy]) o VLC espera cada trecho de 2 s inteiro antes de pedir o próximo e só relê a lista a cada 1 s; começando no
+ * faz. Pela lista da plataforma o VLC espera cada trecho de 2 s inteiro antes de pedir o próximo e só relê a lista a cada 1 s; começando no
  * trecho mais novo, travava a cada trecho.
  *
- * Começa [startBack] trechos antes do primeiro adiantado (0 = no trecho que está sendo gerado agora). Só para trechos MPEG-TS (o da Twitch e o da
- * Kick); com arquivo de início (fMP4) recusa, e o player usa a lista curta. Só aceita conexões do próprio computador, como os outros
- * servidorzinhos ([LocalHttp]).
+ * Começa [startBack] trechos antes do primeiro adiantado (0 = no trecho que está sendo gerado agora). Serve trechos MPEG-TS e fMP4 (a Twitch usa os
+ * dois, conforme o canal): no fMP4 o arquivo de início (`EXT-X-MAP`) vai antes, e o resto é a sequência de fragmentos. Só aceita conexões do
+ * próprio computador, como os outros servidorzinhos ([LocalHttp]).
  *
  * Numa troca de vídeo (entrada ou saída de um anúncio: o trecho vem marcado, ou a numeração da lista muda) o relógio do vídeo salta, e num fluxo
  * só o VLC pode congelar. Aí o fluxo para e chama [onBreak]: o player reabre a live, que no anúncio toca pela lista da plataforma e, quando ele
@@ -64,24 +39,33 @@ internal interface LowLatencyFeed {
 internal class LiveTsRelay(
     private val scope: CoroutineScope, private val http: HttpClient, private val startBack: Int = RELAY_START_BACK,
     private val onBreak: () -> Unit = {},
-) : LowLatencyFeed {
+) {
     private val server = ServerSocket(0, 8, InetAddress.getLoopbackAddress())
-    private val path = "/${LocalHttp.newToken()}/live.ts"
-    override val url: String get() = "http://127.0.0.1:${server.localPort}$path"
-    override val clock = ServerClock()
+    private val path = "/${LocalHttp.newToken()}/live"
+    /** O endereço local que o VLC abre. */
+    val url: String get() = "http://127.0.0.1:${server.localPort}$path"
+    /** A hora do servidor, para medir o atraso. */
+    val clock = ServerClock()
 
-    @Volatile override var startServerMs: Long? = null
+    /** Hora do servidor em que começa o trecho que o VLC mostra no primeiro quadro; `null` se a lista não informa. */
+    @Volatile var startServerMs: Long? = null
         private set
-    override var failure: String? = null
+    /** Por que [start] devolveu `false` (para o registro de tempos). */
+    var failure: String? = null
         private set
-    override var noPrefetch = false
+    /** [start] recusou só porque a lista ainda não está pronta (anúncio da Twitch): vale esperar ([waitForPrefetch]). */
+    var noPrefetch = false
         private set
-    override var inAd = false
+    /** A lista que [start] viu era de um anúncio da Twitch: enquanto ele passa, o VLC toca com o buffer normal (com o mínimo, travava). */
+    var inAd = false
         private set
 
-    /** [start] recusou porque o vídeo é fMP4 (com arquivo de início): aí serve a lista curta. */
-    var fmp4 = false
+    /** O vídeo é fMP4 (com arquivo de início), não MPEG-TS: o VLC lê o fluxo como MP4. */
+    @Volatile var fmp4 = false
         private set
+
+    /** O arquivo de início já repassado à conexão de agora (fMP4); `null` = ainda não (ou o VLC reconectou e precisa dele de novo). */
+    @Volatile private var initSent: String? = null
 
     private var upstreamUrl = ""
     private var requestHeaders: Map<String, String> = emptyMap()
@@ -99,13 +83,12 @@ internal class LiveTsRelay(
     private val clientLock = Object()
     private var client: Client? = null
 
-    override suspend fun start(upstreamUrl: String, headers: Map<String, String>): Boolean {
+    suspend fun start(upstreamUrl: String, headers: Map<String, String>): Boolean {
         this.upstreamUrl = upstreamUrl
         this.requestHeaders = headers
         val text = runCatching { fetch(upstreamUrl) }.onFailure { failure = "a lista não veio (${it::class.simpleName})" }.getOrNull() ?: return false
         val playlist = parseLivePlaylist(text, upstreamUrl) ?: run { failure = "não é a lista de uma qualidade"; return false }
         if (playlist.ended) { failure = "a live acabou"; return false }
-        if (playlist.segments.any { it.map != null }) { failure = "vídeo fMP4"; fmp4 = true; return false }
         inAd = isTwitchAd(text)
         val start = relayStart(playlist, startBack) ?: run {
             failure = if (playlist.segments.none { it.prefetch }) "sem trechos adiantados" else "logo depois de um anúncio"
@@ -115,6 +98,7 @@ internal class LiveTsRelay(
         latest = playlist
         nextSequence = playlist.mediaSequence + start
         startServerMs = playlist.segments[start].startMs
+        fmp4 = playlist.segments[start].map != null
         Thread { LocalHttp.acceptLoop(server, "apex-live-relay-conn", MAX_CONNECTIONS, { server.isClosed }) { serve(it) } }
             .also { it.isDaemon = true; it.name = "apex-live-relay" }.start()
         poller = scope.launch {
@@ -127,7 +111,7 @@ internal class LiveTsRelay(
         return true
     }
 
-    override fun close() {
+    fun close() {
         poller?.cancel()
         pump?.cancel()
         runCatching { server.close() }
@@ -156,7 +140,8 @@ internal class LiveTsRelay(
                 s.soTimeout = 0
                 s.getOutputStream().also {
                     // Sem tamanho: um fluxo sem fim, que o VLC trata como "ao vivo" (sem pular para trás nem para a frente).
-                    it.write("HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n".toByteArray())
+                    val type = if (fmp4) "video/mp4" else "video/mp2t"
+                    it.write("HTTP/1.1 200 OK\r\nContent-Type: $type\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n".toByteArray())
                     it.flush()
                 }
             }.getOrNull() ?: return
@@ -164,6 +149,8 @@ internal class LiveTsRelay(
             synchronized(clientLock) {
                 client?.let { drop(it) }
                 client = mine
+                // Conexão nova (o VLC reconectou): no fMP4 ela precisa do arquivo de início antes de tudo.
+                initSent = null
                 if (pump == null) pump = scope.launch { pumpLoop() }
             }
             // A conexão fica aberta enquanto o fluxo vai para ela.
@@ -203,6 +190,15 @@ internal class LiveTsRelay(
             if (index == playlist.segments.size.toLong()) { delay(WAIT_NEXT_MS); continue }
             val segment = playlist.segments[index.toInt()]
             if (segment.discontinuity) return breakOff("troca de vídeo no trecho $nextSequence (anúncio)")
+            // fMP4: o arquivo de início vai antes do primeiro fragmento (e de novo se o VLC reconectou). Se ele muda no meio, o vídeo mudou de
+            // formato: como numa troca de vídeo, a live é reaberta.
+            if ((segment.map != null) != fmp4) return breakOff("o vídeo mudou de formato no trecho $nextSequence")
+            val init = segment.map
+            if (init != null && init != initSent) {
+                if (initSent != null && synchronized(clientLock) { client } != null) return breakOff("arquivo de início novo no trecho $nextSequence")
+                if (!relaySegment(init, buffer)) { delay(WAIT_NEXT_MS); continue }
+                initSent = init
+            }
             val t0 = System.currentTimeMillis()
             val sent = relaySegment(segment.uri, buffer)
             if (Timing.enabled) {

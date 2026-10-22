@@ -52,15 +52,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** Quantos trechos da live o VLC enxerga pela lista curta (2 s cada na Twitch): menos que isso trava ao menor soluço da internet. */
-internal const val EDGE_KEEP = 2
-
-/** Com trechos adiantados (Twitch), basta o último completo: os adiantados dão o resto. */
-internal const val EDGE_KEEP_WITH_PREFETCH = 1
-
-/** O buffer do VLC pela lista curta. */
-internal const val EDGE_CACHE_MS = 500
-
 /** O buffer do VLC pelo fluxo contínuo. */
 internal const val RELAY_CACHE_MS = 500
 
@@ -72,7 +63,7 @@ private val UPSCALE: SamplingMode = SamplingMode.CATMULL_ROM
  * declara segmentos de 6 s) e ainda guarda 3 s; com [PlaySource.lowLatency] ele começa 3 segmentos (~6 s) antes, o mínimo que o VLC
  * aceita, e guarda 1 s (medido nos logs do próprio VLC: de ~19 s para ~7 s de atraso).
  */
-internal fun vlcOptions(source: PlaySource, viaEdge: Boolean = false, viaRelay: Boolean = false): List<String> = buildList {
+internal fun vlcOptions(source: PlaySource, viaRelay: Boolean = false, relayMp4: Boolean = false): List<String> = buildList {
     source.audioUrl?.let { add(":input-slave=$it") }
     source.userAgent?.let { add(":http-user-agent=$it") }
     if (source.startMs > 1000) add(":start-time=${source.startMs / 1000.0}")
@@ -81,14 +72,12 @@ internal fun vlcOptions(source: PlaySource, viaEdge: Boolean = false, viaRelay: 
     if (source.audioOnly) add(":no-video")
     when {
         !source.live -> add(":network-caching=1500")
-        // Pelo fluxo contínuo ([LiveTsRelay]) o vídeo chega conforme é gerado: um buffer pequeno, e o VLC já sabe que é MPEG-TS (não perde
-        // tempo adivinhando o formato).
+        // Pelo fluxo contínuo ([LiveTsRelay]) o vídeo chega conforme é gerado: um buffer pequeno, e o VLC já sabe o formato (MPEG-TS ou fMP4) e
+        // não perde tempo adivinhando.
         viaRelay -> {
             add(":network-caching=$RELAY_CACHE_MS")
-            add(":demux=ts")
+            add(if (relayMp4) ":demux=mp4" else ":demux=ts")
         }
-        // Pela lista curta ([LiveEdgeProxy]) o VLC já começa perto do fim: só o buffer pequeno.
-        viaEdge -> add(":network-caching=$EDGE_CACHE_MS")
         source.lowLatency -> {
             add(":network-caching=1000")
             add(":adaptive-livedelay=3000")
@@ -360,9 +349,9 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     /** Algum quadro entregue tinha imagem (não era todo preto). Ver [recoverIfNoPicture]. */
     @Volatile private var pictureSeen = false
 
-    /** Trabalho de rede do player (a lista curta da live). */
+    /** Trabalho de rede do player (o fluxo contínuo da live). */
     private val netScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    @Volatile private var edge: LowLatencyFeed? = null
+    @Volatile private var edge: LiveTsRelay? = null
     @Volatile private var retriedWithoutPicture = false
 
     init {
@@ -557,7 +546,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         _state.update {
             PlayerState(
                 hasMedia = true, loading = true, volume = it.volume, muted = it.muted, rate = desiredRate,
-                durationMs = source.endMs?.let { end -> end - source.startMs } ?: 0,
+                durationMs = source.endMs?.let { end -> end - source.startMs } ?: 0, adsSeen = it.adsSeen,
             )
         }
         vlc { if (mine == generation.get()) start(source, safeMode, mine) }
@@ -588,28 +577,31 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         // Pela saída do app, o VLC adianta o áudio um pouco (o que fica na fila curta e na linha de som).
         val sync = if (softAudio != null && softAudio.start()) listOf(":audio-desync=${SoftAudio.DESYNC_MS}") else emptyList()
         val extra = (if (safeMode) SAFE_MODE_OPTIONS else emptyList()) + noVideo + sync
-        // Live de uma qualidade só (lista de trechos): o VLC lê uma lista curta e local, e fica perto do "ao vivo". No modo seguro vai direto.
+        // Live de uma qualidade só (lista de trechos): o app entrega ao VLC um fluxo contínuo, perto do "ao vivo" (ver LiveTsRelay). No modo
+        // seguro vai direto.
         if (source.live && source.lowLatency && !safeMode && !source.audioOnly) {
             netScope.launch {
                 val headers = source.userAgent?.let { mapOf("User-Agent" to it) } ?: emptyMap()
-                val (feed, ok) = lowLatencyFeed(source, headers, mine)
-                if (mine != generation.get()) { feed.close(); return@launch }
-                if (ok) edge = feed
-                val relay = feed is LiveTsRelay
-                catchUpStartMs = if (ok && relay) RELAY_CATCH_UP_START_MS else CATCH_UP_START_MS
-                catchUpStopMs = if (ok && relay) RELAY_CATCH_UP_STOP_MS else CATCH_UP_STOP_MS
-                val name = if (relay) "fluxo contínuo" else "lista curta"
-                Timing.mark(if (ok) "$name: ligado" else "$name: não deu (${feed.failure}), o VLC toca direto")
+                // Numa troca de vídeo (anúncio) o fluxo para: a live é reaberta.
+                val relay = LiveTsRelay(netScope, Http.client) { if (mine == generation.get()) request(source, safeMode = false) }
+                val ok = relay.start(source.videoUrl, headers)
+                if (!ok) relay.close()
+                if (mine != generation.get()) { relay.close(); return@launch }
+                if (ok) edge = relay
+                catchUpStartMs = if (ok) RELAY_CATCH_UP_START_MS else CATCH_UP_START_MS
+                catchUpStopMs = if (ok) RELAY_CATCH_UP_STOP_MS else CATCH_UP_STOP_MS
+                Timing.mark(if (ok) "fluxo contínuo: ligado${if (relay.fmp4) " (fMP4)" else ""}" else "fluxo contínuo: não deu (${relay.failure}), o VLC toca direto")
                 // No anúncio o VLC toca a lista da plataforma com o buffer normal: com o mínimo da baixa latência travava a cada trecho, e um
                 // anúncio não precisa estar perto do "ao vivo" (a live é reaberta quando ele acaba).
-                val played = if (!ok && feed.inAd) source.copy(lowLatency = false) else source
-                val options = vlcOptions(played, viaEdge = ok && !relay, viaRelay = ok && relay) + extra
-                vlc { if (mine == generation.get()) open(mine, if (ok) feed.url else source.videoUrl, options) }
+                val played = if (!ok && relay.inAd) source.copy(lowLatency = false) else source
+                // Avisa a sessão: se a live veio por um servidor sem anúncio, ela troca de servidor (ver PlaybackSession.onAd).
+                if (relay.inAd) _state.update { it.copy(adsSeen = it.adsSeen + 1) }
+                val options = vlcOptions(played, viaRelay = ok, relayMp4 = relay.fmp4) + extra
+                vlc { if (mine == generation.get()) open(mine, if (ok) relay.url else source.videoUrl, options) }
                 // A Twitch abre a live com um anúncio, e a lista dele não tem trechos adiantados: sem isto o VLC ficaria tocando direto (e
                 // atrasado) a live inteira. Quando a lista da live chega, a live é reaberta perto do "ao vivo".
-                if (feed.noPrefetch) {
-                    val ready: (LivePlaylist) -> Boolean =
-                        if (relay) { p -> relayStart(p, RELAY_START_BACK) != null } else { p -> readyForEdge(p, EDGE_KEEP, EDGE_KEEP_WITH_PREFETCH) }
+                if (relay.noPrefetch) {
+                    val ready: (LivePlaylist) -> Boolean = { p -> relayStart(p, RELAY_START_BACK) != null }
                     val stillWanted = { mine == generation.get() && _state.value.playing }
                     if (waitForPrefetch(Http.client, source.videoUrl, headers, ready, PREFETCH_POLL_MS, PREFETCH_WAIT_MS) { mine == generation.get() } &&
                         stillWanted()
@@ -633,7 +625,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
     private fun open(mine: Int, mrl: String, options: List<String>) {
         showing = true
         val started = mediaPlayer.media().play(mrl, *options.toTypedArray())
-        // Quadros do vídeo anterior ainda chegam enquanto a lista curta é preparada: a contagem (e o "primeiro quadro", onde o atraso é medido)
+        // Quadros do vídeo anterior ainda chegam enquanto o fluxo contínuo é preparado: a contagem (e o "primeiro quadro", onde o atraso é medido)
         // recomeça aqui, com o novo já aberto.
         framesSincePlay = 0
         firstFrameServerMs = -1
@@ -652,23 +644,6 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         val video = rangeProxy.register(source.videoUrl, headers, source.fullAccess) ?: return source
         val audio = source.audioUrl?.let { rangeProxy.register(it, headers, source.fullAccess) ?: return source }
         return source.copy(videoUrl = video, audioUrl = audio, userAgent = null)
-    }
-
-    /**
-     * O jeito de tocar a live perto do "ao vivo": o fluxo contínuo ([LiveTsRelay]) quando a live é MPEG-TS (Twitch e Kick); senão a lista curta
-     * ([LiveEdgeProxy]). Devolve o que tentou por último e se abriu (fechado se não abriu; o motivo fica em [LowLatencyFeed.failure]).
-     */
-    private suspend fun lowLatencyFeed(source: PlaySource, headers: Map<String, String>, mine: Int): Pair<LowLatencyFeed, Boolean> {
-        val url = source.videoUrl
-        // Numa troca de vídeo (anúncio) o fluxo para: a live é reaberta (ver LiveTsRelay).
-        val relay = LiveTsRelay(netScope, Http.client) { if (mine == generation.get()) request(source, safeMode = false) }
-        if (relay.start(url, headers)) return relay to true
-        relay.close()
-        if (!relay.fmp4) return relay to false
-        val proxy = LiveEdgeProxy(netScope, Http.client, EDGE_KEEP, EDGE_KEEP_WITH_PREFETCH)
-        val ok = proxy.start(url, headers)
-        if (!ok) proxy.close()
-        return proxy to ok
     }
 
     private fun closeEdge() {
@@ -817,7 +792,7 @@ class VlcPlayerController(hardwareDecode: Boolean = true) : PlayerController {
         lastSource = null
         sectionStartMs = 0
         sectionEndMs = null
-        _state.update { PlayerState(volume = it.volume, muted = it.muted) }
+        _state.update { PlayerState(volume = it.volume, muted = it.muted, adsSeen = it.adsSeen) }
         clearFrame()
         vlc {
             softAudio?.stop()

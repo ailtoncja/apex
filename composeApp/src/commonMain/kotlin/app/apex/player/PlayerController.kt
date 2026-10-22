@@ -79,6 +79,8 @@ data class PlayerState(
     val behindLiveMs: Long = 0,
     /** Numa live: o atraso em relação à transmissão (do servidor da plataforma até a tela), quando dá para medir; `null` = não se sabe. */
     val liveLatencyMs: Long? = null,
+    /** Quantas vezes, desde que o player foi criado, a live caiu num anúncio da Twitch (a lista veio marcada). Só sobe. */
+    val adsSeen: Int = 0,
 )
 
 /** Contrato do player: a interface é compartilhada, cada plataforma entrega o seu motor (libVLC no Windows). */

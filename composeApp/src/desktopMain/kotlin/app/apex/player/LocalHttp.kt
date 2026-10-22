@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Peças comuns dos servidorzinhos locais que entregam vídeo ao VLC ([RangeProxy] e [LiveEdgeProxy]). Eles só escutam no próprio computador,
+ * Peças comuns dos servidorzinhos locais que entregam vídeo ao VLC ([RangeProxy] e [LiveTsRelay]). Eles só escutam no próprio computador,
  * mas uma página aberta no navegador também está "no próprio computador": por isso cada endereço tem um trecho impossível de adivinhar, o
  * cabeçalho `Host` tem de ser o do próprio servidor (uma página que troca o IP do domínio dela para 127.0.0.1 manda o domínio dela no `Host`) e
  * pedidos e conexões têm teto.

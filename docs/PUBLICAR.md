@@ -84,6 +84,13 @@ a cada 5 minutos. Se crescer, o plano pago do Render (US$ 7/mês) acaba com isso
     `java tools\GenKey.java "%USERPROFILE%\.apex\signing\apex-update-nova.key.enc"` (já nasce com senha), cole a pública em `UpdateKeys.kt` e publique uma
     versão nova assinada com a **antiga** (que os apps ainda aceitam) contendo a chave nova. Depois disso, renomeie a nova para `apex-update.key.enc`
     (guarde a antiga offline até todo mundo ter atualizado) e refaça a cópia de segurança.
+- **Lista dos servidores sem anúncio da Twitch** (`config/twitch-ad-free.json`): o app baixa este arquivo do GitHub ao abrir e a cada 6 horas e
+  só aceita com a assinatura (`.sig`) da mesma chave das atualizações. Para trocar servidores **sem lançar versão nova**:
+  1. edite a lista `servers` (cada item é `host/caminho` com `$channel`), **aumente o `version`** (uma lista com versão menor é ignorada) e mude o `updated`;
+  2. assine: `"%USERPROFILE%\.apex\jdk\jdk-21.0.12.1+1\bin\java.exe" tools\Sign.java "%USERPROFILE%\.apex\signing\apex-update.key.enc" config\twitch-ad-free.json`;
+  3. faça o commit dos dois arquivos (`.json` e `.json.sig`) e o push. Os apps pegam a lista nova em até 6 horas.
+  O teste `a_lista_publicada_no_repositorio_esta_assinada_com_a_chave_do_app` falha se o arquivo for mudado sem assinar de novo.
+  Quem escreveu a própria lista nos Ajustes continua com a dela.
 - O servidor mostra o link da página de Releases na página inicial (mude com `DOWNLOAD_URL` no Render se hospedar em outro lugar).
 - Sem assinatura de código, o Windows (SmartScreen) mostra um aviso na primeira abertura (o `LEIA-ME` e o README explicam o que clicar). A assinatura é paga
   por ano; deixe para quando houver público.

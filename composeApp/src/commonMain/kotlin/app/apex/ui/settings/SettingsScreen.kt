@@ -50,6 +50,7 @@ import app.apex.data.Account
 import app.apex.model.Platform
 import app.apex.model.AppSettings
 import app.apex.source.ExtractorState
+import app.apex.source.defaultAdFreeServers
 import app.apex.theme.ApexColors
 import app.apex.update.UpdateState
 import app.apex.theme.color
@@ -124,8 +125,20 @@ fun SettingsScreen() {
                 Setting("Avisar quando entrarem ao vivo", "Mostra um aviso quando um canal que você segue começa a transmitir") {
                     Toggle(settings.liveAlerts) { v -> app.data.updateSettings { it.copy(liveAlerts = v) } }
                 }
-                Setting("Menos atraso nas lives", "Na Twitch e na Kick o vídeo fica uns 4 s atrás do ao vivo (em vez de uns 9 s) e se ajusta sozinho se atrasar. Desligue se a live travar") {
+                Setting("Menos atraso nas lives", "Na Twitch e na Kick o vídeo fica de 1 a 4 s atrás do ao vivo, como no site, e se ajusta sozinho se atrasar. Desligue se a live travar") {
                     Toggle(settings.lowLatencyLive) { v -> app.data.updateSettings { it.copy(lowLatencyLive = v) } }
+                }
+                Setting(
+                    "Twitch sem anúncio",
+                    "Pede a live por servidores de fora (os mesmos do Xtra), onde a Twitch não põe anúncio. Só a lista passa por eles: o vídeo vem " +
+                        "direto da Twitch, na mesma qualidade. Eles veem qual canal você assiste. Se não responderem, a live abre direto",
+                ) {
+                    Toggle(settings.twitchAdFree) { v -> app.data.updateSettings { it.copy(twitchAdFree = v) } }
+                }
+                if (settings.twitchAdFree) {
+                    AdFreeServers(settings.twitchAdFreeServers, defaultAdFreeServers(settings)) { list ->
+                        app.data.updateSettings { it.copy(twitchAdFreeServers = list) }
+                    }
                 }
                 Setting("Continuar de onde parei", "Retoma vídeos longos pelo ponto em que você saiu") {
                     Toggle(settings.rememberPosition) { v -> app.data.updateSettings { it.copy(rememberPosition = v) } }
@@ -314,6 +327,33 @@ private fun Setting(title: String, subtitle: String? = null, control: @Composabl
             if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted)
         }
         control()
+    }
+}
+
+/**
+ * A lista dos servidores sem anúncio da Twitch, um por linha, na ordem de tentativa. Enquanto for igual à padrão ([standard]: a publicada no
+ * repositório, que se atualiza sozinha) nada fica guardado; apagar tudo volta para ela.
+ */
+@Composable
+private fun AdFreeServers(saved: List<String>, standard: List<String>, onChange: (List<String>) -> Unit) {
+    var text by remember(standard) { mutableStateOf(saved.ifEmpty { standard }.joinToString("\n")) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        androidx.compose.material3.OutlinedTextField(
+            text,
+            { value ->
+                text = value
+                val list = value.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                onChange(if (list == standard) emptyList() else list)
+            },
+            Modifier.fillMaxWidth(),
+            label = { Text("Servidores sem anúncio (um por linha, \$channel = o canal)") },
+            textStyle = MaterialTheme.typography.bodySmall,
+            minLines = 3, maxLines = 6,
+        )
+        Text(
+            "A lista padrão se atualiza sozinha quando um servidor sai do ar. Se você mudar a lista, vale a sua; apague tudo para voltar à padrão.",
+            style = MaterialTheme.typography.bodySmall, color = ApexColors.Muted,
+        )
     }
 }
 

@@ -37,6 +37,23 @@ class KickClipPage(val items: List<Media>, val next: String?)
 
 class KickChannelInfo(val hit: ChannelHit, val chatroomId: Long?, val playbackUrl: String?)
 
+/** O servidor do chat ao vivo da Kick ([KickSource.chatRealtime]). */
+sealed interface KickRealtime {
+    data class Centrifugo(val url: String) : KickRealtime
+    data class Pusher(val appKey: String, val cluster: String) : KickRealtime
+
+    companion object {
+        /** O Centrifugo da Kick (10/2026), para quando a Kick não diz qual usar. */
+        val DEFAULT = Centrifugo("wss://realtime.us-west-2.platform.kick.com/connection/websocket")
+    }
+}
+
+/** Só servidores de tempo real da própria Kick (`wss://…kick.com`): o endereço vem da resposta da Kick e não pode levar o app a outro lugar. */
+internal fun isKickRealtimeUrl(url: String): Boolean {
+    val host = Regex("""^wss://([A-Za-z0-9.-]+)(?::\d+)?/""").find(url)?.groupValues?.get(1)?.lowercase() ?: return false
+    return host == "kick.com" || host.endsWith(".kick.com")
+}
+
 /** Os emotes da Kick de um canal ([KickSource.emotes]): os do canal, os da Kick para todos, e o número do usuário do canal. */
 class KickEmotes(val channel: List<app.apex.chat.Emote>, val global: List<app.apex.chat.Emote>, val userId: Long?)
 
@@ -383,6 +400,53 @@ class KickSource(private val http: HttpClient = Http.client) {
     }
 
     suspend fun chatroomId(slug: String): Long? = channel(slug, withThumbnail = false)?.chatroomId
+
+    private suspend fun postJson(url: String, body: String): JsonElement? {
+        val response = http.post(url) {
+            headersFor(url).forEach { (k, v) -> header(k, v) }
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        return if (response.status.isSuccess()) parseJson(response.bodyAsText()) else null
+    }
+
+    /**
+     * Onde fica agora o chat ao vivo do canal [channelId] (a Kick troca de servidor: em 10/2026 passou do Pusher para o Centrifugo dela).
+     * [clientId] é o número que identifica esta conexão. `null` se a Kick não respondeu.
+     */
+    suspend fun chatRealtime(channelId: String, clientId: String): KickRealtime? {
+        val body = buildJsonObject {
+            put("client", buildJsonObject { put("id", clientId); put("type", "web") })
+            put("capabilities", buildJsonObject {
+                put("accepted_providers", kotlinx.serialization.json.buildJsonArray {
+                    add(buildJsonObject { put("provider", "centrifugo") })
+                    add(buildJsonObject { put("provider", "pusher") })
+                })
+            })
+        }.toString()
+        return parseRealtime(postJson("https://web.kick.com/api/v1/realtime/channels/${channelId.encodeURLPathPart()}/chat/connection", body)["data"])
+    }
+
+    internal fun parseRealtime(data: JsonElement?): KickRealtime? {
+        if (data["mode"].str()?.let { it != "websocket" } == true) return null
+        return data["connections"].list().firstNotNullOfOrNull { c ->
+            val cred = c["credentials"]
+            when (c["provider"].str()) {
+                "centrifugo" -> cred["url"].str()?.takeIf { isKickRealtimeUrl(it) }?.let { KickRealtime.Centrifugo(it) }
+                "pusher" -> {
+                    val key = cred["app_key"].str()?.takeIf { k -> k.all { it.isLetterOrDigit() } }
+                    val cluster = cred["cluster"].str()?.takeIf { k -> k.all { it.isLetterOrDigit() || it == '-' } }
+                    if (key != null && cluster != null) KickRealtime.Pusher(key, cluster) else null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** O passe (de visitante, ou da conta quando ela entrou) para conectar ao Centrifugo da Kick; vale ~45 minutos. */
+    suspend fun realtimeToken(clientId: String): String? =
+        postJson("https://web.kick.com/api/v1/realtime/auth/connection", buildJsonObject { put("client_id", clientId) }.toString())["data"]["token"].str()
+            ?.takeIf { it.isNotBlank() }
 
     /**
      * Os emotes da Kick para escrever no chat do canal [slug]: os do canal, os globais e os "emojis" da própria Kick. Cada um vai na mensagem

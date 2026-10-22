@@ -87,6 +87,11 @@ import app.apex.ui.components.IconBtn
 import app.apex.ui.components.linkify
 import androidx.compose.foundation.text.selection.SelectionContainer
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 
 /** O chat de uma plataforma: [chatId] é o login (Twitch), o slug (Kick) ou o id do vídeo ao vivo (YouTube); [channelId], o canal (para os emotes). */
 private fun newChatClient(app: AppContainer, platform: Platform, chatId: String, channelId: String?): ChatClient = when (platform) {
@@ -289,11 +294,42 @@ private fun ChatSurface(
 ) {
     val app = LocalApp.current
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size, messages.lastOrNull()?.id) {
-        val info = listState.layoutInfo
-        val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-        if (messages.isNotEmpty() && last >= info.totalItemsCount - 3) listState.scrollToItem(messages.lastIndex)
+    val scope = rememberCoroutineScope()
+    // Nas mensagens mais recentes o chat acompanha sozinho. Rolar para cima (roda do mouse ou barra) para de acompanhar e guarda a última
+    // mensagem vista; o botão "Mensagens recentes" (ou rolar até o fim) volta a acompanhar.
+    var following by remember { mutableStateOf(true) }
+    var lastSeenId by remember { mutableStateOf<String?>(null) }
+    val currentMessages by rememberUpdatedState(messages)
+    // O rolar do próprio chat (ir para a mais nova) não conta como a pessoa rolando.
+    var autoScrolling by remember { mutableStateOf(false) }
+    suspend fun toLatest() {
+        val last = currentMessages.lastIndex
+        if (last < 0) return
+        autoScrolling = true
+        try { listState.scrollToItem(last) } finally { autoScrolling = false }
     }
+    LaunchedEffect(listState) {
+        // Só enquanto a pessoa rola (roda do mouse, arrastar): longe do fim para de acompanhar; chegando ao fim volta. Uma mensagem nova
+        // chegando também tira o fim da vista por um instante, mas aí ninguém está rolando e nada muda.
+        snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward, autoScrolling) }.collect { (scrolling, canForward, auto) ->
+            if (!scrolling || auto) return@collect
+            if (canForward && following) {
+                following = false
+                lastSeenId = currentMessages.lastOrNull()?.let { "${it.platform}:${it.id}" }
+            } else if (!canForward && !following) {
+                following = true
+                lastSeenId = null
+            }
+        }
+    }
+    LaunchedEffect(messages.size, messages.lastOrNull()?.id, following) {
+        // Num chat movimentado chega mensagem a todo instante: se a pessoa está no meio de uma rolada, não puxa a lista de volta.
+        if (following && !listState.isScrollInProgress) toLatest()
+    }
+    val unseen = if (following) 0 else lastSeenId?.let { seen ->
+        val i = messages.indexOfLast { "${it.platform}:${it.id}" == seen }
+        if (i < 0) messages.size else messages.lastIndex - i
+    } ?: 0
     Column(
         modifier.clip(RoundedCornerShape(14.dp)).background(ApexColors.Surface)
             .border(1.dp, ApexColors.Outline, RoundedCornerShape(14.dp)),
@@ -314,9 +350,10 @@ private fun ChatSurface(
         }
         top()
         // As mensagens dão para selecionar e copiar; os links nelas abrem (os das plataformas dentro do app, os outros no navegador).
-        SelectionContainer(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+        SelectionContainer(Modifier.fillMaxSize()) {
             LazyColumn(
-                Modifier.fillMaxSize(),
+                Modifier.fillMaxSize().testTag("chat-messages"),
                 state = listState,
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -333,6 +370,30 @@ private fun ChatSurface(
                     } else {
                         ChatLine(m, known, authorColor(m.color)) { url -> if (!app.openLink(url)) app.system.openUrl(url) }
                     }
+                }
+            }
+        }
+            if (!following && messages.isNotEmpty()) {
+                Row(
+                    Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp).clip(RoundedCornerShape(50)).background(ApexColors.Accent)
+                        .clickable {
+                            following = true
+                            lastSeenId = null
+                            scope.launch { toLatest() }
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp).testTag("chat-jump-latest"),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(16.dp), tint = Color.White)
+                    Text(
+                        when {
+                            unseen <= 0 -> "Mensagens recentes"
+                            unseen == 1 -> "1 mensagem nova"
+                            unseen >= 299 -> "Muitas mensagens novas"
+                            else -> "$unseen mensagens novas"
+                        },
+                        color = Color.White, style = MaterialTheme.typography.labelMedium,
+                    )
                 }
             }
         }

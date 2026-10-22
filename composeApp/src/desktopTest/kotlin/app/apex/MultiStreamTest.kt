@@ -148,6 +148,31 @@ class MultiStreamTest {
     }
 
     @Test
+    fun a_qualidade_de_cada_live_pode_ser_escolhida_a_mao() = runBlocking {
+        val h = Harness()
+        val a = live(Platform.Twitch, "a"); val b = live(Platform.Kick, "b")
+        h.multi.add(a); h.multi.add(b)
+        h.multi.start()
+        h.ready()
+        assertEquals("720p", h.multi.tiles.value.first { it.key == a.key }.quality.value?.label, "automática: duas lives, 720p")
+        h.multi.setQuality(a.key, "1080p")
+        h.until { h.player(a.key).played.size == 2 }
+        h.ready()
+        assertTrue(h.player(a.key).played.last().videoUrl.endsWith("/1080.m3u8"), "reabre só esta live, na escolhida")
+        assertEquals(1, h.player(b.key).played.size, "a outra não é reaberta")
+        assertEquals("1080p", h.multi.tiles.value.first { it.key == a.key }.quality.value?.label)
+        // Entrou uma terceira: a escolhida à mão continua; a automática da outra cai na próxima abertura.
+        h.multi.add(live(Platform.YouTube, "c"))
+        h.multi.stop(); h.until { h.players.take(2).all { it.stops >= 1 } }
+        h.multi.start(); h.ready()
+        assertTrue(h.player(a.key).played.last().videoUrl.endsWith("/1080.m3u8"), "a escolha fica")
+        assertTrue(h.player(b.key).played.last().videoUrl.endsWith("/480.m3u8"))
+        h.multi.setQuality(a.key, null)
+        h.until { h.player(a.key).played.last().videoUrl.endsWith("/480.m3u8") }
+        assertEquals(emptyMap(), h.multi.chosenQuality.value, "de volta ao automático")
+    }
+
+    @Test
     fun a_lista_fica_guardada_e_volta_na_proxima_vez() {
         val h = Harness()
         val a = live(Platform.Twitch, "a"); val b = live(Platform.Kick, "b")

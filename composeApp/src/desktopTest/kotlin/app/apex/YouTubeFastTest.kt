@@ -51,6 +51,9 @@ class YouTubeFastTest {
            {"itag":299,"url":"https://v/1080avc60","mimeType":"video/mp4; codecs=\"avc1.64002a\"","bitrate":6000000,"width":1920,"height":1080,"fps":60},
            {"itag":248,"url":"https://v/1080vp9","mimeType":"video/webm; codecs=\"vp9\"","bitrate":3000000,"height":1080,"fps":30},
            {"itag":313,"url":"https://v/2160vp9","mimeType":"video/webm; codecs=\"vp9\"","bitrate":15000000,"height":2160,"fps":30},
+           {"itag":337,"url":"https://v/2160hdr","mimeType":"video/webm; codecs=\"vp09.02.51.10.01.09.16.09.00\"","bitrate":28000000,"height":2160,"fps":30,
+             "qualityLabel":"2160p HDR","colorInfo":{"primaries":"COLOR_PRIMARIES_BT2020","transferCharacteristics":"COLOR_TRANSFER_CHARACTERISTICS_SMPTEST2084"}},
+           {"itag":701,"url":"https://v/2160av1hdr","mimeType":"video/mp4; codecs=\"av01.0.13M.10.0.110.09.16.09.0\"","bitrate":24000000,"height":2160,"fps":30},
            {"itag":140,"url":"https://a/aac","mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","bitrate":130000},
            {"itag":251,"url":"https://a/opus","mimeType":"audio/webm; codecs=\"opus\"","bitrate":160000},
            {"itag":251,"url":"https://a/drc","mimeType":"audio/webm; codecs=\"opus\"","bitrate":170000,"isDrc":true},
@@ -71,6 +74,17 @@ class YouTubeFastTest {
     // ------------------------------------------------------------------ o que sai da resposta
 
     @Test
+    fun reconhece_os_codecs_hdr() {
+        assertTrue(app.apex.source.isHdrCodec("vp9.2"))
+        assertTrue(app.apex.source.isHdrCodec("vp09.02.51.10.01.09.16.09.00"))
+        assertTrue(app.apex.source.isHdrCodec("av01.0.13M.10.0.110.09.16.09.0"))
+        assertTrue(app.apex.source.isHdrCodec("av01.0.13M.10.0.110.09.18.09.0"), "HLG")
+        listOf("vp9", "vp09.00.51.08", "avc1.64002A", "av01.0.13M.08", "av01.0.09M.08.0.110.01.01.01.0").forEach {
+            assertTrue(!app.apex.source.isHdrCodec(it), it)
+        }
+    }
+
+    @Test
     fun monta_as_qualidades_o_audio_e_os_dados_do_video() = runBlocking {
         val (fast, fake) = fast { player }
         val r = assertNotNull(fast.resolve(video))
@@ -79,7 +93,7 @@ class YouTubeFastTest {
         assertEquals("1080p60", q1080.label)
         assertEquals("https://v/1080avc60", q1080.videoUrl, "na mesma altura vence o h264 de 60 quadros")
         assertEquals("https://a/opus", q1080.audioUrl, "o áudio é o melhor da faixa principal: sem a versão de volume nivelado nem a dublagem")
-        assertEquals("https://v/2160vp9", r.qualities[0].videoUrl, "acima de 1080p vence o vp9")
+        assertEquals("https://v/2160vp9", r.qualities[0].videoUrl, "acima de 1080p vence o vp9, e o SDR, não o HDR (que sairia acinzentado)")
         assertNull(r.qualities[2].audioUrl, "o 360p já vem com áudio")
         assertEquals("Título novo", r.media.title)
         assertEquals("Canal Tal", r.media.channel?.name)

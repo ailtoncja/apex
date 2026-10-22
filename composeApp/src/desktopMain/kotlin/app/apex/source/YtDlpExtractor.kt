@@ -141,9 +141,15 @@ class YtDlpExtractor(
 
     override suspend fun resolve(media: Media): Resolved {
         val url = validUrl(media.url)
-        val info = fastInfo(url)
-        val live = info["is_live"].bool() == true || info["live_status"].str() == "is_live"
-        val qualities = buildQualities(info, live)
+        var info = fastInfo(url)
+        var live = info["is_live"].bool() == true || info["live_status"].str() == "is_live"
+        var qualities = buildQualities(info, live)
+        // A via rápida às vezes volta sem nenhum formato que dê para tocar: o jeito completo costuma trazê-los.
+        if (qualities.isEmpty()) {
+            info = json(FULL_INFO + listOf("--", url))
+            live = info["is_live"].bool() == true || info["live_status"].str() == "is_live"
+            qualities = buildQualities(info, live)
+        }
         if (qualities.isEmpty()) throw ExtractionException("Nenhum formato de vídeo disponível.")
 
         val handle = info["uploader_id"].str()?.takeIf { it.startsWith("@") }
@@ -191,23 +197,22 @@ class YtDlpExtractor(
     /**
      * As informações do vídeo. Pula a página do vídeo e a de configurações (o YouTube entrega o mesmo pelo player, conferido em vídeo
      * comum, com capítulos e em live: título, canal, inscritos, curtidas, descrição, legendas e todos os formatos), o que leva uns 4 s em vez de 5 s.
-     * Se der erro (e não for um motivo definitivo, como vídeo privado), repete do jeito completo.
+     * Se der erro (e não for um motivo definitivo, como vídeo privado), repete do jeito completo. O "confirme que não é um robô" não é
+     * definitivo aqui: desde 10/2026 o YouTube o devolve à via rápida sem login, e o jeito completo funciona.
      */
-    private suspend fun fastInfo(url: String): JsonElement {
-        val base = listOf("-J", "--no-playlist", "--skip-download")
-        return try {
-            json(base + listOf("--extractor-args", "youtube:player_skip=webpage,configs", "--", url))
-        } catch (e: ExtractionException) {
-            if (isDefinitive(e.message)) throw e
-            json(base + listOf("--", url))
-        }
+    private suspend fun fastInfo(url: String): JsonElement = try {
+        json(FULL_INFO + listOf("--extractor-args", "youtube:player_skip=webpage,configs", "--", url))
+    } catch (e: ExtractionException) {
+        if (isDefinitive(e.message)) throw e
+        json(FULL_INFO + listOf("--", url))
     }
 
     /** Erros que repetir não resolve (o vídeo não existe, é privado…). */
     private fun isDefinitive(message: String?): Boolean = message != null && DEFINITIVE.any { message.contains(it, ignoreCase = true) }
 
     private companion object {
-        val DEFINITIVE = listOf("privado", "exclusivo para membros", "ainda não começou", "indisponível", "restrição de idade", "robô", "endereço de vídeo inválido")
+        val FULL_INFO = listOf("-J", "--no-playlist", "--skip-download")
+        val DEFINITIVE = listOf("privado", "exclusivo para membros", "ainda não começou", "indisponível", "restrição de idade", "endereço de vídeo inválido")
     }
 
     /** O yt-dlp acrescenta a data e a hora ao título das lives; aqui ela sai. */
@@ -217,6 +222,9 @@ class YtDlpExtractor(
     private fun hasVideo(f: JsonElement) = f["vcodec"].str().let { it != null && it != "none" }
     private fun hasAudio(f: JsonElement) = f["acodec"].str().let { it != null && it != "none" }
     private fun isDirect(f: JsonElement) = f["protocol"].str().let { it == "https" || it == "http" }
+
+    /** A versão HDR de um vídeo (o yt-dlp diz "HDR10", "HLG"…; "SDR" ou nada é a comum). */
+    private fun isHdr(f: JsonElement) = f["dynamic_range"].str().let { it != null && it != "SDR" } || isHdrCodec(f["vcodec"].str().orEmpty())
 
     private fun codecRank(vcodec: String, height: Int): Int = when {
         vcodec.startsWith("avc1") -> if (height <= 1080) 3 else 1
@@ -234,7 +242,8 @@ class YtDlpExtractor(
             val master = hls.firstNotNullOfOrNull { it["manifest_url"].str() }
             val out = mutableListOf<Quality>()
             if (master != null) out += Quality("Automático", 0, master)
-            hls.sortedByDescending { it["height"].int() ?: 0 }
+            // Numa live HDR, em cada tamanho fica a versão SDR (a primeira de cada tamanho é a que vale).
+            hls.sortedWith(compareByDescending<JsonElement> { it["height"].int() ?: 0 }.thenBy { isHdr(it) })
                 .distinctBy { (it["height"].int() ?: 0) to (it["fps"].int() ?: 0) }
                 .forEach { f ->
                     val url = f["url"].str() ?: return@forEach
@@ -251,8 +260,10 @@ class YtDlpExtractor(
             .groupBy { it["height"].int() ?: 0 }
             .forEach { (h, list) ->
                 val best = list.sortedWith(
-                    // O formato "Premium" (só para contas Premium) tem bitrate bem maior no mesmo tamanho: vence qualquer outro.
-                    compareBy<JsonElement> { it["format_note"].str()?.contains("Premium", ignoreCase = true) == true }
+                    // A versão SDR vence a HDR do mesmo tamanho: o player não converte o HDR, que sairia acinzentado. Depois, o formato "Premium"
+                    // (só para contas Premium), que tem bitrate bem maior no mesmo tamanho.
+                    compareBy<JsonElement> { !isHdr(it) }
+                        .thenBy { it["format_note"].str()?.contains("Premium", ignoreCase = true) == true }
                         .thenBy { codecRank(it["vcodec"].str().orEmpty(), h) }
                         .thenBy { it["fps"].int() ?: 0 }
                         .thenBy { it["tbr"].double() ?: 0.0 },

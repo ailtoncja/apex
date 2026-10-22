@@ -78,11 +78,17 @@ object ViewingWatch {
     private val forcedMode = System.getenv("APEX_VIEWING")
     private val bornAt = System.currentTimeMillis()
 
-    private fun forced(): Viewing? = when (forcedMode) {
-        "normal" -> Viewing.Normal
-        "gaming" -> Viewing.Gaming
-        "hidden" -> Viewing.Hidden
-        "cycle" -> (System.currentTimeMillis() - bornAt).let { if (it in 20_000..35_000) Viewing.Hidden else Viewing.Normal }
+    private fun forced(): Viewing? = when {
+        forcedMode == "normal" -> Viewing.Normal
+        forcedMode == "gaming" -> Viewing.Gaming
+        forcedMode == "hidden" -> Viewing.Hidden
+        // `cycle:60:75` escolhe o intervalo escondido (em segundos depois de abrir); `cycle` sozinho é de 20 a 35 s.
+        forcedMode?.startsWith("cycle") == true -> {
+            val parts = forcedMode.split(':')
+            val from = parts.getOrNull(1)?.toLongOrNull() ?: 20
+            val to = parts.getOrNull(2)?.toLongOrNull() ?: 35
+            (System.currentTimeMillis() - bornAt).let { if (it in from * 1000..to * 1000) Viewing.Hidden else Viewing.Normal }
+        }
         else -> null
     }
 

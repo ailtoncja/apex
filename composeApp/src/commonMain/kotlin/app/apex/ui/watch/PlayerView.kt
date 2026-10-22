@@ -294,6 +294,9 @@ private fun BoxScope.Controls(fullscreen: Boolean, isLive: Boolean, menu: Player
     }
 }
 
+/** `2340` → "2,3 s". */
+internal fun formatLatency(ms: Long): String = "${ms / 1_000},${(ms % 1_000) / 100} s"
+
 /** Mais que isso para trás (ou pausado) e o botão deixa de dizer "ao vivo" e passa a oferecer a volta. */
 internal const val LIVE_EDGE_SLACK_MS = 6_000L
 
@@ -398,6 +401,8 @@ private fun BoxScope.SettingsPanel(menu: PlayerMenu, onMenu: (PlayerMenu?) -> Un
                 MenuRow("Qualidade", quality?.label ?: "—", chevron = true) { onMenu(PlayerMenu.Quality) }
                 MenuRow("Velocidade", if (ps.rate == 1f) "Normal" else "${ps.rate}x", chevron = true) { onMenu(PlayerMenu.Speed) }
                 if (resolved.subtitles.isNotEmpty()) MenuRow("Legendas", subtitle?.name ?: "Desativadas", chevron = true) { onMenu(PlayerMenu.Subtitles) }
+                // Como a "Latência para o streamer" das estatísticas da Twitch: dá para comparar os dois lado a lado.
+                ps.liveLatencyMs?.let { MenuRow("Atraso da live", formatLatency(it)) {} }
             }
             PlayerMenu.Quality -> {
                 MenuHeader("Qualidade") { onMenu(PlayerMenu.Main) }

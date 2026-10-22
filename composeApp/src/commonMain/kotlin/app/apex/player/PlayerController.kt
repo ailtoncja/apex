@@ -77,6 +77,8 @@ data class PlayerState(
     val error: String? = null,
     /** Numa live: quanto o vídeo ficou para trás desde que abriu (pausas e travadas somam); 0 = em dia ou não é live. */
     val behindLiveMs: Long = 0,
+    /** Numa live: o atraso em relação à transmissão (do servidor da plataforma até a tela), quando dá para medir; `null` = não se sabe. */
+    val liveLatencyMs: Long? = null,
 )
 
 /** Contrato do player: a interface é compartilhada, cada plataforma entrega o seu motor (libVLC no Windows). */

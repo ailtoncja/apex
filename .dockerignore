@@ -6,7 +6,6 @@ build
 dist
 .idea
 *.iml
-.impeccable
 composeApp/src/desktopTest
 **/.env
 .env

@@ -1,6 +1,6 @@
-# Apex — contexto para geração 3D
+# Apex — referência visual 3D
 
-Este arquivo descreve o Apex para quem vai gerar imagens ou objetos 3D dele (ícone, logo, cena de divulgação). Tudo aqui foi tirado do
+Este arquivo descreve o Apex para a criação de imagens ou objetos 3D dele (ícone, logo, cena de divulgação). Tudo aqui foi tirado do
 código do app: cores, logo, ícone e temas são os mesmos que aparecem na tela.
 
 ## O que é o Apex
@@ -60,51 +60,7 @@ fino nas bordas; cantos arredondados; composição com muito espaço vazio; letr
 Evitar: gradientes de arco-íris; neon roxo/ciano genérico de "gamer"; mascotes, personagens, rostos; efeitos de vidro exagerados; texto além de
 "APEX"; logos do YouTube/Twitch/Kick (use só as cores); serifas; qualquer coisa que pareça o logo de outra marca com ponto vermelho.
 
-## Prompts prontos (em inglês, que é o que os geradores entendem melhor)
-
-### 1. Ícone 3D do app
-
-```
-3D app icon of "Apex": a rounded square (corner radius 22% of the side) in near-black #0A0A0F, with a single perfect red sphere #FF3B30
-centered on it, sphere diameter about 55% of the square width. Matte soft-touch plastic for the square, satin red for the sphere with a thin
-rim highlight. Studio product render, three-quarter top view, soft key light from the upper left, subtle contact shadow, dark gray seamless
-background #111117. No text, no logos, no extra shapes. Clean, minimal, premium. 8k, octane render.
-```
-
-### 2. Logo 3D (ponto + APEX)
-
-```
-3D wordmark "APEX" in bold geometric sans-serif, all caps, wide letter spacing, extruded 20% of the cap height, off-white #F2F2F7 matte
-finish. To the left of the "A", a red sphere #FF3B30 the size of a lowercase x-height, vertically centered. Floating over a near-black
-#0A0A0F studio backdrop, soft overhead light, gentle reflections on a dark glossy floor, slight camera tilt. Minimal, premium, no extra
-elements, no other text.
-```
-
-### 3. Cena de divulgação (tela do app em 3D)
-
-```
-Cinematic 3D render of a sleek desktop app window floating in a dark studio: near-black UI #0A0A0F with rounded corners, a large video
-player on the left, a slim sidebar, a chat column on the right with faint rows of text, one small red "live" dot #FF2D55 and a red accent
-#FF3B30. In the top-left corner of the window a tiny logo: red dot and the word "APEX" in wide-spaced bold letters. Thin light rim on the
-window edges, soft volumetric light, dark floor reflection, lots of empty space around. No readable text other than "APEX", no people,
-no other brand logos. Premium tech product shot.
-```
-
-### 4. Variação Subaru (azul de rali e dourado)
-
-```
-Same Apex app icon as before, rally edition: rounded square in deep navy #060D26 with a gold sphere #FFC629 in the center, brushed
-gold metal with soft reflections, navy matte plastic body, a faint gold rim light. Studio render on a dark backdrop, no text.
-```
-
-### Negativo (para geradores que aceitam "negative prompt")
-
-```
-text, letters other than APEX, watermark, rainbow gradient, purple cyan neon, mascot, character, face, glass bubbles, clutter, extra icons,
-other brand logos, serif font, low quality, blurry
-```
-
-## Cola rápida (uma frase, para colar em qualquer lugar)
+## Resumo visual
 
 > Apex é um app de desktop escuro e minimalista para assistir YouTube, Twitch e Kick. Marca: ponto vermelho `#FF3B30` + "APEX" em
 > sans-serif extra-bold, caixa alta e letras espaçadas, sobre preto `#0A0A0F`. Ícone: quadrado arredondado preto com um círculo vermelho no

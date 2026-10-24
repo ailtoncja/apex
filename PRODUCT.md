@@ -1,7 +1,5 @@
 # Product
 
-<!-- impeccable:product-schema 1 -->
-
 ## Platform
 
 web
@@ -51,7 +49,7 @@ Confirmados pelo autor como algo que precisa continuar:
 - Os temas **Subaru** (azul e dourado, preto e dourado) e a animação do carro de rali ao trocar para eles.
 - O **jeito YouTube**: barra lateral, busca no topo e grade de miniaturas.
 - Os **atalhos de teclado** e o **comportamento do player**.
-- O README mantém o aviso de que o projeto é feito com IA; licença GPL-3.0.
+- Licença GPL-3.0.
 
 ## Evidence on Hand
 
